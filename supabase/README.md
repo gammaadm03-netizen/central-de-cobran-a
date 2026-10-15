@@ -16,7 +16,7 @@ O frontend sozinho não faz login por usuário. É necessário publicar a Edge F
 
 Pelo painel do Supabase:
 
-1. Abra **Edge Functions**, crie `auth-gateway` e use o editor para adicionar `index.ts` e `handler.mjs` do diretório `functions/auth-gateway`. Preserve os nomes e a importação relativa.
+1. Abra **Edge Functions** e crie `auth-gateway`. Para o editor do painel, copie o conteúdo completo de `dashboard/auth-gateway.ts` para o arquivo `index.ts` da função. Esse arquivo único é gerado por `npm run bundle:gateway`, não contém credenciais e dispensa adicionar arquivos auxiliares. Como alternativa, adicione `index.ts` e `handler.mjs` do diretório `functions/auth-gateway`, preservando nomes e importação relativa.
 2. Desative **Verify JWT / Enforce JWT verification** para esta função de login. A configuração equivalente está em `config.toml`. O login ainda não tem JWT; o logout valida o Bearer token diretamente no Supabase Auth.
 3. Em **Edge Functions → Secrets**, configure `ALLOWED_ORIGINS` com as origens HTTPS exatas do site, separadas por vírgula e sem barra final. Exemplo ilustrativo: `https://central-financeira.pages.dev`. Substitua pelo endereço realmente publicado. Domínios de preview não são aceitos automaticamente.
 4. Publique a função. O nome deve permanecer `auth-gateway`.
