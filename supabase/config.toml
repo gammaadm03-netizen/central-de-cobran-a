@@ -1,0 +1,4 @@
+# The gateway authenticates usernames before a user JWT exists. Every authenticated
+# operation validates its Bearer token against Supabase Auth itself.
+[functions.auth-gateway]
+verify_jwt = false
