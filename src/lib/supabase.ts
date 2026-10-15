@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 
 export const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/$/, '');
 const publishableKey = String(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? '');
-export const isConfigured = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(supabaseUrl) && /^(sb_publishable_|eyJ)/.test(publishableKey);
+export const isConfigured = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(supabaseUrl) && /^sb_publishable_[A-Za-z0-9_-]{16,}$/.test(publishableKey);
 
 function createMemoryClient() {
   return isConfigured ? createClient(supabaseUrl, publishableKey, {

@@ -1,4 +1,4 @@
-# Publicação de homologação — 0.1.1
+# Publicação de homologação — 0.1.2
 
 Esta entrega prepara acesso e administração. Os módulos financeiros ainda não estão operacionais. Não direcionar a equipe para trabalho financeiro nesta versão.
 
@@ -10,7 +10,7 @@ O usuário informou que executou001 e ativou a Gerente. Confirmar no projeto cor
 
 Criar conta da empresa no Cloudflare e projeto **Pages** em modalidade gratuita disponível. Sem ativar billing. Pode usar upload direto dos arquivos `dist/` gerados por `npm run build`; o ZIP de publicação deve conter index.html na raiz. Escolher nome de projeto. O endereço HTTPS real do provedor será a origem permitida do gateway; não usar domínio fictício nem presumir nome disponível. Domínio próprio é opcional.
 
-Na integração por Git, usar build `npm ci && npm run build`, saída `dist`, Node24 e definir somente as duas variáveis públicas da `.env.example` nas configurações do build. O repositório da aplicação precisa conter estes arquivos antes da integração. Confirme que a branch selecionada possui package.json, src/ e vite.config.ts; não associe uma branch vazia esperando que o provedor encontre arquivos de outra máquina.
+Na integração por Git, usar build `npm ci && npm run build`, saída `dist` e Node24. O projeto padrão vem de `config/supabase.public.json`, somente URL e chave pública; não depende de variáveis manuais na Cloudflare. Para outro projeto, substituir pelas duas variáveis públicas da `.env.example` nas configurações do build. O repositório da aplicação precisa conter estes arquivos antes da integração. Confirme que a branch selecionada possui package.json, src/ e vite.config.ts; não associe uma branch vazia esperando que o provedor encontre arquivos de outra máquina.
 
 O arquivo `_headers` acompanha o build. Esta versão navega na própria página e não precisa de regra global de redirecionamento. A política CSP não autoriza execução de scripts inline nem de origem externa. Não colocar o HTML V75 ou JSON de usuários neste site.
 

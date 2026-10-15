@@ -1,6 +1,6 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.1.1**. Fundação de autenticação, autorização e administração para migração da V75. **Não é a versão financeira completa nem uma publicação de produção.**
+Versão de desenvolvimento **0.1.2**. Fundação de autenticação, autorização e administração para migração da V75. **Não é a versão financeira completa nem uma publicação de produção.**
 
 ## O que funciona nesta entrega
 
@@ -16,7 +16,7 @@ Requisitos: Node 24, npm 11. Não é necessário criar worktree; cada tarefa clo
 npm ci --cache /workspace/onboarding-tools/npm-cache --no-audit --no-fund
 ```
 
-Crie `.env.local` a partir de `.env.example`, somente com a URL e a chave **publishable** do seu projeto. O Vite mapeia os nomes `NEXT_PUBLIC_SUPABASE_*` existentes para duas variáveis públicas específicas do cliente. Chaves administrativas, senhas e tokens de provedor não pertencem a esse arquivo nem ao frontend.
+A conexão pública deste projeto está em `config/supabase.public.json`: URL e chave **publishable**, que não são segredos. Assim, o build do GitHub funciona mesmo sem `.env.local`. Para usar outro projeto, as variáveis públicas da `.env.example` podem substituir esses valores. O Vite expõe somente essas duas configurações e rejeita chaves privadas antes de gerar o site. Chaves administrativas, senhas e tokens de provedor não pertencem ao frontend.
 
 ```sh
 npm run dev
