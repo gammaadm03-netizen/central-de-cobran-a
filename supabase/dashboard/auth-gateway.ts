@@ -4,6 +4,9 @@
 var MAX_BODY_BYTES = 8192;
 var AUTH_FAILURE = "Usu\xE1rio ou senha inv\xE1lidos.";
 var SERVICE_FAILURE = "N\xE3o foi poss\xEDvel entrar agora. Tente novamente em instantes.";
+var RECOVERY_ACCEPTED = "Se o acesso estiver ativo, enviaremos as instru\xE7\xF5es de redefini\xE7\xE3o ao e-mail cadastrado.";
+var PASSWORD_FAILURE = "N\xE3o foi poss\xEDvel redefinir a senha agora. Tente novamente em instantes.";
+var PASSWORD_UNCERTAIN = "A senha pode ter sido alterada, mas n\xE3o foi poss\xEDvel confirmar o encerramento seguro. Solicite um novo link antes de tentar novamente.";
 function allowedOrigins(raw) {
   const values = String(raw || "").split(",").map((value) => value.trim()).filter(Boolean);
   if (!values.length) throw new Error("missing_origins");
@@ -114,9 +117,11 @@ function createAuthGateway({ env, fetch: fetcher = globalThis.fetch, log = () =>
     } catch {
       return respond(400, { error: "Solicita\xE7\xE3o inv\xE1lida." });
     }
-    if (!["sign_in", "sign_out"].includes(body.action)) return respond(400, { error: "Solicita\xE7\xE3o inv\xE1lida." });
+    if (!["sign_in", "sign_out", "request_password_reset", "change_password"].includes(body.action)) return respond(400, { error: "Solicita\xE7\xE3o inv\xE1lida." });
     if (body.action === "sign_in" && (Object.keys(body).some((key) => !["action", "username", "password"].includes(key)) || typeof body.username !== "string" || !/^[A-Za-z0-9._-]{3,64}$/.test(body.username.trim()) || typeof body.password !== "string" || body.password.length < 1 || body.password.length > 1024)) return respond(400, { error: "Informe um usu\xE1rio e uma senha v\xE1lidos." });
     if (body.action === "sign_out" && Object.keys(body).some((key) => key !== "action")) return respond(400, { error: "Solicita\xE7\xE3o inv\xE1lida." });
+    if (body.action === "request_password_reset" && (Object.keys(body).some((key) => !["action", "username"].includes(key)) || typeof body.username !== "string" || !/^[A-Za-z0-9._-]{3,64}$/.test(body.username.trim()))) return respond(400, { error: "Informe um usu\xE1rio v\xE1lido." });
+    if (body.action === "change_password" && (Object.keys(body).some((key) => !["action", "password"].includes(key)) || typeof body.password !== "string" || body.password.length < 12 || body.password.length > 1024)) return respond(400, { error: "Use uma senha com pelo menos 12 e no m\xE1ximo 1.024 caracteres." });
     const serverUrl = env("SUPABASE_URL");
     const serverKey = env("SUPABASE_SERVICE_ROLE_KEY");
     const anonKey = env("SUPABASE_ANON_KEY");
@@ -149,6 +154,111 @@ function createAuthGateway({ env, fetch: fetcher = globalThis.fetch, log = () =>
     async function revoke(token) {
       const result = await call("/auth/v1/logout?scope=local", { token, key: anonKey });
       return result.ok || result.status === 401 || result.status === 403;
+    }
+    if (body.action === "request_password_reset") {
+      let recoveryTicket;
+      let accepted = false;
+      try {
+        const network = (request.headers.get("x-forwarded-for") || "unavailable").slice(0, 256);
+        const resolved = await call("/rest/v1/rpc/resolve_login", {
+          data: { p_username: body.username.trim(), p_client_key: await sha256(network) }
+        });
+        if (!resolved.ok || typeof resolved.payload?.allowed !== "boolean") throw new Error("rate_store_unavailable");
+        if (!resolved.payload.allowed) {
+          const retry = Math.max(1, Math.min(900, Math.ceil(Number(resolved.payload.retry_after) || 30)));
+          return respond(429, { error: "Muitas tentativas. Aguarde e tente novamente." }, { "Retry-After": String(retry) });
+        }
+        recoveryTicket = resolved.payload.ticket;
+        if (typeof recoveryTicket !== "string") throw new Error("invalid_ticket");
+        if (typeof resolved.payload.email === "string" && typeof resolved.payload.user_id === "string") {
+          try {
+            const recovery = await call(`/auth/v1/recover?redirect_to=${encodeURIComponent(`${origin}/?password-reset=1`)}`, {
+              key: anonKey,
+              token: anonKey,
+              data: { email: resolved.payload.email }
+            });
+            accepted = recovery.ok;
+            if (!accepted) log("password_recovery_email_unavailable");
+          } catch {
+            log("password_recovery_email_unavailable");
+          }
+        }
+        const finished = await call("/rest/v1/rpc/finish_password_recovery", {
+          data: { p_ticket: recoveryTicket, p_accepted: accepted, p_user_agent: userAgent }
+        });
+        recoveryTicket = void 0;
+        if (!finished.ok || finished.payload !== true) throw new Error("audit_unavailable");
+        return respond(202, { message: RECOVERY_ACCEPTED });
+      } catch {
+        if (recoveryTicket) {
+          try {
+            await call("/rest/v1/rpc/finish_password_recovery", {
+              data: { p_ticket: recoveryTicket, p_accepted: accepted, p_user_agent: userAgent }
+            });
+          } catch {
+          }
+        }
+        log("password_recovery_unavailable");
+        return respond(503, { error: PASSWORD_FAILURE });
+      }
+    }
+    if (body.action === "change_password") {
+      const token = request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9._~-]+)$/i)?.[1];
+      if (!token) return respond(401, { error: "Link de redefini\xE7\xE3o inv\xE1lido ou expirado. Solicite outro link." });
+      let changeTicket;
+      let passwordChanged = false;
+      let passwordChangeAttempted = false;
+      let authChangeResultKnown = false;
+      try {
+        const user = await call("/auth/v1/user", { method: "GET", token, key: anonKey });
+        if (!user.ok || typeof user.payload?.id !== "string") return respond(401, { error: "Link de redefini\xE7\xE3o inv\xE1lido ou expirado. Solicite outro link." });
+        let sessionId;
+        try {
+          sessionId = verifiedSessionId(token, user.payload.id);
+        } catch {
+          return respond(401, { error: "Link de redefini\xE7\xE3o inv\xE1lido ou expirado. Solicite outro link." });
+        }
+        const admitted = await call("/rest/v1/rpc/begin_password_change", {
+          data: { p_user_id: user.payload.id, p_session_id: sessionId, p_user_agent: userAgent }
+        });
+        if (!admitted.ok || typeof admitted.payload?.allowed !== "boolean") throw new Error("admission_unavailable");
+        if (!admitted.payload.allowed) {
+          if (admitted.payload.reason === "inactive") return respond(401, { error: "Acesso indispon\xEDvel. Procure a Ger\xEAncia Geral." });
+          const retry = Math.max(1, Math.min(900, Math.ceil(Number(admitted.payload.retry_after) || 30)));
+          return respond(429, { error: "Muitas tentativas. Aguarde e tente novamente." }, { "Retry-After": String(retry) });
+        }
+        changeTicket = admitted.payload.ticket;
+        if (typeof changeTicket !== "string") throw new Error("invalid_ticket");
+        passwordChangeAttempted = true;
+        const changed = await call("/auth/v1/user", { method: "PUT", token, key: anonKey, data: { password: body.password } });
+        authChangeResultKnown = changed.ok || changed.status >= 400 && changed.status < 500 && changed.status !== 408;
+        if (!authChangeResultKnown) throw new Error("auth_change_outcome_unknown");
+        passwordChanged = changed.ok;
+        const completed = await call("/rest/v1/rpc/finish_password_change", {
+          data: { p_ticket: changeTicket, p_success: passwordChanged }
+        });
+        changeTicket = void 0;
+        if (!completed.ok || completed.payload !== true) throw new Error("audit_unavailable");
+        if (!passwordChanged) return respond(400, { error: "N\xE3o foi poss\xEDvel aceitar essa senha. Use uma senha diferente ou solicite um novo link." });
+        if (!await revoke(token)) throw new Error("revocation_unavailable");
+        return respond(200, { password_changed: true, signed_out: true });
+      } catch {
+        const uncertain = passwordChanged || passwordChangeAttempted && !authChangeResultKnown;
+        if (changeTicket) {
+          try {
+            await call("/rest/v1/rpc/finish_password_change", { data: { p_ticket: changeTicket, p_success: authChangeResultKnown ? passwordChanged : passwordChangeAttempted ? null : false } });
+          } catch {
+          }
+        }
+        if (uncertain) {
+          try {
+            await revoke(token);
+          } catch {
+          }
+        }
+        log(uncertain ? "password_change_completion_unavailable" : "password_change_unavailable");
+        return respond(503, { error: uncertain ? PASSWORD_UNCERTAIN : PASSWORD_FAILURE });
+      }
     }
     if (body.action === "sign_out") {
       const token = request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9._~-]+)$/i)?.[1];

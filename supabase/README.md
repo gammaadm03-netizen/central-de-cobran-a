@@ -7,6 +7,7 @@ Os arquivos neste diretório são código e schema, sem usuários reais, senhas,
 1. `migrations/001_identidade_rbac.sql`: schema original de perfis, RBAC, vínculos, mensagens e auditoria. **Se já foi executado neste projeto, não executar novamente.** A migration não é um reset e não contém comandos para remover tabelas.
 2. Provisionar o administrador no Supabase Authentication e vincular seu UUID a `public.profiles` pelo procedimento inicial já revisado. Nunca salvar senhas em SQL ou Git. Esse bootstrap não é repetido em deploys.
 3. Revisar e executar `migrations/003_auth_gateway.sql` uma vez pelo SQL Editor, em uma nova consulta. Ela é incremental, preserva os registros existentes e não cria contas Auth. Após aplicá-la, sessões precisam ter `session_id` no JWT emitido pelo Supabase Auth e aprovação pelo gateway. Uma sessão criada diretamente no Auth não dá acesso aos dados da aplicação.
+4. Revisar e executar `migrations/004_password_recovery.sql` uma vez, após 001 e 003. Ela acrescenta conclusão auditada de pedidos de recuperação e troca de senha com limitação e revogação das sessões. Não altera `auth.users`, senhas, dados financeiros nem os perfis existentes. Depois atualizar a função com o código completo de `dashboard/auth-gateway.ts` gerado nesta versão.
 
 Em projetos já configurados manualmente, registrar as migrations aplicadas antes de usar `supabase db push`. Não rodar o histórico inteiro contra um banco existente sem conferir o histórico. Não executar `db reset` em um projeto com dados.
 
@@ -68,6 +69,20 @@ Logout: mesmo endpoint com `Authorization: Bearer JWT` e `{"action":"sign_out"}`
 
 Erros: `400` entrada inválida; `401` credencial/sessão inválida; `403` origem inválida; `405` método inválido; `429` limite de tentativas com `Retry-After`; `503` configuração ou serviço indisponível. Nenhuma resposta contém detalhes SQL ou erros internos do Auth. Não há redirecionamento nem cookies da aplicação.
 
+## Recuperar senha
+
+Antes de testar, em **Authentication → URL Configuration** defina **Site URL** como a origem de produção e adicione o endereço exato `https://SEU_SITE/?password-reset=1` a **Redirect URLs**. Para a publicação atual, use `https://central-de-cobran-a.pages.dev` e `https://central-de-cobran-a.pages.dev/?password-reset=1`, respectivamente. Não autorize curingas ou domínios de preview desnecessários. O mesmo domínio precisa estar em `ALLOWED_ORIGINS` da função. A lista de redirecionamento do Auth e a lista CORS da função são configurações diferentes.
+
+O formulário **Esqueci minha senha** envia `{"action":"request_password_reset","username":"usuario"}`. O gateway resolve o email somente no servidor e solicita o envio ao Supabase Auth. A resposta `202` é sempre genérica para usuários ausentes/inativos e falhas do provedor de email: não comprova que uma mensagem foi enviada ou entregue. O pedido usa os mesmos limites atômicos de login (6 por usuário/30 por rede em 15 minutos), sem zerar os contadores. A auditoria recebe `PASSWORD_CHANGE` com estágio `recovery_requested`, sem email, senha ou token. Limites/indisponibilidade do banco retornam 429/503. Falhas de envio geram apenas um identificador técnico fixo no log.
+
+Depois do clique no link do email, a Central consome os tokens do fragmento, remove-os da URL e mantém o token de recuperação somente em memória, sem transformá-lo em sessão aprovada da aplicação. O formulário envia `{"action":"change_password","password":"nova senha digitada"}` com o token em `Authorization: Bearer JWT`. A função confirma o token com `/auth/v1/user`, valida o perfil ativo oficial e admite no máximo 3 alterações em 15 minutos. A senha precisa ter 12 a 1.024 caracteres; a política do Supabase pode exigir outras condições.
+
+A troca exige auditoria e revogação prévias das sessões de aplicação, depois utiliza exclusivamente a API autenticada do Supabase Auth. Uma segunda transação registra `changed`/`failed`/`uncertain`, revoga aprovações concorrentes e encerra tentativas de login anteriores; a função encerra a sessão Auth utilizada. Resposta 200: `{"password_changed":true,"signed_out":true}`. O usuário deve entrar novamente com usuário e nova senha. Uma resposta perdida da API Auth é registrada como incerta; nunca se presume que a senha permaneceu igual. Se a auditoria final ou o encerramento não puder ser confirmado, a função responde503, sem apresentar sucesso falso. Não trocar senhas por SQL, não inserir senhas em variáveis persistidas ou em arquivos, e não solicitar credenciais pelo chat.
+
+Enquanto existir tentativa de alteração sem conclusão, `finish_login` nega novas aprovações de sessão para esse usuário, inclusive depois da expiração da reserva de30 segundos. Outra recuperação concluída resolve tentativas antigas como incertas e permite novos logins. Isso evita aprovar um login concorrente com a senha antiga quando o resultado da alteração ficou desconhecido. Não apagar os registros para desbloquear o acesso; concluir uma nova recuperação e conferir a auditoria.
+
+O Supabase aplica limites próprios de email e pode restringir os destinatários atendidos pelo provedor padrão. Verifique o recebimento no email administrativo e as configurações oficiais de envio; se o provedor recusar a entrega, configurar um SMTP autorizado pode ser necessário. Não habilitar cobrança ou prometer entrega ilimitada no plano gratuito. A falha de entrega não deve ser contornada expondo o email do usuário, removendo controles ou editando `auth.users` diretamente.
+
 ## Garantias e limites
 
 - O endereço associado ao login é resolvido por uma RPC exclusiva de `service_role`. Não existe consulta pública de username → email.
@@ -77,7 +92,7 @@ Erros: `400` entrada inválida; `401` credencial/sessão inválida; `403` origem
 - Sessões precisam de aprovação server-side vinculada ao usuário oficial e ao `session_id`, com duração máxima de 12 horas. Renovações do JWT não estendem esse prazo; é necessário realizar novo login. Login direto por email no Auth pode emitir um JWT válido, mas esse JWT não tem aprovação nem acesso à aplicação. A conclusão do gateway aprova a sessão e grava a auditoria na mesma transação.
 - Sessões revogadas são negadas imediatamente por todos os helpers/RPCs de acesso existentes. **Futuros módulos, policies e RPCs também devem usar `cf_private.is_active`, `cf_private.has_permission` ou `cf_private.session_allowed`.** Um JWT revogado continua criptograficamente válido até expirar, mas não recebe acesso à aplicação.
 - O Auth público do Supabase também aceita autenticação por email e tem proteção própria. Revisar seus limites e a proteção contra abuso antes de produção; eventual CAPTCHA exige integração no gateway, não deve ser desativado para contornar falhas. O gateway não habilita serviços pagos.
-- O broker oferece login e logout nesta etapa. Redefinição, troca obrigatória e gestão completa de senha ainda exigem implementação e homologação; até lá, provisionamento/redefinição deve ser feito pelo administrador no Supabase Authentication, sem envio de senhas pelo chat.
+- O broker oferece login, logout, pedido de recuperação por usuário e troca de senha autenticada. Troca obrigatória e gestão administrativa completa de senha ainda exigem implementação e homologação. Recuperação depende da configuração e entrega do email do Supabase Auth; nenhum teste simulado comprova entrega real.
 - Tokens no frontend devem permanecer em memória (`persistSession: false`), sem `localStorage` como banco ou repositório de sessão. A autorização real sempre fica nas RPCs/RLS. Logout sem conexão limpa o navegador, mas sua revogação remota exige resposta de sucesso do servidor.
 
 ## Verificação local
@@ -86,6 +101,6 @@ Erros: `400` entrada inválida; `401` credencial/sessão inválida; `403` origem
 node --test supabase/functions/auth-gateway/*.test.mjs
 ```
 
-Os testes exercitam o handler real com serviços HTTP simulados: login, perfil bloqueado, credencial inválida, limites, indisponibilidade de auditoria, CORS, validação de entrada, logout e revogação. Eles não comprovam publicação, recebimento de email, integração com o Supabase remoto ou ativação de contas reais.
+Os testes exercitam o handler real com serviços HTTP simulados: login, perfil bloqueado, credencial inválida, limites, indisponibilidade de auditoria, CORS, validação de entrada, logout, recuperação, troca de senha e revogação. O teste SQL de recuperação aplica 001/003/004 em PostgreSQL local e verifica permissões, limites, auditoria, preservação dos dados e revogação inclusive de login concorrente. Eles não comprovam publicação, recebimento de email, integração com o Supabase remoto ou ativação de contas reais.
 
 Após publicar, testar manualmente com uma conta de homologação: login válido/inválido, bloqueio de perfil, `current_access`, logout e tentativa de reutilizar o JWT antigo nas RPCs. Não usar nem registrar senhas reais em comandos de teste.

@@ -1,12 +1,12 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.1.2**. Fundação de autenticação, autorização e administração para migração da V75. **Não é a versão financeira completa nem uma publicação de produção.**
+Versão de desenvolvimento **0.2.0**. Fundação de autenticação, autorização e administração para migração da V75. **Não é a versão financeira completa nem uma publicação de produção.**
 
 ## O que funciona nesta entrega
 
-React + TypeScript; login por usuário via gateway no Supabase; permissões consultadas no banco; sessão em memória; logout e revogação de acesso; administração de perfis já existentes no Auth; associação configurável de cobradoras; auditoria das alterações implementadas; quadro de mensagens da Diretoria/Gerência com conclusão/reabertura. As alterações passam por RPCs e RLS, inclusive quando a interface é contornada.
+React + TypeScript; login por usuário via gateway no Supabase; recuperação de senha por email com tela própria; permissões consultadas no banco; sessão em memória; logout e revogação de acesso; administração de perfis já existentes no Auth; associação configurável de cobradoras; auditoria das alterações implementadas; quadro de mensagens da Diretoria/Gerência com conclusão/reabertura. As alterações passam por RPCs e RLS, inclusive quando a interface é contornada.
 
-Os dez módulos financeiros aparecem somente aos perfis autorizados, com estado explícito de implantação. Não há números inventados nem bases V75 entregues ao navegador. Importações, títulos, validações financeiras, cálculos, RH, exportações, backups operacionais e migração ainda precisam de implementação/homologação. Criação e redefinição de contas Auth permanecem no painel do Supabase; troca de senha pela aplicação e troca obrigatória ainda não estão disponíveis.
+Os dez módulos financeiros aparecem somente aos perfis autorizados, com estado explícito de implantação. Não há números inventados nem bases V75 entregues ao navegador. Importações, títulos, validações financeiras, cálculos, RH, exportações, backups operacionais e migração ainda precisam de implementação/homologação. Criação de contas Auth, redefinição por administrador e troca obrigatória ainda não estão disponíveis na aplicação. A recuperação individual depende da configuração de URLs e do envio de email pelo Supabase.
 
 ## Desenvolvimento
 
@@ -27,7 +27,7 @@ Sem Edge Function publicada, o login retorna indisponibilidade; não existe logi
 
 ## Banco e autenticação
 
-Leia [supabase/README.md](supabase/README.md). O projeto já inicializado manualmente não deve reaplicar a migration001. Aplique somente a migration003 após revisão. Ela adiciona proteção de login e sessões sem apagar perfis ou outros registros.
+Leia [supabase/README.md](supabase/README.md). O projeto atual já recebeu as migrations001 e003 manualmente. Para atualizar para0.2.0, aplique somente a migration004 após revisão e atualize a Edge Function. A mudança acrescenta recuperação auditada de senha sem apagar perfis ou outros registros. Configure as URLs de retorno no Auth antes de solicitar o email; publicar o site sozinho não envia instruções de recuperação.
 
 A conta inicial de Gerente deve existir no Auth e ter perfil oficial ativo. O código não contém UUID administrativo, contas reais, senhas, hashes ou dados financeiros. Nenhum comando de deploy recria o banco. Nunca execute reset contra o banco operacional.
 

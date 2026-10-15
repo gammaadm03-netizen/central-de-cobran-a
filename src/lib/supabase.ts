@@ -17,8 +17,18 @@ export function clearClientSession() {
   supabase = createMemoryClient();
 }
 
-export async function authGateway(body: Record<string, unknown>, accessToken?: string) {
+// A sessão de recuperação não participa da sessão de acesso aos módulos.
+export function createRecoveryClient() {
+  return isConfigured ? createClient(supabaseUrl, publishableKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  }) : null;
+}
+
+export async function authGateway(body: Record<string, unknown>, accessToken?: string, signal?: AbortSignal) {
   const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) controller.abort();
   const timer = window.setTimeout(() => controller.abort(), 20000);
   try {
     return await fetch(`${supabaseUrl}/functions/v1/auth-gateway`, {
@@ -31,5 +41,6 @@ export async function authGateway(body: Record<string, unknown>, accessToken?: s
     });
   } finally {
     window.clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
   }
 }

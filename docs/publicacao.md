@@ -1,10 +1,10 @@
-# Publicação de homologação — 0.1.2
+# Publicação de homologação — 0.2.0
 
 Esta entrega prepara acesso e administração. Os módulos financeiros ainda não estão operacionais. Não direcionar a equipe para trabalho financeiro nesta versão.
 
 ## 1. Banco
 
-O usuário informou que executou001 e ativou a Gerente. Confirmar no projeto correto. Executar **uma vez** `supabase/migrations/003_auth_gateway.sql` no SQL Editor. O script é transacional e não apaga registros. Se houver conflito, investigar; não excluir tabelas para contornar. Sem003 o gateway não funciona.
+O usuário informou que executou001 e003 e ativou a Gerente. Confirmar no projeto correto. Para esta atualização, executar **uma vez** `supabase/migrations/004_password_recovery.sql` no SQL Editor. O script é transacional e não apaga registros nem redefine senhas. Se houver conflito, investigar; não excluir tabelas para contornar. Não reaplicar001 ou003 em um projeto já inicializado. Em um projeto novo, seguir a ordem documentada em `supabase/README.md`.
 
 ## 2. Site estático
 
@@ -20,10 +20,24 @@ Seguir `supabase/README.md`. É possível publicar a função pelo editor do pai
 
 Em Secrets da Edge Function, definir `ALLOWED_ORIGINS` com a URL HTTPS real do Pages, sem barra final. O runtime fornece as chaves privadas; não enviá-las para chat, frontend ou Git. Sem origem configurada, o login falha fechado. Não usar `*`.
 
-## 4. Homologação remota necessária
+## 4. Habilitar recuperação de senha
+
+No projeto atual, primeiro aplicar004 e atualizar a função `auth-gateway` com o arquivo único desta versão. Manter a verificação JWT legada desativada somente nessa função e a origem `https://central-de-cobran-a.pages.dev` em `ALLOWED_ORIGINS`.
+
+Em **Authentication → URL Configuration**, definir:
+
+- **Site URL:** `https://central-de-cobran-a.pages.dev`
+- **Redirect URLs:** adicionar `https://central-de-cobran-a.pages.dev/?password-reset=1`
+
+No site atualizado, clicar em **Esqueci minha senha**, informar o usuário e solicitar as instruções. Só essa solicitação pede o envio ao Supabase; deploy e execução de SQL não enviam email. O endereço é resolvido no servidor. A resposta genérica não comprova entrega: verificar caixa de entrada, spam, limites e configuração do provedor. Não enviar links de recuperação, senhas ou tokens pelo chat.
+
+Ao abrir o link recebido, o usuário define a nova senha na Central e volta ao login. A sessão de recuperação não autoriza acesso ao painel. A mudança revoga aprovações anteriores e exige novo login. Se ocorrer falha depois da tentativa de alteração, a tela informa incerteza e orienta solicitar outro link. Uma tentativa sem conclusão confirmada impede novas aprovações de login até a conclusão de outra recuperação, preservando as sessões e a auditoria. Não remover esse controle para contornar um erro.
+
+## 5. Homologação remota necessária
 
 - Login como Gerente com senha digitada somente na tela HTTPS; confirmar perfil oficial.
 - Testar senha inválida, usuário bloqueado, sessão expirada e logout.
+- Solicitar e receber o email de recuperação, abrir o link, definir nova senha e entrar novamente; confirmar que a sessão anterior perdeu acesso. Os testes locais não comprovam entrega de email.
 - Reutilização de JWT revogado deve falhar em current_access e nas tabelas.
 - Diretor deve negar administração e permitir somente mensagens em escrita.
 - Cobradoras devem ver só seus vínculos e, quando a carteira for implementada, só seus títulos.
