@@ -1,12 +1,14 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.2.1**. Fundação de autenticação, autorização e administração para migração da V75. **Não é a versão financeira completa nem uma publicação de produção.**
+Versão de desenvolvimento **0.3.0**. Acesso, Painel, Caixa e primeira operação de Contas a Pagar na base central. **Não é a versão financeira completa nem uma publicação de produção.**
 
 ## O que funciona nesta entrega
 
 React + TypeScript; login por usuário via gateway no Supabase; recuperação de senha por email com tela própria; permissões consultadas no banco; sessão em memória; logout e revogação de acesso; administração de perfis já existentes no Auth; associação configurável de cobradoras; auditoria das alterações implementadas; quadro de mensagens da Diretoria/Gerência com conclusão/reabertura. As alterações passam por RPCs e RLS, inclusive quando a interface é contornada.
 
-Os dez módulos financeiros aparecem somente aos perfis autorizados, com estado explícito de implantação. Não há números inventados nem bases V75 entregues ao navegador. Importações, títulos, validações financeiras, cálculos, RH, exportações, backups operacionais e migração ainda precisam de implementação/homologação. Criação de contas Auth, redefinição por administrador e troca obrigatória ainda não estão disponíveis na aplicação. A recuperação individual depende da configuração de URLs e do envio de email pelo Supabase.
+O Painel recupera a organização da V75 e a marca original: período Hoje/Semana/Mês, movimento financeiro, alertas e Resumo da Diretoria. Os valores disponíveis vêm do banco; fontes ainda não migradas ficam explicitamente pendentes. Caixa inclui as onze contas oficiais, saldos manuais auditados e estoque de contingência. CP possui importação completa atômica, classificação obrigatória, preservação de baixas, filtros, paginação e CSV. O servidor analisa os arquivos e revalida permissões; o navegador não pode gravar lançamentos derivados por conta própria.
+
+CR, Cobrança/validações, Faturamento, Margens, Comissões e RH ainda precisam ser portados. Também permanecem pendentes as previsões de CP, os relatórios Excel detalhados de CP, a migração da posição atual, backups operacionais, criação completa de contas Auth, redefinição administrativa e troca obrigatória. Não há números inventados nem bases V75 embutidas nos assets públicos. Leia o escopo e a ativação em [docs/ativacao-financeira.md](docs/ativacao-financeira.md).
 
 ## Desenvolvimento
 
@@ -27,7 +29,7 @@ Sem Edge Function publicada, o login retorna indisponibilidade; não existe logi
 
 ## Banco e autenticação
 
-Leia [supabase/README.md](supabase/README.md). O projeto atual já recebeu as migrations001 e003 manualmente. Para atualizar para0.2.0, aplique somente a migration004 após revisão e atualize a Edge Function. A mudança acrescenta recuperação auditada de senha sem apagar perfis ou outros registros. Configure as URLs de retorno no Auth antes de solicitar o email; publicar o site sozinho não envia instruções de recuperação.
+Leia [supabase/README.md](supabase/README.md). O projeto atual já recebeu as migrations 001/003/004 manualmente. Para 0.3.0, aplicar uma única vez `supabase/dashboard/ativar-financeiro.sql`, que reúne 005/006/007 atomicamente, e publicar a nova função `payables-import`. Não repetir migrations já aplicadas. A função de login existente permanece independente. Deploy do site não atualiza automaticamente funções ou banco.
 
 A conta inicial de Gerente deve existir no Auth e ter perfil oficial ativo. O código não contém UUID administrativo, contas reais, senhas, hashes ou dados financeiros. Nenhum comando de deploy recria o banco. Nunca execute reset contra o banco operacional.
 
@@ -37,6 +39,10 @@ A conta inicial de Gerente deve existir no Auth e ter perfil oficial ativo. O c�
 npm test
 npm run test:sql
 npm run test:auth-sql
+npm run test:payables-sql
+npm run test:treasury-sql
+npm run test:director-sql
+npm run bundle:payables-gateway
 npm run build
 npm run test:browser
 ```
@@ -45,6 +51,6 @@ Os testes SQL executam PostgreSQL via PGlite com Auth simulado; os testes do gat
 
 ## Hospedagem
 
-Frontend estático destinado a Cloudflare Pages e banco/Auth/gateway a Supabase. Deploy separado do banco, seguindo [docs/publicacao.md](docs/publicacao.md). O acesso final não depende de PC ou túnel na empresa. A base local enviará relatórios ao módulo de importação quando implementado; a posição real precisa ser migrada do estado operacional, sem substituir históricos por dados embutidos antigos.
+Frontend estático na Cloudflare Pages e banco/Auth/serviços no Supabase. Deploy separado do banco, seguindo [docs/publicacao.md](docs/publicacao.md) e [ativação financeira](docs/ativacao-financeira.md). O acesso não depende de PC ou túnel na empresa. A origem local fornece relatórios completos para importação; a posição real anterior ainda precisa ser migrada do estado operacional, sem substituir históricos por dados embutidos antigos.
 
 Planos gratuitos precisam ser confirmados no painel quanto a cotas, pausas, retenção e disponibilidade. Nenhum recurso pago foi habilitado. Este repositório não contém autorização ou credenciais para publicar na conta de um provedor.

@@ -1,6 +1,6 @@
-# Publicação de homologação — 0.2.0
+# Publicação de homologação
 
-Esta entrega prepara acesso e administração. Os módulos financeiros ainda não estão operacionais. Não direcionar a equipe para trabalho financeiro nesta versão.
+Para atualizar o projeto existente para **0.3.0**, seguir [ativacao-financeira.md](ativacao-financeira.md). Os procedimentos abaixo documentam a instalação inicial de acesso/recuperação das versões 0.1/0.2; não os repetir sobre um projeto já configurado. A operação financeira completa ainda depende de migração e homologação.
 
 ## 1. Banco
 

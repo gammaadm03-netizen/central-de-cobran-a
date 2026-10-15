@@ -1,0 +1,19 @@
+.brand-mark img{display:block;width:58px;height:58px;object-fit:contain}
+.login-intro .brand-mark{width:66px;height:66px;background:#fff;border-radius:14px}
+.app-shell .sidebar{background:#0b4938;border-color:#17604b;overflow-y:auto;padding-top:15px}
+.sidebar .brand{flex-direction:column;justify-content:center;text-align:center;background:#fcfefb;border-radius:18px;padding:18px 10px;width:100%;margin:0 0 24px;gap:9px}
+.sidebar .brand-mark{background:transparent;width:96px;height:96px}
+.sidebar .brand-mark img{width:96px;height:96px}
+.sidebar .brand-copy strong{color:#396d3a;font-size:15px}
+.sidebar .brand-copy small{color:#76917d;font-size:8px}
+.sidebar .nav-label{color:#a3c6b5}
+.sidebar .nav-item{color:#ecf6ed;min-height:43px}
+.sidebar .nav-item:hover{background:#185b46}
+.sidebar .nav-item.active{color:#fff;background:#1b6649;box-shadow:inset 0 0 0 1px #72a147}
+.sidebar .sidebar-footer,.sidebar .sidebar-footer small{color:#a7c6b5}
+.app-shell .page-heading h1{font-size:36px;font-weight:750;color:#104833}
+.app-shell .workspace{max-width:1900px;padding:25px 27px}
+.app-shell .topbar{height:68px}
+.checkbox-field{display:flex;gap:10px;align-items:flex-start;font-size:12px;color:#40554a;line-height:1.7}
+.checkbox-field input{width:18px;min-height:18px;height:18px;flex:0 0 18px;margin-top:2px;accent-color:#135b45}
+@media(max-width:760px){.sidebar .brand{padding:12px}.sidebar .brand-mark,.sidebar .brand-mark img{width:64px;height:64px}.sidebar .brand{margin-bottom:16px}.app-shell .page-heading h1{font-size:28px}.app-shell .workspace{padding:22px 16px}.sidebar .nav-item{min-height:40px}}

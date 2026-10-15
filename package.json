@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -10,16 +10,27 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node --test supabase/functions/auth-gateway/*.test.mjs config/*.test.mjs",
+    "test": "node --test supabase/functions/auth-gateway/*.test.mjs supabase/functions/payables-import/*.test.mjs config/*.test.mjs src/lib/*.test.mjs",
     "test:browser": "playwright test",
     "test:sql": "node scripts/test-sql.mjs",
     "test:auth-sql": "node scripts/test-auth-sql.mjs",
+    "test:payables-sql": "node scripts/test-payables-sql.mjs",
+    "test:treasury-sql": "node scripts/test-treasury-sql.mjs",
+    "test:director-sql": "node scripts/bundle-finance.mjs && node scripts/test-director-sql.mjs",
+    "bundle:finance": "node scripts/bundle-finance.mjs",
+    "bundle:payables-gateway": "node scripts/bundle-payables-gateway.mjs",
     "bundle:gateway": "node scripts/bundle-gateway.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",
+    "exceljs": "4.4.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.10",

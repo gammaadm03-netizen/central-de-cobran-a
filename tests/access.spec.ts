@@ -28,6 +28,10 @@ async function setup(page:Page,role='gerente_geral',options:{invalid?:boolean,lo
    return reply({session:{access_token:data.token,refresh_token:'synthetic-refresh-token',expires_in:3600,token_type:'bearer'},access:data.access});
   }
   if(url.pathname==='/auth/v1/user')return reply(data.user);
+  if(url.pathname==='/rest/v1/rpc/cash_position')return reply({accounts:[],total_cents:null,reported_accounts:0,expected_accounts:11,latest_position_date:null});
+  if(url.pathname==='/rest/v1/rpc/current_stock')return reply({value_cents:null,reference_date:null,source:null});
+  if(url.pathname==='/rest/v1/rpc/payables_summary')return reply({open_cents:0,overdue_cents:0,period_cents:0,active_count:0,latest_import_at:null});
+  if(['/rest/v1/payable_titles','/rest/v1/payable_macros','/rest/v1/payable_plan_mappings','/rest/v1/payable_imports','/rest/v1/director_positions'].includes(url.pathname))return route.fulfill({status:200,headers:{...headers,'content-range':'*/0'},json:[]});
   if(url.pathname==='/rest/v1/rpc/current_access'){
    accessCalls++;if(accessCalls>1&&options.holdAccess)await options.holdAccess();return reply(data.access);
   }

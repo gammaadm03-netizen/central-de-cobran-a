@@ -2,3 +2,8 @@
 # operation validates its Bearer token against Supabase Auth itself.
 [functions.auth-gateway]
 verify_jwt = false
+
+# This endpoint validates the exact Bearer token with Auth and the approved
+# application session before reading or parsing a file. Do not disable RLS.
+[functions.payables-import]
+verify_jwt = false

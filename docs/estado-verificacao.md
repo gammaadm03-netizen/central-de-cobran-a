@@ -1,6 +1,8 @@
-# Evidências da entrega 0.2.0
+# Evidências de verificação
 
 15/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
+
+As seções iniciais preservam o histórico das versões 0.2.0/0.2.1. O estado mais recente está na seção de atualização 0.3.0 ao final.
 
 ## Concluído nesta máquina
 
@@ -44,3 +46,24 @@ O usuário informou execução sem erro da migration 004, atualização da Edge 
 Reprodução local confirmou um defeito na mensagem: HTTP 503 e falha de rede durante a verificação também eram tratados como expiração. O frontend agora distingue callback incompleto, expiração explícita, sessão rejeitada e indisponibilidade, com referências fixas e sem expor erros ou credenciais. Build e 11 testes de navegador de recuperação passaram, incluindo falhas de rede, HTTP 403/503, erros de callback e remoção de parâmetros da URL. Os nove cenários de navegação da entrega anterior não foram repetidos nesta correção restrita à recuperação. A alteração não precisa de nova migration nem de atualização da função.
 
 Durante a verificação local, antes do envio da correção 0.2.1, o usuário informou “funcionou”. Esse relato encerra o bloqueio reportado, mas não permite atribuir sua resolução à correção nem identificar a causa inicial. Não foi solicitada repetição de procedimentos no Supabase. A confirmação de login e as demais homologações de permissões continuam separadas desse relato.
+
+## Atualização 0.3.0 — Painel, Caixa e primeira operação CP
+
+O usuário confirmou que a Central abriu, identificou abas sem as funções anteriores e forneceu uma imagem do Painel V75. A análise confirmou que os módulos financeiros eram placeholders. A marca oficial foi extraída isoladamente do ZIP preservado; nenhum registro financeiro foi incluído nos assets públicos.
+
+Implementados: Painel executivo com períodos e fontes centrais; contas bancárias oficiais, posição manual auditada, subtotal/consolidado sem pressupor saldo zero; estoque manual com origem/data; snapshots parciais imutáveis calculados no servidor; importação CP com parsing de CSV/XLSX/XLSM no servidor, macro obrigatória, cópia original privada, comparação completa, preservação de baixas, filtros, paginação e CSV. O mapeamento do legado está em `docs/v75-mapeamento.md`; o procedimento incremental está em `docs/ativacao-financeira.md`.
+
+Durante a revisão foram corrigidos dois riscos antes da publicação: dados derivados pelo navegador não podiam comprovar correspondência com o arquivo original; a gravação passou a aceitar somente resultados derivados pelo gateway no servidor, com wrapper SQL exclusivo do serviço e revalidação da identidade/sessão. Escopos arbitrários permitiriam duplicar o consolidado; a origem agora é fixa e validada no servidor. O preflight ZIP também verifica os bytes realmente descompactados, recusando tamanhos declarados falsos antes de carregar ExcelJS. Esses defeitos foram reproduzidos localmente e não foram publicados como uma versão operacional.
+
+Verificações desta atualização:
+
+- 50 testes Node passaram: configuração pública, gateway de acesso/recuperação, parsing de arquivos e novo gateway de importação. Incluem CSV/XLSX reais sintéticos, datas, centavos, fórmulas, ZIP adulterado, autenticação anterior ao parsing, corpo real limitado e proteção contra dados/identidade fornecidos pelo navegador.
+- 16 cenários SQL CP, 15 de tesouraria e 8 de snapshots passaram no PostgreSQL local PGlite. O teste de snapshots aplica o arquivo combinado real 005/006/007. Cobrem matriz de perfis, sessão revogada, original privado, rollback, concorrência, baixa/reabertura, ausência versus zero e precisão.
+- Os 20 testes SQL originais de RBAC e os 12 testes de sessões também foram repetidos e passaram após a integração.
+- Os 39 cenários da suíte integrada de navegador passaram em 59,8 segundos, cobrindo acesso, recuperação, CP, Painel e Caixa com respostas sintéticas.
+- Build TypeScript/Vite e geração dos arquivos de ativação concluídos. O build informa chunks grandes do leitor Excel; a biblioteca é carregada separadamente para planilhas/exportação. As tabelas possuem paginação.
+- `npm audit --omit=dev` retornou zero vulnerabilidades reportadas após override compatível de `uuid` no lockfile. Isso não constitui prova de ausência de falhas nem auditoria do runtime Deno remoto.
+
+Ainda não executados pelo agente: aplicação remota de 005/006/007, publicação remota da função `payables-import`, teste do runtime Deno hospedado, importação da base real e homologação de totais. O acesso HTTP desta máquina aos provedores continua bloqueado por proxy 403; a entrega de código usa o Git autorizado.
+
+CR, Cobrança/validação, Faturamento, Margens, Comissões e RH continuam sem migração funcional. Previsões CP, relatórios Excel detalhados CP, backups/restauração e migração da posição operacional também permanecem pendentes. Não afirmar restauração integral da V75 ou prontidão para produção financeira.

@@ -3,6 +3,10 @@ import { authGateway, clearClientSession, isConfigured, supabase } from './lib/s
 import { isAccess, permits, roleNames, type Access } from './lib/access';
 import ManagementMessages from './components/ManagementMessages';
 import Administration from './components/Administration';
+import ExecutiveDashboard from './components/ExecutiveDashboard';
+import Treasury from './components/Treasury';
+import Payables from './components/Payables';
+import PayablesImport from './components/PayablesImport';
 import PasswordRecovery from './components/PasswordRecovery';
 import PasswordResetRequest from './components/PasswordResetRequest';
 import { consumeRecoveryLink } from './lib/passwordRecovery';
@@ -25,7 +29,7 @@ const modules = [
 ];
 
 function Brand({ onClick }: { onClick?: () => void }) {
-  const inner = <><span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none"><path d="M31 8C15 7 5 16 11 28c11 6 21-3 20-20Z" stroke="currentColor" strokeWidth="2.3"/><path d="m9 32 17-17M16 25l-1-9M21 20l9 1" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round"/></svg></span><span className="brand-copy"><strong>Central Financeira</strong><small>GRUPO ECOPLAST</small></span></>;
+  const inner = <><span className="brand-mark" aria-hidden="true"><img src="/ecoplast-logo.png" alt="" width="58" height="58" /></span><span className="brand-copy"><strong>Central Financeira</strong><small>GRUPO ECOPLAST</small></span></>;
   return onClick ? <button type="button" className="brand" onClick={onClick} aria-label="Central Financeira — início">{inner}</button> : <div className="brand">{inner}</div>;
 }
 
@@ -168,8 +172,10 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
   function navigate(id: string) { setSelected(id); setMobileOpen(false); }
   let content: ReactNode;
   if (safeSelected === 'administracao' && isManager) content = <Administration onAccessChanged={reloadAccess} />;
-  else if (safeSelected === 'painel') content = <><section className="welcome-panel"><div><span className="eyebrow">CENTRAL FINANCEIRA · GRUPO ECOPLAST</span><h2>Olá, {access.profile.display_name}.</h2><p>Seu espaço de acompanhamento e gestão financeira.</p></div><span className="badge badge-light">FASE 1 · ACESSO E ADMINISTRAÇÃO</span></section><section className="panel"><div className="panel-heading"><div><h2>Preparação da Central online</h2><p className="muted">A estrutura de acesso está disponível. Os módulos financeiros estão em implantação.</p></div><span className="status-dot">Acesso autenticado</span></div><div className="readiness-grid"><div><span className="step-label">01 / ACESSO</span><h3>Identificação individual</h3><p>Usuário, perfil e permissões consultados na base central.</p></div><div><span className="step-label">02 / GESTÃO</span><h3>Administração e mensagens</h3><p>Vínculos de cobradoras e mensagens da diretoria, conforme seu perfil.</p></div><div><span className="step-label">03 / OPERAÇÃO</span><h3>Bases em validação</h3><p>Importação e migração financeira ainda indisponíveis nesta versão.</p></div></div></section><section className="panel"><h2>Próximos acessos</h2><div className="quick-links">{permits(access, 'mensagens_cp') && <button className="quick-link" onClick={() => navigate('contas_pagar')}><span className="quick-icon">↗</span><span><strong>Mensagens da Diretoria e Gerência</strong><small>Consulte o quadro em Contas a Pagar</small></span><span>→</span></button>}{isManager && <button className="quick-link" onClick={() => navigate('administracao')}><span className="quick-icon">⚙</span><span><strong>Administrar a Central</strong><small>Perfis, cobradoras e auditoria</small></span><span>→</span></button>}</div>{access.profile.role_key === 'diretor' && <p className="notice">Seu perfil permite consultas. A escrita está autorizada exclusivamente no quadro de mensagens.</p>}</section></>;
-  else if (safeSelected === 'contas_pagar') content = <><PendingModule id={safeSelected} collectorId={access.collector_id} />{permits(access, 'mensagens_cp') && <ManagementMessages canWrite={permits(access, 'mensagens_cp', 'write')} />}</>;
+  else if (safeSelected === 'painel') content = <ExecutiveDashboard canManage={isManager} canReadDirectorSummary={permits(access, 'resumo_diretoria')} canViewPayables={permits(access, 'contas_pagar')} canViewCash={permits(access, 'caixa')} onNavigate={navigate} />;
+  else if (safeSelected === 'caixa') content = <Treasury canWrite={permits(access, 'caixa', 'write')} />;
+  else if (safeSelected === 'importar_bases') content = <PayablesImport canImport={permits(access, 'contas_pagar', 'import')} />;
+  else if (safeSelected === 'contas_pagar') content = <><Payables onImport={permits(access, 'contas_pagar', 'import') ? () => navigate('importar_bases') : undefined} />{permits(access, 'mensagens_cp') && <ManagementMessages canWrite={permits(access, 'mensagens_cp', 'write')} />}</>;
   else if (safeSelected) content = <PendingModule id={safeSelected} collectorId={access.collector_id} />;
   else content = <section className="panel"><h2>Nenhum módulo autorizado</h2><p>Procure a Gerência Geral para revisar suas permissões.</p></section>;
 
