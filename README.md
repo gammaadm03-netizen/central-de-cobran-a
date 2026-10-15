@@ -1,6 +1,6 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.1.0**. Fundação de autenticação, autorização e administração para migração da V75. **Não é a versão financeira completa nem uma publicação de produção.**
+Versão de desenvolvimento **0.1.1**. Fundação de autenticação, autorização e administração para migração da V75. **Não é a versão financeira completa nem uma publicação de produção.**
 
 ## O que funciona nesta entrega
 

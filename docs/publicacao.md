@@ -1,4 +1,4 @@
-# Publicação de homologação — 0.1.0
+# Publicação de homologação — 0.1.1
 
 Esta entrega prepara acesso e administração. Os módulos financeiros ainda não estão operacionais. Não direcionar a equipe para trabalho financeiro nesta versão.
 
@@ -12,7 +12,7 @@ Criar conta da empresa no Cloudflare e projeto **Pages** em modalidade gratuita 
 
 Na integração por Git, usar build `npm ci && npm run build`, saída `dist`, Node24 e definir somente as duas variáveis públicas da `.env.example` nas configurações do build. O repositório da aplicação precisa conter estes arquivos antes da integração. Confirme que a branch selecionada possui package.json, src/ e vite.config.ts; não associe uma branch vazia esperando que o provedor encontre arquivos de outra máquina.
 
-Os arquivos `_headers` e `_redirects` acompanham o build. A política CSP não autoriza execução de scripts inline nem de origem externa. Não colocar o HTML V75 ou JSON de usuários neste site.
+O arquivo `_headers` acompanha o build. Esta versão navega na própria página e não precisa de regra global de redirecionamento. A política CSP não autoriza execução de scripts inline nem de origem externa. Não colocar o HTML V75 ou JSON de usuários neste site.
 
 ## 3. Gateway
 
