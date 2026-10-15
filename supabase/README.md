@@ -83,6 +83,8 @@ Enquanto existir tentativa de alteração sem conclusão, `finish_login` nega no
 
 O Supabase aplica limites próprios de email e pode restringir os destinatários atendidos pelo provedor padrão. Verifique o recebimento no email administrativo e as configurações oficiais de envio; se o provedor recusar a entrega, configurar um SMTP autorizado pode ser necessário. Não habilitar cobrança ou prometer entrega ilimitada no plano gratuito. A falha de entrega não deve ser contornada expondo o email do usuário, removendo controles ou editando `auth.users` diretamente.
 
+Desde a versão 0.2.1, erros de recuperação possuem referências fixas: `REC-01` retorno sem credenciais completas; `REC-02` callback com `otp_expired` informado pelo Auth; `REC-03` outro erro de callback; `REC-04` sessão/token rejeitado durante verificação; `REC-05` falha de rede, serviço ou configuração durante a verificação. Falha de conexão não comprova expiração do link. O conteúdo bruto do erro não é exibido e os parâmetros sensíveis são removidos da URL. Para suporte, solicitar somente a referência ou captura da mensagem, nunca o link do email, tokens ou a nova senha. Esta correção é apenas de frontend e não exige reaplicar SQL ou atualizar a Edge Function.
+
 ## Garantias e limites
 
 - O endereço associado ao login é resolvido por uma RPC exclusiva de `service_role`. Não existe consulta pública de username → email.

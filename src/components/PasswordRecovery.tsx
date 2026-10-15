@@ -1,24 +1,36 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { isAuthError } from '@supabase/supabase-js';
 import { authGateway, createRecoveryClient } from '../lib/supabase';
 import type { RecoveryLink } from '../lib/passwordRecovery';
 
 const invalidLink = 'Este link de redefinição é inválido ou expirou. Volte ao login e solicite um novo link.';
+type CheckResult = 'ready' | 'invalid' | 'unavailable';
+
+function checkFailure(error: unknown): CheckResult {
+  // HTTP 403 may indicate project/API configuration; a network failure or
+  // server error must never be described as proof that the email link expired.
+  return isAuthError(error) && (error.status === 401 || error.code === 'bad_jwt' || error.code === 'invalid_jwt'
+    || error.code === 'user_not_found'
+    || error.code === 'session_not_found' || error.code === 'refresh_token_not_found'
+    || error.code === 'refresh_token_already_used' || error.code === 'otp_expired') ? 'invalid' : 'unavailable';
+}
 
 export default function PasswordRecovery({ link, onFinish }: { link: RecoveryLink; onFinish: (notice: string) => void }) {
   const [client] = useState(createRecoveryClient);
-  const [status, setStatus] = useState<'checking' | 'ready' | 'invalid' | 'uncertain'>(link.valid ? 'checking' : 'invalid');
+  const [status, setStatus] = useState<'checking' | CheckResult | 'uncertain'>(link.valid ? 'checking' : 'invalid');
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const verified = useRef(false);
-  const validation = useRef<Promise<boolean> | null>(null);
+  const validation = useRef<Promise<CheckResult> | null>(null);
   const activeRequest = useRef<AbortController | null>(null);
   const finished = useRef(false);
 
   useEffect(() => {
     let active = true;
-    if (!link.valid || !client) { setStatus('invalid'); return; }
+    if (!link.valid) { setStatus('invalid'); return; }
+    if (!client) { setStatus('unavailable'); return; }
     // Reutilizar a verificação durante a repetição de efeitos do React StrictMode.
     if (!validation.current) {
       const accessToken = link.accessToken;
@@ -28,16 +40,18 @@ export default function PasswordRecovery({ link, onFinish }: { link: RecoveryLin
       validation.current = (async () => {
         try {
           const result = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
-          if (result.error || !result.data.session) return false;
+          if (result.error) return checkFailure(result.error);
+          if (!result.data.session) return 'invalid';
           const user = await client.auth.getUser();
-          return !user.error && Boolean(user.data.user) && user.data.user?.id === result.data.user?.id;
-        } catch { return false; }
+          if (user.error) return checkFailure(user.error);
+          return typeof result.data.user?.id === 'string' && user.data.user?.id === result.data.user.id ? 'ready' : 'invalid';
+        } catch (failure) { return checkFailure(failure); }
       })();
     }
-    void validation.current.then(valid => {
+    void validation.current.then(result => {
       if (!active || finished.current) return;
-      verified.current = valid;
-      setStatus(valid ? 'ready' : 'invalid');
+      verified.current = result === 'ready';
+      setStatus(result);
     });
     return () => { active = false; };
   }, [client, link]);
@@ -103,7 +117,11 @@ export default function PasswordRecovery({ link, onFinish }: { link: RecoveryLin
     <span className="eyebrow">CENTRAL FINANCEIRA · GRUPO ECOPLAST</span>
     <h1>Redefinir senha</h1>
     {status === 'checking' && <p className="notice" role="status">Verificando seu link de redefinição…</p>}
-    {status === 'invalid' && <p className="alert error" role="alert">{invalidLink}</p>}
+    {status === 'invalid' && <>
+      <p className="alert error" role="alert">{link.issue === 'incomplete' ? 'O link chegou à Central sem os dados necessários para redefinir sua senha. Volte ao login, solicite um novo e-mail e abra o botão do e-mail mais recente.' : invalidLink}</p>
+      <p className="help-text">Referência: {link.issue === 'incomplete' ? 'REC-01' : link.issue === 'expired' ? 'REC-02' : link.issue === 'callback' ? 'REC-03' : 'REC-04'}</p>
+    </>}
+    {status === 'unavailable' && <><p className="alert error" role="alert">Não foi possível conectar ao serviço de autenticação para verificar seu link. Verifique sua conexão e solicite um novo e-mail. Se continuar, informe esta referência à administração.</p><p className="help-text">Referência: REC-05</p></>}
     {status === 'uncertain' && <p className="alert error" role="alert">Não foi possível confirmar a conclusão. A senha pode ter sido alterada. Volte ao login e solicite um novo link para concluir a redefinição com segurança.</p>}
     {status === 'ready' && <>
       <p className="muted">Defina uma nova senha para seu acesso individual.</p>

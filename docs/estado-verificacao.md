@@ -36,3 +36,11 @@ Cadastro completo Auth, redefinição por administrador, troca obrigatória, mó
 ## Entrega pelo GitHub
 
 O código é enviado ao repositório `gammaadm03-netizen/central-de-cobran-a`, branch `main`, como alternativa ao download de ZIP indisponível no chat. A Cloudflare está vinculada a essa branch com saída `dist`. Nenhuma senha, UUID administrativo real ou base V75 foi versionada. Scripts de publicação não recriam o banco.
+
+## Atualização 0.2.1 — diagnóstico do link recebido
+
+O usuário informou execução sem erro da migration 004, atualização da Edge Function e recebimento do email. Ao abrir o email mais recente imediatamente após recebê-lo, a tela mostrou link inválido/expirado. A causa remota ainda não foi identificada.
+
+Reprodução local confirmou um defeito na mensagem: HTTP 503 e falha de rede durante a verificação também eram tratados como expiração. O frontend agora distingue callback incompleto, expiração explícita, sessão rejeitada e indisponibilidade, com referências fixas e sem expor erros ou credenciais. Build e 11 testes de navegador de recuperação passaram, incluindo falhas de rede, HTTP 403/503, erros de callback e remoção de parâmetros da URL. Os nove cenários de navegação da entrega anterior não foram repetidos nesta correção restrita à recuperação. A alteração não precisa de nova migration nem de atualização da função.
+
+Durante a verificação local, antes do envio da correção 0.2.1, o usuário informou “funcionou”. Esse relato encerra o bloqueio reportado, mas não permite atribuir sua resolução à correção nem identificar a causa inicial. Não foi solicitada repetição de procedimentos no Supabase. A confirmação de login e as demais homologações de permissões continuam separadas desse relato.
