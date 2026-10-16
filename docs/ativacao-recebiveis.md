@@ -1,5 +1,7 @@
 # Ativar Caixa em Importar Bases, Contas a Receber e Cobrança — 0.4.0
 
+**Atualização posterior:** o usuário confirmou a execução do SQL desta página. Para ampliar o cadastro a 17 posições, seguir [ativacao-contas-caixas.md](ativacao-contas-caixas.md) e executar somente 012; não repetir 008/009/010/011. A publicação de `receivables-import` continua sendo uma etapa separada para quem ainda não a realizou. As referências a onze contas abaixo registram o escopo original da versão 0.4.0.
+
 Esta atualização acrescenta o preenchimento das onze contas dentro de **Importar Bases → Caixa / Bancos**, a importação de Contas a Receber e a operação de Cobrança com validação financeira. O endereço da Central continua sendo https://central-de-cobran-a.pages.dev.
 
 O usuário informou que o login, o Painel, os saldos das onze contas e a importação de Contas a Pagar já funcionam. Esses dados devem ser preservados. Esta página descreve a próxima ativação; os testes locais não comprovam que ela já foi executada no Supabase ou publicada na Cloudflare.

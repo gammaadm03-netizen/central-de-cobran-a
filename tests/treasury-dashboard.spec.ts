@@ -5,22 +5,27 @@ const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const fixedTime = new Date('2026-10-15T15:00:00Z');
 const accountNames = [['F2G', 'Bradesco'], ['EASY CLEAN', 'Bradesco'], ['EASY CLEAN', 'Banco do Brasil'], ['FAST CLEAN', 'Bradesco'], ['FAST CLEAN', 'Banco do Brasil'], ['ECOPLAST', 'Bradesco'], ['ECOPLAST', 'Banco do Brasil'], ['GAMMA', 'Bradesco'], ['LIMPE FÁCIL', 'Bradesco'], ['LIMPE FÁCIL', 'Cora'], ['MY CLEAN', 'Cora']];
 const stamp = '2026-10-15T12:00:00Z';
-function cashFixture(complete = false) {
-  return { accounts: accountNames.map(([company, bank], index) => ({ id: `10000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, company, bank, account_label: '', amount_cents: complete || index === 0 ? 10000 : null, balance_date: complete || index === 0 ? '2026-10-15' : null, updated_at: complete || index === 0 ? stamp : null })), reported_accounts: complete ? 11 : 1, expected_accounts: 11, total_cents: complete ? 110000 : null, latest_position_date: '2026-10-15' };
+function cashFixture(complete = false, expanded = false) {
+  const bankNames = ['BRADESCO F2G', 'BRADESCO EASY CLEAN', 'BANCO DO BRASIL EASY CLEAN', 'BRADESCO FAST CLEAN', 'BANCO DO BRASIL FAST CLEAN', 'BRADESCO ECOPLAST', 'BANCO DO BRASIL ECOPLAST', 'BRADESCO GAMMA IND', 'BRADESCO LIMPE FACIL', 'BANCO CORA LIMPE FACIL', 'BANCO CORA MY CLEAN'];
+  const roster: { company: string; bank: string; account_label: string; account_type?: 'BANK' | 'CASH'; display_name?: string }[] = accountNames.map(([company, bank], index) => ({ company, bank, account_label: '', ...(expanded ? { account_type: 'BANK' as const, display_name: bankNames[index] } : {}) }));
+  if (expanded) roster.push({ company: 'ECOPLAST', bank: 'Cora', account_label: '', account_type: 'BANK', display_name: 'BANCO CORA ECO PLAST' }, ...['ECOPLAST', 'LIMPE FÁCIL', 'GAMMA', 'FAST CLEAN', 'EASY CLEAN'].map(company => ({ company, bank: 'Caixa', account_label: 'Caixa da empresa', account_type: 'CASH' as const, display_name: `CAIXA ${company.replace('Á', 'A')}` })));
+  return { accounts: roster.map((account, index) => ({ ...account, id: `10000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, amount_cents: complete || index === 0 ? 10000 : null, balance_date: complete || index === 0 ? '2026-10-15' : null, updated_at: complete || index === 0 ? stamp : null })), reported_accounts: complete ? roster.length : 1, expected_accounts: roster.length, total_cents: complete ? roster.length * 10000 : null, latest_position_date: '2026-10-15' };
 }
-interface FixtureOptions { role?: 'gerente_geral' | 'diretor' | 'contas_pagar' | 'contas_receber'; imported?: boolean; complete?: boolean; fail?: boolean; failOldWeek?: boolean; receivableImported?: boolean; receivableFailure?: string }
+
+interface FixtureOptions { role?: 'gerente_geral' | 'diretor' | 'contas_pagar' | 'contas_receber'; imported?: boolean; complete?: boolean; fail?: boolean; failOldWeek?: boolean; receivableImported?: boolean; receivableFailure?: string; expanded?: boolean; negatives?: boolean; panelOnly?: boolean }
 async function setup(page: Page, options: FixtureOptions = {}) {
   await page.clock.setFixedTime(fixedTime);
   const role = options.role ?? 'gerente_geral';
   const id = '90000000-0000-4000-8000-000000000001';
-  const permissions = ['painel', 'caixa', role === 'contas_receber' ? 'contas_receber' : 'contas_pagar', 'importar_bases'].map(resource => ({ resource, action: 'read' }));
+  const permissions = options.panelOnly ? [{ resource: 'painel', action: 'read' }] : ['painel', 'caixa', role === 'contas_receber' ? 'contas_receber' : 'contas_pagar', 'importar_bases'].map(resource => ({ resource, action: 'read' }));
   if (['diretor', 'gerente_geral'].includes(role)) permissions.push({ resource: 'resumo_diretoria', action: 'read' });
   if (role === 'gerente_geral') permissions.push({ resource: 'usuarios', action: 'admin' }, { resource: 'caixa', action: 'write' });
   const access = { profile: { id, username: 'TesteFinanceiro', display_name: 'Pessoa Teste', role_key: role, enabled: true }, permissions, collector_id: null };
   const claims = { sub: id, session_id: '90000000-0000-4000-8000-000000000002', exp: Math.floor(fixedTime.getTime() / 1000) + 3600, iat: Math.floor(fixedTime.getTime() / 1000), role: 'authenticated' };
   const token = [Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'), Buffer.from(JSON.stringify(claims)).toString('base64url'), 'synthetic-test-only'].join('.');
   const calls: { name: string; body: any }[] = [];
-  let cash = cashFixture(options.complete);
+  let cash = cashFixture(options.complete, options.expanded);
+  if (options.negatives) { cash.accounts[0].amount_cents = -25000; cash.accounts[1].amount_cents = -5000; cash.accounts[1].balance_date = '2026-10-14'; cash.accounts[1].updated_at = stamp; cash.accounts[2].amount_cents = 100000; cash.accounts[2].balance_date = '2026-10-15'; cash.accounts[2].updated_at = stamp; cash.total_cents = options.complete ? cash.accounts.reduce((total, account) => total + account.amount_cents!, 0) : null; cash.reported_accounts = cash.accounts.filter(account => account.amount_cents !== null).length; }
   let stock = { value_cents: null as number | null, reference_date: null as string | null, source: null as string | null };
   const history: any[] = [];
   await page.route(`${project}/**`, async route => {
@@ -34,7 +39,13 @@ async function setup(page: Page, options: FixtureOptions = {}) {
     const name = url.pathname.split('/').at(-1)!;
     calls.push({ name, body });
     if (name === 'current_access') return reply(access);
-    if (name === 'cash_position') return options.fail ? reply({ message: 'private SQL secret trace' }, 500) : reply(cash);
+    if (name === 'cash_position') {
+      if (options.fail) return reply({ message: 'private SQL secret trace' }, 500);
+      if (!options.negatives) return reply(cash);
+      const accounts = cash.accounts.map(account => account.balance_date && account.balance_date > body.p_as_of ? { ...account, amount_cents: null, balance_date: null, updated_at: null } : account);
+      const reported = accounts.filter(account => account.amount_cents !== null); const negative = reported.filter(account => account.amount_cents! < 0);
+      return reply({ ...cash, accounts: options.panelOnly ? [] : accounts, reported_accounts: reported.length, total_cents: reported.length === accounts.length ? reported.reduce((sum, account) => sum + account.amount_cents!, 0) : null, negative_accounts_count: negative.length, coverage_required_cents: negative.reduce((sum, account) => sum - account.amount_cents!, 0) });
+    }
     if (name === 'current_stock') return reply(stock);
     if (name === 'payables_summary') return options.failOldWeek && body.p_start === '2026-10-03' ? reply({ message: 'private SQL secret trace' }, 500) : reply({ open_cents: 900000, overdue_cents: 300000, period_cents: 123456, active_count: 20, latest_import_at: options.imported ? stamp : null });
     if (name === 'receivables_summary') return options.receivableFailure ? reply({ code: options.receivableFailure, message: 'private SQL secret trace' }, 404) : reply({ open_cents: 2000000, overdue_cents: 750000, period_cents: 500000, active_count: 30, pending_count: 2, unassigned_count: 3, received_period_cents: 12345, latest_import_at: options.receivableImported ? stamp : null, overdue_bps: 3750, overdue_comlurb_cents: null });
@@ -95,7 +106,7 @@ test('director can inspect dashboard and bank balances without financial write c
   await expect(page.getByText('Nenhuma posição salva.')).toBeVisible();
   await page.getByRole('button', { name: 'Abrir Caixa →', exact: true }).click();
   await expect(page.getByText('Carregando posição financeira…')).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'Registrar saldo bancário', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Registrar saldo de conta', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Salvar estoque manual', exact: true })).toHaveCount(0);
   await expect(page.getByText('1 de 11 contas com saldo informado')).toBeVisible();
   expect(calls.some(call => call.name === 'set_bank_balance')).toBe(false);
@@ -117,7 +128,7 @@ test('CR viewer is not offered navigation into an unauthorized CP module', async
 test('manager records exact negative cents only after confirmation and sends the observed row revision', async ({ page }) => {
   const { calls } = await setup(page);
   await page.getByRole('button', { name: 'Abrir Caixa →', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Registrar saldo bancário', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Registrar saldo de conta', exact: true })).toBeVisible();
   await page.getByLabel('Saldo (R$)', { exact: true }).fill('-1.234,56');
   await page.getByLabel('Observação do saldo', { exact: true }).fill('Conferido no extrato oficial.');
   page.once('dialog', dialog => dialog.dismiss()); await page.getByRole('button', { name: 'Registrar saldo', exact: true }).click();
@@ -239,4 +250,83 @@ test('director export writes actual overdue percentage as numeric percentage ins
   let found = false; workbook.getWorksheet('Resumo da Diretoria')!.eachRow(row => {
     if (row.getCell(2).value === 'Percentual em atraso') { found = true; expect(row.getCell(3).value).toBe(0.375); expect(row.getCell(3).numFmt).toBe('0.00%'); }
   }); expect(found).toBe(true);
+});
+
+
+test('director sees the total of all seventeen bank and company cash accounts and exports their official names', async ({ page }) => {
+  const { calls } = await setup(page, { role: 'diretor', complete: true, expanded: true, imported: true, receivableImported: true });
+  await expect(page.locator('.financial-kpi').nth(0)).toContainText('R$ 1.700,00');
+  await expect(page.locator('.financial-kpi').nth(0)).toContainText('17 contas');
+  await expect(page.locator('.financial-kpi').nth(1)).toContainText('R$ 5.465,44');
+  const details = page.locator('.director-cash-detail'); await expect(details.locator('tbody tr')).toHaveCount(17);
+  await expect(details.getByText('BANCO CORA ECO PLAST', { exact: true })).toBeVisible();
+  await expect(details.getByText('BRADESCO GAMMA IND', { exact: true })).toBeVisible();
+  for (const company of ['ECOPLAST', 'LIMPE FACIL', 'GAMMA', 'FAST CLEAN', 'EASY CLEAN']) await expect(details.getByText(`CAIXA ${company}`, { exact: true })).toBeVisible();
+  const downloadPromise = page.waitForEvent('download'); await page.getByRole('button', { name: 'Baixar Excel', exact: true }).click();
+  const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile((await (await downloadPromise).path())!);
+  const sheet = workbook.getWorksheet('Caixa por empresa e banco')!; expect(sheet.rowCount).toBe(18);
+  const rows: any[] = []; sheet.eachRow((row, index) => { if (index > 1) rows.push({ name: row.getCell(3).value, kind: row.getCell(4).value, date: row.getCell(5).value, amount: row.getCell(6).value, moneyFormat: row.getCell(6).numFmt }); });
+  expect(rows.filter(row => row.kind === 'Caixa da empresa')).toHaveLength(5); expect(rows.filter(row => row.kind === 'Conta bancária')).toHaveLength(12);
+  expect(rows.find(row => row.name === 'BANCO CORA ECO PLAST')?.amount).toBe(100);
+  for (const row of rows) { expect(row.date).toBeInstanceOf(Date); expect(row.amount).toBe(100); expect(row.moneyFormat).toContain('0.00'); }
+  await page.getByRole('button', { name: 'Abrir Caixa →', exact: true }).click();
+  await expect(page.getByText('17 de 17 contas com saldo informado')).toBeVisible();
+  await expect(page.locator('.bank-company tbody tr')).toHaveCount(17);
+  await expect(page.locator('.bank-company').filter({ has: page.getByRole('heading', { name: 'ECOPLAST', exact: true }) })).toContainText('Subtotal: R$ 400,00');
+  await expect(page.getByRole('heading', { name: 'Registrar saldo de conta', exact: true })).toHaveCount(0);
+  expect(calls.some(call => call.name === 'set_bank_balance' || call.name === 'save_bank_position')).toBe(false);
+});
+
+test('manager can select and correct a company cash balance using its existing account id and revision', async ({ page }) => {
+  const { calls } = await setup(page, { complete: true, expanded: true });
+  await page.getByRole('button', { name: 'Abrir Caixa →', exact: true }).click();
+  await page.getByLabel('Conta / Caixa', { exact: true }).selectOption({ label: 'CAIXA ECOPLAST' });
+  await page.getByLabel('Saldo (R$)', { exact: true }).fill('250,01');
+  await page.getByLabel('Observação do saldo', { exact: true }).fill('Conferência física do caixa da empresa.');
+  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Registrar saldo', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Saldo registrado' })).toBeVisible();
+  expect(calls.find(call => call.name === 'set_bank_balance')?.body).toEqual({ p_account_id: '10000000-0000-4000-8000-000000000013', p_balance_date: '2026-10-15', p_amount_cents: 25001, p_observation: 'Conferência física do caixa da empresa.', p_expected_updated_at: stamp });
+});
+
+
+test('negative account coverage remains urgent despite positive consolidated cash and identifies previous-day records', async ({ page }) => {
+  await setup(page, { role: 'diretor', complete: true, expanded: true, negatives: true });
+  await expect(page.locator('.financial-kpi').nth(0)).toContainText('R$ 2.100,00');
+  const attention = page.locator('.cash-coverage-attention');
+  await expect(attention).toContainText('Contas negativas — cobrir hoje');
+  await expect(attention).toContainText('2 conta(s)'); await expect(attention).toContainText('R$ 300,00');
+  await expect(attention).toContainText('Registro anterior: confira e atualize hoje');
+  await attention.getByRole('button', { name: 'Ver contas negativas →', exact: true }).click();
+  const alert = page.locator('.cash-coverage-alert');
+  await expect(alert.getByRole('heading', { name: 'Contas negativas — cobrir hoje', exact: true })).toBeVisible();
+  await expect(alert).toContainText('R$ 300,00'); await expect(alert).toContainText('Saldos positivos de outras contas não reduzem este alerta.');
+  await expect(alert).toContainText('BRADESCO F2G'); await expect(alert).toContainText('BRADESCO EASY CLEAN');
+  await expect(alert).toContainText('Registro anterior: confira e atualize hoje · 14/10/2026');
+  await page.getByLabel('Data da posição', { exact: true }).fill('2026-10-14');
+  await expect(alert.getByRole('heading', { name: 'Cobertura na data consultada', exact: true })).toBeVisible();
+  await expect(alert).toContainText('R$ 50,00'); await expect(alert).toContainText('1 conta(s)');
+  await expect(alert).not.toContainText('cobrir hoje');
+});
+
+test('known negatives still request coverage while the consolidated position is incomplete', async ({ page }) => {
+  await setup(page, { role: 'diretor', expanded: true, negatives: true });
+  await expect(page.locator('.financial-kpi').nth(0)).toContainText('SALDOS AGUARDANDO ATUALIZAÇÃO');
+  await expect(page.locator('.cash-coverage-attention')).toContainText('R$ 300,00');
+  await expect(page.locator('.cash-coverage-attention')).toContainText('Posição incompleta');
+  await page.getByRole('button', { name: 'Abrir Caixa →', exact: true }).click();
+  await expect(page.locator('.cash-coverage-alert')).toContainText('o alerta considera os saldos negativos já informados');
+
+});
+
+
+test('aggregate-only dashboard access never claims that hidden negative account balances were updated today', async ({ page }) => {
+  await setup(page, { role: 'contas_pagar', expanded: true, complete: true, negatives: true, panelOnly: true });
+  const attention = page.locator('.cash-coverage-attention');
+  await expect(attention).toContainText('2 conta(s)'); await expect(attention).toContainText('R$ 300,00');
+  await expect(attention).toContainText('Confira e atualize as posições de hoje');
+  await expect(attention).not.toContainText('Saldos informados hoje');
+  await expect(page.getByRole('button', { name: 'Ver contas negativas →', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Abrir Caixa →', exact: true })).toHaveCount(0);
+  await expect(page.getByText('BRADESCO F2G', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('BRADESCO EASY CLEAN', { exact: true })).toHaveCount(0);
 });

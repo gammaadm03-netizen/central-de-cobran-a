@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -20,6 +20,7 @@
     "test:receivables-sql": "node scripts/test-receivables-sql.mjs",
     "test:collections-sql": "node scripts/test-collections-sql.mjs",
     "test:bank-import-sql": "node scripts/test-bank-import-sql.mjs",
+    "test:treasury-accounts-sql": "node scripts/test-treasury-accounts-sql.mjs",
     "test:upgrade-sql": "node scripts/bundle-receivables.mjs && node scripts/test-upgrade-sql.mjs",
     "bundle:finance": "node scripts/bundle-finance.mjs",
     "bundle:payables-gateway": "node scripts/bundle-payables-gateway.mjs",

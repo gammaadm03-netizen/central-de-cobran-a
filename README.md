@@ -1,6 +1,6 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.4.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. A operação financeira completa ainda depende dos módulos pendentes e de homologação remota.
+Versão de desenvolvimento **0.4.1**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. A operação financeira completa ainda depende dos módulos pendentes e de homologação remota.
 
 ## O que está implementado
 
@@ -8,7 +8,7 @@ React + TypeScript; login por usuário via gateway no Supabase; recuperação de
 
 O Painel preserva a organização e a marca da V75: Hoje/Semana/Mês, semana financeira de sábado a sexta, movimento, alertas e Resumo da Diretoria. Os indicadores disponíveis vêm do banco; fontes ausentes permanecem pendentes. Caixa é a posição atual na data oficial de São Paulo, independente do período escolhido para recebíveis e obrigações. A projeção exige as fontes necessárias e não confirma recebimentos.
 
-**Importar Bases** centraliza as áreas autorizadas. Em **Caixa / Bancos**, a Gerência informa data, saldos das onze contas e observação, confere o consolidado e salva a posição inteira em uma transação. Zero exige preenchimento explícito; valores de datas anteriores não são copiados automaticamente para um novo dia. Extratos de até 2 MiB são guardados como apoio privado, com hash e auditoria, sem alterar saldos ou conciliar títulos. A consulta de Caixa/Bancos e o estoque de contingência permanecem disponíveis conforme as permissões.
+**Importar Bases** centraliza as áreas autorizadas. Em **Caixa / Bancos**, a Gerência informa data, saldos das **17 posições: 12 contas bancárias e 5 caixas das empresas**, e observação, confere o consolidado e salva a posição inteira em uma transação. O cadastro segue a lista atualizada do usuário, incluindo Cora Ecoplast e os caixas de Ecoplast, Limpe Fácil, Gamma, Fast Clean e Easy Clean. Zero exige preenchimento explícito; valores de datas anteriores não são copiados automaticamente para um novo dia. Extratos de até 2 MiB são guardados como apoio privado, com hash e auditoria, sem alterar saldos ou conciliar títulos. A consulta de Caixa/Bancos e o estoque de contingência permanecem disponíveis conforme as permissões.
 
 CP possui importação completa atômica, classificação obrigatória, baixas preservadas, filtros, paginação e CSV. CR possui importação completa com arquivo novamente analisado pelo servidor; novas ausências aguardam validação financeira, sem serem consideradas recebimentos. A carteira é herdada da dívida ativa do cliente quando existe uma atribuição oficial. Mudanças na identificação nome/CNPJ exigem conferência para evitar duplicidade; não há união automática. Cobrança oferece carteira individual, contatos, retornos e pagamento informado; CR confirma a data real ou devolve à mesma cobradora como não localizado. Registros de recebimentos validados preservam origem, cobradora e atraso, preparando a futura apuração de comissões.
 
@@ -16,7 +16,11 @@ Faturamento, Margens, Comissões, RH/DP, previsões completas de CP, Excel detal
 
 ## Atualizar o projeto existente
 
-O usuário informou que login, Painel, onze saldos e uma base completa de CP já funcionam. **Preservar esses registros e não repetir a instalação anterior.** Para 0.4.0, seguir [docs/ativacao-recebiveis.md](docs/ativacao-recebiveis.md): aplicar somente `supabase/dashboard/ativar-recebiveis.sql` uma vez e publicar a nova função `receivables-import`. O script reúne 008/009/010/011. `auth-gateway` e `payables-import` existentes permanecem em uso; bancos não precisam de outra Edge Function.
+O usuário informou que login, Painel, onze saldos e uma base completa de CP já funcionam, e confirmou a execução sem erro da atualização 008/009/010/011. **Preservar esses registros e não repetir a instalação anterior.** Para **0.4.1**, seguir [docs/ativacao-contas-caixas.md](docs/ativacao-contas-caixas.md): executar somente `supabase/migrations/012_treasury_accounts.sql`. As seis novas posições são cadastradas sem saldo; os onze registros e valores existentes são preservados. Não é necessária outra Edge Function para bancos/caixas.
+
+Contas negativas geram alertas de cobertura no mesmo dia no Painel e em Caixa/Bancos. A necessidade de cobertura soma somente os valores negativos, sem compensação com saldos positivos de outras contas; posições antigas solicitam atualização. Os quadros de contas possuem efeito discreto de elevação ao passar o cursor, respeitando redução de movimento.
+
+A ativação de CR descrita em [docs/ativacao-recebiveis.md](docs/ativacao-recebiveis.md) ainda exige a função `receivables-import`; o sucesso do SQL não comprova que essa função já foi publicada. `auth-gateway` e `payables-import` existentes permanecem em uso. Não repetir o arquivo combinado 008/009/010/011 para acrescentar contas.
 
 Não reaplicar 001/003/004/005/006/007 nem `ativar-financeiro.sql` no projeto já configurado. Para um projeto novo, consultar a ordem em [supabase/README.md](supabase/README.md). Deploy do site não executa migrations nem publica funções. Nunca executar reset contra o banco operacional.
 
@@ -46,6 +50,7 @@ npm run test:director-sql
 npm run test:receivables-sql
 npm run test:collections-sql
 npm run test:bank-import-sql
+npm run test:treasury-accounts-sql
 npm run test:upgrade-sql
 npm run bundle:receivables-gateway
 npm run build
@@ -56,6 +61,6 @@ Os testes SQL usam PostgreSQL local via PGlite e Auth simulado. Gateway e navega
 
 ## Hospedagem e dados anteriores
 
-Frontend estático na Cloudflare Pages e banco/Auth/serviços no Supabase, independentes do PC da empresa. A base local fornece relatórios completos para atualização. A posição operacional antiga ainda precisa ser inventariada e migrada com conferência, sem substituir os saldos e títulos já lançados nem usar números de capturas de tela. Preservar o ZIP original e o estado operacional. Procedimentos: [publicação](docs/publicacao.md), [ativação atual](docs/ativacao-recebiveis.md) e [mapeamento da V75](docs/v75-mapeamento.md).
+Frontend estático na Cloudflare Pages e banco/Auth/serviços no Supabase, independentes do PC da empresa. A base local fornece relatórios completos para atualização. A posição operacional antiga ainda precisa ser inventariada e migrada com conferência, sem substituir os saldos e títulos já lançados nem usar números de capturas de tela. Preservar o ZIP original e o estado operacional. Procedimentos: [publicação](docs/publicacao.md), [cadastro atual de contas/caixas](docs/ativacao-contas-caixas.md), [ativação de CR](docs/ativacao-recebiveis.md) e [mapeamento da V75](docs/v75-mapeamento.md).
 
 Nenhum recurso pago é habilitado pelo código. Cotas, pausas e disponibilidade dos planos gratuitos precisam ser conferidas nos provedores. Backup/restauração de produção ainda requerem implantação e teste.

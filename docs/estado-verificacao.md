@@ -2,7 +2,7 @@
 
 16/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.4.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.4.1 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -88,3 +88,17 @@ Verificações locais da entrega:
 A aplicação remota de 008/009/010/011 e a publicação de `receivables-import` ainda dependem do painel autorizado do usuário. O deploy do site por Git não executa essas etapas. O acesso HTTP aos provedores nesta máquina continua sem evidência de disponibilidade após o bloqueio de proxy registrado; nenhum teste usou senha real nem alterou o banco remoto. Instruções incrementais: `docs/ativacao-recebiveis.md`. Não repetir 005/006/007 nem refazer os onze saldos/CP para instalar esta versão.
 
 Comissões ainda não são apuradas: os recebimentos apenas preservam os dados necessários à implementação futura. Faturamento, Margens, RH/DP, previsões e Excel detalhado de CP, conciliação bancária, backups/restauração, administração completa Auth e migração conferida do estado operacional antigo permanecem pendentes. Não declarar o sistema completo ou homologado para produção financeira.
+
+## Atualização 0.4.1 — dezessete posições, alertas de cobertura e efeito nos quadros
+
+O usuário confirmou `Success. No rows returned` após executar a atualização anterior e enviou uma lista ampliada: doze contas bancárias e cinco caixas das empresas. Essa lista mais recente substitui a configuração inicial de onze bancos. Depois solicitou alerta de cobertura de contas negativas no mesmo dia e elevação dos quadros ao passar o cursor.
+
+A migration incremental 012 acrescenta Cora Ecoplast e os caixas de Ecoplast, Limpe Fácil, Gamma, Fast Clean e Easy Clean, sem criar saldos. Mantém os onze IDs anteriores, os nomes canônicos das empresas e os históricos. Tipo banco/caixa e nomes de apresentação seguem a lista; ECO PLAST e ECOPLAST não viram empresas diferentes, assim como GAMMA IND e GAMMA. O mesmo cadastro é usado no formulário central de importações, na consulta de Caixa/Bancos, no Painel e no detalhamento Excel.
+
+Os alertas mostram os negativos conhecidos mesmo quando faltam outras posições ou o consolidado está positivo. O valor a cobrir é a soma absoluta somente dos saldos negativos. Posições antigas pedem atualização hoje; consultas históricas identificam o período consultado. Um perfil futuro com apenas Painel recebe agregados, sem nomes de contas nem afirmação indevida sobre a data de cada saldo. Não há transferência ou cobertura automática. Os quadros recebem elevação discreta em dispositivos com cursor, respeitando redução de movimento.
+
+**14 grupos SQL passaram** em PostgreSQL local PGlite, aplicando o SQL 012 sobre os arquivos de ativação anteriores reais. Cobrem preservação dos saldos, CP/CR, arquivos, auditoria e snapshots sintéticos; 17 nomes/tipos corretos; seis novas posições ausentes versus zero explícito; rejeição integral do lote antigo de onze contas; total com bancos e caixas; conflito de versão com rollback de saldos/auditoria; cobertura negativa independente de saldos positivos e da data; limite de precisão da cobertura na leitura e antes da gravação; RBAC e privacidade dos agregados.
+
+Build TypeScript/Vite e **30 cenários de navegador de bancos/Painel passaram**, incluindo as dezessete posições, preenchimento das seis novas contas, envio único, saldo negativo, saldo antigo, consulta histórica, posição incompleta, Diretor em leitura, privacidade de perfil somente com agregados e exportação com caixas. A conferência visual manual no Chromium verificou os alertas, a elevação de três pixels com sombra ao passar o cursor e a ausência de transformação/transição com redução de movimento. O caso funcional de posição incompleta foi repetido após retirar as verificações de estilo da suíte financeira e também passou. Não foram repetidos testes de importação CP/CR ou autenticação nesta mudança restrita a bancos/Painel; seus resultados anteriores permanecem registrados acima.
+
+A execução remota de 012 e a conferência dos saldos reais ainda dependem do painel do usuário. O envio por Git não aplica SQL. Para esta atualização, executar somente `supabase/migrations/012_treasury_accounts.sql`, sem repetir o combinado 008/009/010/011 já confirmado. Não é necessária outra Edge Function. Procedimento: `docs/ativacao-contas-caixas.md`. Nenhuma integração paga foi ativada e os módulos pendentes da versão anterior permanecem pendentes.

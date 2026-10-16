@@ -2,13 +2,15 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
-## Projeto existente — atualização 0.4.0
+## Projeto existente — atualização 0.4.1
 
-O usuário informou que já configurou 001/003/004, `auth-gateway`, 005/006/007 e `payables-import`, e que cadastrou os onze saldos e importou CP. Esses dados não devem ser refeitos ou substituídos por uma instalação inicial.
+**Cadastro atual de bancos/caixas (0.4.1):** após a confirmação de execução de 008/009/010/011, executar somente `migrations/012_treasury_accounts.sql`. Acrescenta Cora Ecoplast e cinco caixas das empresas, totalizando 17 posições, preserva os onze IDs e saldos anteriores e mantém ausências sem saldo. As contas recebem tipo banco/caixa e nome de exibição, sem dividir ECOPLAST/ECO PLAST ou GAMMA/GAMMA IND em empresas diferentes. Guia: [../docs/ativacao-contas-caixas.md](../docs/ativacao-contas-caixas.md). Não repetir a instalação abaixo nem o arquivo combinado já aplicado.
 
-Para esta atualização, executar **somente `dashboard/ativar-recebiveis.sql` uma vez** e publicar a nova Edge Function **`receivables-import`** a partir de `dashboard/receivables-import.ts`. O SQL reúne **008/009/010/011** em uma transação e preserva as tabelas e registros anteriores. Não reaplicar os arquivos individuais além do combinado. A função nova usa `ALLOWED_ORIGINS` já existente; manter a origem `https://central-de-cobran-a.pages.dev`, sem barra final. Caixa/Bancos usa RPCs e não precisa de outro serviço de importação.
+O usuário informou que já configurou 001/003/004, `auth-gateway`, 005/006/007 e `payables-import`, e que cadastrou os onze saldos e importou CP. Também confirmou a execução de 008/009/010/011. Esses dados não devem ser refeitos ou substituídos por uma instalação inicial.
 
-Procedimento de painel, preenchimento bancário, importação e validação: [../docs/ativacao-recebiveis.md](../docs/ativacao-recebiveis.md). Executar SQL e publicar o site são passos separados; os testes locais não confirmam a ativação remota. Se uma migration nova já tiver sido aplicada separadamente, conferir o histórico antes de executar qualquer combinado. Nunca resolver conflitos apagando tabelas.
+O arquivo **`dashboard/ativar-recebiveis.sql` foi a atualização anterior (0.4.0)** e reúne 008/009/010/011; não deve ser reaplicado neste projeto. Para usar a importação de CR, quem ainda não publicou a função deve criar **`receivables-import`** a partir de `dashboard/receivables-import.ts`. Ela usa `ALLOWED_ORIGINS` já existente; manter a origem `https://central-de-cobran-a.pages.dev`, sem barra final. Caixa/Bancos usa RPCs e não precisa de outro serviço de importação.
+
+Procedimento atual dos bancos/caixas: [../docs/ativacao-contas-caixas.md](../docs/ativacao-contas-caixas.md). Referência da importação/validação CR: [../docs/ativacao-recebiveis.md](../docs/ativacao-recebiveis.md). Executar SQL e publicar o site são passos separados; os testes locais não confirmam a ativação remota. Se uma migration nova já tiver sido aplicada separadamente, conferir o histórico antes de executar qualquer combinado. Nunca resolver conflitos apagando tabelas.
 
 ## Ordem de instalação em projeto novo
 
@@ -21,6 +23,7 @@ Os passos abaixo são referência da instalação inicial. **Não repeti-los no 
 5. Para a operação inicial de Painel/Caixa/CP, executar somente `dashboard/ativar-financeiro.sql`, que reúne 005/006/007 em uma transação. Publicar separadamente a nova função `payables-import` usando `dashboard/payables-import.ts`. Não repetir os arquivos individuais depois do combinado. Procedimento e limites em [../docs/ativacao-financeira.md](../docs/ativacao-financeira.md).
 
 6. Após 005/006/007, executar `dashboard/ativar-recebiveis.sql`, que reúne 008/009/010/011, e publicar `receivables-import`. Não executar também as quatro migrations individuais. O script acrescenta CR, Cobrança, validações, posições bancárias completas e indicadores. Não importa dados antigos nem cria valores de exemplo.
+7. Após 008/009/010/011, executar `migrations/012_treasury_accounts.sql` uma vez, acrescentando as seis posições da lista atual. As contas novas aguardam saldo explícito; nenhuma posição financeira é inventada.
 
 Em projetos já configurados manualmente, registrar as migrations aplicadas antes de usar `supabase db push`. Não rodar o histórico inteiro contra um banco existente sem conferir o histórico. Não executar `db reset` em um projeto com dados.
 
