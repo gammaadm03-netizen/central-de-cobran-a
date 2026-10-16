@@ -1,6 +1,6 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.4.1**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. A operação financeira completa ainda depende dos módulos pendentes e de homologação remota.
+Versão de desenvolvimento **0.5.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque é informado manualmente em Importar Bases, conforme a orientação mais recente do usuário. A operação financeira completa ainda depende dos módulos pendentes e de homologação remota.
 
 ## O que está implementado
 
@@ -15,6 +15,12 @@ CP possui importação completa atômica, classificação obrigatória, baixas p
 Faturamento, Margens, Comissões, RH/DP, previsões completas de CP, Excel detalhado de CP, conciliação bancária, migração do estado operacional anterior e backups ainda estão pendentes. Também faltam criação completa de contas Auth, redefinição administrativa e troca obrigatória de senha. Não há valores fictícios nem bases V75 embutidas nos arquivos públicos.
 
 ## Atualizar o projeto existente
+
+Para **0.5.0**, seguir [docs/estoque-manual.md](docs/estoque-manual.md): atualizar o site e usar o novo card em Importar Bases. O projeto já possui `save_manual_stock` e `current_stock`; esta mudança não exige nova migration nem Edge Function. O rascunho de integração automática foi retirado antes de publicação após a decisão do usuário por entrada manual.
+
+Em **Importar Bases → Estoque**, a Gerência registra valor total, data de referência e observação. A posição alimenta o Painel e Caixa/Bancos a partir da mesma base, com histórico paginado, responsável e auditoria. Uma posição antiga não substitui outra de referência mais recente; ausência continua diferente de zero explícito. Não há integração com o portal interno, conector local ou chave de máquina nesta entrega.
+
+O relatório da Diretoria solicitado mais recentemente ainda depende do Excel com as descrições das linhas. A imagem recebida não permite relacionar com segurança as células da fórmula do Ativo Circulante. O cálculo continua pendente, sem presumir o significado de M49 ou alterar regras financeiras. Detalhes: [docs/relatorio-diretoria-mapeamento.md](docs/relatorio-diretoria-mapeamento.md).
 
 O usuário informou que login, Painel, onze saldos e uma base completa de CP já funcionam, e confirmou a execução sem erro da atualização 008/009/010/011. **Preservar esses registros e não repetir a instalação anterior.** Para **0.4.1**, seguir [docs/ativacao-contas-caixas.md](docs/ativacao-contas-caixas.md): executar somente `supabase/migrations/012_treasury_accounts.sql`. As seis novas posições são cadastradas sem saldo; os onze registros e valores existentes são preservados. Não é necessária outra Edge Function para bancos/caixas.
 

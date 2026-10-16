@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.4.1
+# Publicação e ativação — 0.5.0
+
+Para o estoque manual em **Importar Bases → Estoque**, basta o deploy da versão 0.5.0 do site; seguir [estoque-manual.md](estoque-manual.md). O banco atual já possui as tabelas e RPCs necessárias. Não criar integração automática, conector, chave ou nova Edge Function para essa entrega. Os passos anteriores de 012/CR continuam independentes e não precisam ser repetidos para o card de estoque.
 
 Para o projeto atual, o usuário já confirmou a execução de 008/009/010/011. A atualização **0.4.1** usa somente `supabase/migrations/012_treasury_accounts.sql`, seguindo [ativacao-contas-caixas.md](ativacao-contas-caixas.md). Ela acrescenta Cora Ecoplast e cinco caixas das empresas: o total passa a 17 posições, sem alterar saldos anteriores. Não exige outra Edge Function. Não repetir o SQL combinado da versão anterior para acrescentar contas.
 
@@ -32,7 +34,7 @@ A conexão pública vem de `config/supabase.public.json`, contendo somente URL e
 
 O build inclui `_headers` com CSP e política de cache. A navegação atual usa a mesma página e não precisa de regra global de redirecionamento. Não publicar o HTML legado V75, `usuarios.json`, hashes ou bases financeiras como arquivos estáticos.
 
-Após a publicação atual, abrir a Central, atualizar com **Ctrl + Shift + R** se necessário, entrar e conferir **Versão 0.4.1** no rodapé. Esse deploy não executa o SQL nem publica funções do Supabase. O endereço existente deve permanecer o mesmo; não criar outro site para cada atualização.
+Após a publicação atual, abrir a Central, atualizar com **Ctrl + Shift + R** se necessário, entrar e conferir **Versão 0.5.0** no rodapé. Esse deploy não executa o SQL nem publica funções do Supabase. O endereço existente deve permanecer o mesmo; não criar outro site para cada atualização.
 
 ## 4. Conferir os dados e os acessos
 

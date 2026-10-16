@@ -2,7 +2,7 @@
 
 16/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.4.1 ao final; pendências antigas não substituem os relatos posteriores do usuário.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.5.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -102,3 +102,23 @@ Os alertas mostram os negativos conhecidos mesmo quando faltam outras posições
 Build TypeScript/Vite e **30 cenários de navegador de bancos/Painel passaram**, incluindo as dezessete posições, preenchimento das seis novas contas, envio único, saldo negativo, saldo antigo, consulta histórica, posição incompleta, Diretor em leitura, privacidade de perfil somente com agregados e exportação com caixas. A conferência visual manual no Chromium verificou os alertas, a elevação de três pixels com sombra ao passar o cursor e a ausência de transformação/transição com redução de movimento. O caso funcional de posição incompleta foi repetido após retirar as verificações de estilo da suíte financeira e também passou. Não foram repetidos testes de importação CP/CR ou autenticação nesta mudança restrita a bancos/Painel; seus resultados anteriores permanecem registrados acima.
 
 A execução remota de 012 e a conferência dos saldos reais ainda dependem do painel do usuário. O envio por Git não aplica SQL. Para esta atualização, executar somente `supabase/migrations/012_treasury_accounts.sql`, sem repetir o combinado 008/009/010/011 já confirmado. Não é necessária outra Edge Function. Procedimento: `docs/ativacao-contas-caixas.md`. Nenhuma integração paga foi ativada e os módulos pendentes da versão anterior permanecem pendentes.
+
+## Atualização 0.5.0 — estoque manual centralizado
+
+Após indicar o portal privado de estoque, o usuário orientou que a atualização fosse manual em Importar Bases. O rascunho automático, ainda não publicado, foi retirado desta entrega. Nenhuma função de sincronização, migration, chave de máquina ou programa local é publicado. O valor da captura não foi carregado como posição atual nem incorporado a código, assets ou fixtures.
+
+Implementados: **Importar Bases → Estoque**, exclusivo da Gerência com permissão de escrita; data de referência, valor exato não negativo, observação, confirmação, estados de operação e histórico paginado com responsável. O card usa as tabelas/RPCs existentes e o mesmo dado consultado no Painel/Resumo da Diretoria e Caixa/Bancos. A posição vigente segue a data de referência mais recente; uma data antiga não substitui outra atual. Zero explícito é válido, ausência continua pendente e falha de gravação orienta conferir o histórico antes de repetir. O acesso existente em Caixa/Bancos foi preservado e recebeu um caminho para a entrada centralizada.
+
+Verificações da entrega:
+
+- Build TypeScript/Vite concluído.
+- **13 testes novos de navegador passaram**, cobrindo cadastro/consulta entre os módulos, confirmação, centavos/limites, zero explícito, datas, histórico/autoria, permissões, XSS como texto, paginação e falhas sem falso sucesso ou perda do preenchimento.
+- **30 testes existentes de bancos/Painel passaram** após a integração, preservando as dezessete posições, cobertura de negativos, leitura do Diretor, dados ausentes e relatórios já implementados.
+- **15 grupos SQL de tesouraria passaram**, incluindo a RPC manual existente, autoria/auditoria, histórico, zero versus ausência, restrições de perfil e sessão revogada. Nenhum schema foi alterado nesta entrega.
+- A revisão corrigiu um estado de paginação que poderia exibir linhas da página anterior sob a página nova após falha de leitura. O cenário de página 2/HTTP 503 agora é testado e aprovado.
+
+A inspeção HTTP do portal privado não forneceu acesso à origem. Isso não bloqueia o cadastro manual escolhido pelo usuário. Não houve acesso ao banco remoto ou uso de senha real nos testes. A publicação do código não comprova que o deploy remoto terminou ou que os valores reais foram conferidos pelo usuário.
+
+O usuário também solicitou todas as informações do relatório diário da Diretoria e forneceu uma fórmula com referências M4/M12/M13/M14/M15/M16/M17/M49. A imagem está cortada na coluna das descrições. A fórmula exata e seu mapeamento não existem no exportador V75; foi solicitada a identificação das células. O novo cálculo não foi ativado, nenhum campo financeiro foi presumido e as regras existentes permanecem preservadas. Essa parte depende do Excel original ou das descrições completas: `docs/relatorio-diretoria-mapeamento.md`.
+
+O retorno vazio de `pg_advisory_xact_lock` mostrado pelo usuário após a migration 012 é normal, mas não comprova isoladamente que todo o arquivo foi executado. Foi indicada consulta de leitura à quantidade de contas ativas, esperando 17. O resultado dessa consulta ainda não foi informado. O card manual usa a migration 006 e não exige repetir a migration 012 ou outro script.

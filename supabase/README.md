@@ -2,6 +2,10 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
+## Estoque manual — 0.5.0
+
+A orientação mais recente do usuário é cadastrar estoque manualmente em **Importar Bases → Estoque**. Esse card utiliza `save_manual_stock`, `current_stock` e `stock_positions` da migration006 já instalada. Não há nova migration ou Edge Function nesta versão, nem integração automática com o portal privado. A autorização de escrita continua validada no banco e o histórico/auditoria existentes são preservados. Procedimento: [../docs/estoque-manual.md](../docs/estoque-manual.md).
+
 ## Projeto existente — atualização 0.4.1
 
 **Cadastro atual de bancos/caixas (0.4.1):** após a confirmação de execução de 008/009/010/011, executar somente `migrations/012_treasury_accounts.sql`. Acrescenta Cora Ecoplast e cinco caixas das empresas, totalizando 17 posições, preserva os onze IDs e saldos anteriores e mantém ausências sem saldo. As contas recebem tipo banco/caixa e nome de exibição, sem dividir ECOPLAST/ECO PLAST ou GAMMA/GAMMA IND em empresas diferentes. Guia: [../docs/ativacao-contas-caixas.md](../docs/ativacao-contas-caixas.md). Não repetir a instalação abaixo nem o arquivo combinado já aplicado.
