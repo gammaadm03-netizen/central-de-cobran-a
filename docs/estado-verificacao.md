@@ -1,8 +1,8 @@
 # Evidências de verificação
 
-15/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
+16/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões 0.2.0/0.2.1. O estado mais recente está na seção de atualização 0.3.0 ao final.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.4.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -67,3 +67,24 @@ Verificações desta atualização:
 Ainda não executados pelo agente: aplicação remota de 005/006/007, publicação remota da função `payables-import`, teste do runtime Deno hospedado, importação da base real e homologação de totais. O acesso HTTP desta máquina aos provedores continua bloqueado por proxy 403; a entrega de código usa o Git autorizado.
 
 CR, Cobrança/validação, Faturamento, Margens, Comissões e RH continuam sem migração funcional. Previsões CP, relatórios Excel detalhados CP, backups/restauração e migração da posição operacional também permanecem pendentes. Não afirmar restauração integral da V75 ou prontidão para produção financeira.
+
+## Atualização 0.4.0 — bancos em Importar Bases, CR e Cobrança
+
+O usuário informou que a Central e o Painel funcionaram, que já cadastrou os onze saldos e importou um relatório completo de CP. Pediu a entrada bancária dentro de Importar Bases e forneceu a tela antiga com data, onze contas e extrato de apoio. Esses relatos confirmam o uso operacional da versão anterior, sem constituir inspeção remota pelo agente.
+
+Implementados: posição bancária com onze campos na área central de importações, total exato, confirmação e gravação conjunta; concorrência e auditoria por conta e por lote; arquivo de apoio privado preservado com hash e download autorizado, sem atualizar saldos. CR possui análise do arquivo original no servidor, importação completa atômica, títulos persistentes, herança de carteira e ausências que apenas aguardam validação. Cobrança possui carteira individual, contatos e pagamentos informados; o financeiro exige data real para confirmar ou devolve à mesma cobradora quando não localizado. Recebimentos validados e seus dados de atraso/origem são imutáveis. O Painel e novas posições da Diretoria passam a incluir recebíveis, recebimentos diários validados e projeção quando as fontes estiverem disponíveis.
+
+A revisão reproduziu e corrigiu uma duplicação potencial: acrescentar ou retirar CNPJ opcional do mesmo título poderia gerar nova dívida e manter a antiga pendente. Prévia e confirmação agora bloqueiam identificação ambígua para correção administrativa, sem unir clientes automaticamente. Dívidas ativas ausentes no relatório intermediário também são protegidas. Um defeito de debounce que fechava detalhes recém-abertos foi corrigido nos componentes operacionais.
+
+Verificações locais da entrega:
+
+- **76 testes Node passaram**, incluindo parsing CR, CSV/XLSX reais sintéticos, gateway autenticado antes do processamento, limites, atomicidade de acesso e mensagens de erro sem dados internos.
+- **126 cenários/grupos SQL passaram** em PostgreSQL local PGlite: 20 RBAC, 12 sessões, 16 CP, 15 tesouraria, 8 snapshots anteriores, 18 importação CR, 22 cobrança/validação, 10 posição/arquivo bancário e 5 atualização integrada.
+- O teste de atualização aplica o arquivo combinado novo real sobre o schema anterior com usuário, onze saldos, CP e snapshot sintéticos existentes. Confirma preservação exata desses registros, ausência de recebimento antes da validação, projeção com fontes oficiais e bloqueio de posição concorrente sem alteração parcial.
+- **65 cenários distintos de navegador passaram** com HTTP sintético: 59 na execução integrada e os 6 de CP após atualizar a simulação para responder ao novo resumo de CR. A falha inicial desses seis foi a rota ausente no fixture; nenhuma asserção foi removida. Todos os cenários executados terminaram aprovados na verificação final correspondente.
+- Build TypeScript/Vite e geração dos dois arquivos novos para o painel do Supabase concluídos. Avisos de chunks grandes do leitor Excel permanecem; as planilhas são analisadas em worker separado. Tabelas operacionais e histórico possuem paginação.
+- Os sete arquivos originais foram novamente comparados com o ZIP e permanecem idênticos. Nenhum dado financeiro real, senha, hash de senha ou UUID administrativo foi adicionado às alterações.
+
+A aplicação remota de 008/009/010/011 e a publicação de `receivables-import` ainda dependem do painel autorizado do usuário. O deploy do site por Git não executa essas etapas. O acesso HTTP aos provedores nesta máquina continua sem evidência de disponibilidade após o bloqueio de proxy registrado; nenhum teste usou senha real nem alterou o banco remoto. Instruções incrementais: `docs/ativacao-recebiveis.md`. Não repetir 005/006/007 nem refazer os onze saldos/CP para instalar esta versão.
+
+Comissões ainda não são apuradas: os recebimentos apenas preservam os dados necessários à implementação futura. Faturamento, Margens, RH/DP, previsões e Excel detalhado de CP, conciliação bancária, backups/restauração, administração completa Auth e migração conferida do estado operacional antigo permanecem pendentes. Não declarar o sistema completo ou homologado para produção financeira.

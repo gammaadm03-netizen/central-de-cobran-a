@@ -8,7 +8,7 @@ const stamp = '2026-10-15T12:00:00Z';
 function cashFixture(complete = false) {
   return { accounts: accountNames.map(([company, bank], index) => ({ id: `10000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, company, bank, account_label: '', amount_cents: complete || index === 0 ? 10000 : null, balance_date: complete || index === 0 ? '2026-10-15' : null, updated_at: complete || index === 0 ? stamp : null })), reported_accounts: complete ? 11 : 1, expected_accounts: 11, total_cents: complete ? 110000 : null, latest_position_date: '2026-10-15' };
 }
-interface FixtureOptions { role?: 'gerente_geral' | 'diretor' | 'contas_pagar' | 'contas_receber'; imported?: boolean; complete?: boolean; fail?: boolean; failOldWeek?: boolean }
+interface FixtureOptions { role?: 'gerente_geral' | 'diretor' | 'contas_pagar' | 'contas_receber'; imported?: boolean; complete?: boolean; fail?: boolean; failOldWeek?: boolean; receivableImported?: boolean; receivableFailure?: string }
 async function setup(page: Page, options: FixtureOptions = {}) {
   await page.clock.setFixedTime(fixedTime);
   const role = options.role ?? 'gerente_geral';
@@ -37,6 +37,7 @@ async function setup(page: Page, options: FixtureOptions = {}) {
     if (name === 'cash_position') return options.fail ? reply({ message: 'private SQL secret trace' }, 500) : reply(cash);
     if (name === 'current_stock') return reply(stock);
     if (name === 'payables_summary') return options.failOldWeek && body.p_start === '2026-10-03' ? reply({ message: 'private SQL secret trace' }, 500) : reply({ open_cents: 900000, overdue_cents: 300000, period_cents: 123456, active_count: 20, latest_import_at: options.imported ? stamp : null });
+    if (name === 'receivables_summary') return options.receivableFailure ? reply({ code: options.receivableFailure, message: 'private SQL secret trace' }, 404) : reply({ open_cents: 2000000, overdue_cents: 750000, period_cents: 500000, active_count: 30, pending_count: 2, unassigned_count: 3, received_period_cents: 12345, latest_import_at: options.receivableImported ? stamp : null, overdue_bps: 3750, overdue_comlurb_cents: null });
     if (name === 'set_bank_balance') {
       const account = cash.accounts.find(account => account.id === body.p_account_id)!;
       account.amount_cents = body.p_amount_cents; account.balance_date = body.p_balance_date; account.updated_at = stamp;
@@ -207,4 +208,35 @@ test('treasury backend failures show friendly feedback and no stale bank values'
   await expect(page.getByRole('button', { name: 'Registrar saldo', exact: true })).toBeDisabled();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+
+test('receivables summary fills actual projection and validated daily receipts without exposing rows to CP', async ({ page }) => {
+  const { calls } = await setup(page, { role: 'contas_pagar', complete: true, imported: true, receivableImported: true });
+  await expect(page.locator('.financial-kpi').nth(1)).toContainText('R$ 4.865,44');
+  await expect(page.locator('.financial-kpi').nth(2)).toContainText('R$ 5.000,00');
+  await expect(page.locator('.attention-card')).toContainText('R$ 7.500,00');
+  await expect(page.locator('.financial-module-grid')).toContainText('R$ 123,45');
+  await expect(page.getByText('Projeção por vencimento. Inclui títulos sem recebimento validado; não representa dinheiro disponível em conta.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Consultar Contas a Receber →', exact: true })).toHaveCount(0);
+  expect(calls.some(call => call.name === 'receivable_titles')).toBe(false);
+});
+
+test('unavailable receivables activation preserves the working cash and payable indicators', async ({ page }) => {
+  await setup(page, { complete: true, imported: true, receivableFailure: 'PGRST202' });
+  await expect(page.getByRole('status')).toContainText('Contas a Receber aguardando ativação');
+  await expect(page.locator('.financial-kpi').nth(0)).toContainText('R$ 1.100,00');
+  await expect(page.locator('.financial-kpi').nth(3)).toContainText('R$ 1.234,56');
+  await expect(page.locator('.financial-kpi').nth(1)).toContainText('BASE AGUARDANDO IMPORTAÇÃO');
+  await expect(page.getByText('private SQL secret trace')).toHaveCount(0);
+});
+
+test('director export writes actual overdue percentage as numeric percentage instead of money', async ({ page }) => {
+  await setup(page, { role: 'diretor', complete: true, imported: true, receivableImported: true });
+  await expect(page.locator('.director-summary-column')).toContainText(['COMERCIAL', '37,50%', 'OBRIGAÇÕES']);
+  const downloadPromise = page.waitForEvent('download'); await page.getByRole('button', { name: 'Baixar Excel', exact: true }).click();
+  const download = await downloadPromise; const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile((await download.path())!);
+  let found = false; workbook.getWorksheet('Resumo da Diretoria')!.eachRow(row => {
+    if (row.getCell(2).value === 'Percentual em atraso') { found = true; expect(row.getCell(3).value).toBe(0.375); expect(row.getCell(3).numFmt).toBe('0.00%'); }
+  }); expect(found).toBe(true);
 });

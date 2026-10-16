@@ -1,0 +1,234 @@
+import {
+  MAX_FILE_BYTES, MAX_ROWS, parseCsv, validateWorkbookExpandedSize,
+} from '../../../src/lib/payables-parser.mjs';
+import { validateReceivableRows } from '../../../src/lib/receivables-parser.mjs';
+
+const MAX_BODY_BYTES = 3 * 1024 * 1024;
+const MAX_BASE64_LENGTH = 4 * Math.ceil(MAX_FILE_BYTES / 3);
+const UUID = /^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/;
+const SERVICE_FAILURE = 'Não foi possível confirmar a operação. Atualize o histórico antes de tentar novamente.';
+const INVALID_REQUEST = 'Solicitação inválida. Selecione novamente o relatório completo.';
+const PARSE_FAILURE = 'Não foi possível analisar o arquivo. Salve uma cópia somente com valores e confira os cabeçalhos.';
+const CORRECTION = 'Confira o formato e os cabeçalhos, salve uma cópia somente com valores e tente novamente.';
+const IDENTITY_CHANGE = 'Possível alteração de identificação do cliente. CNPJ incluído, removido ou alterado pode duplicar a dívida. Solicite correção administrativa antes de importar.';
+const SAFE_MESSAGES = new Set([
+  'Arquivo vazio.', 'Cabeçalho inválido.', 'Coluna duplicada ou ambígua.', 'Coluna obrigatória ausente.',
+  'Mais de 5.000 linhas.', 'Há valores fora das colunas do cabeçalho.', 'Chave de título duplicada na mesma base.',
+  'Total do relatório excede o limite de precisão.', 'Não há títulos no relatório.',
+  'Fórmula não permitida. Salve uma cópia apenas com valores.',
+  'Conteúdo interpretável como fórmula. Salve somente valores.',
+  'Célula com conteúdo não suportado. Use somente valores.', 'Campo obrigatório vazio.',
+  'Data inválida.', 'A data contém horário. Informe somente a data civil.', 'Data Excel inválida ou contém horário.',
+  'Use dd/mm/aaaa ou aaaa-mm-dd; datas abreviadas são ambíguas.', 'Ano fora do intervalo de 1900 a 2199.', 'Data inexistente.',
+  'Informe um valor numérico positivo.', 'O valor deve ter no máximo duas casas decimais.', 'Valor obrigatório.',
+  'Use valor brasileiro, por exemplo 1.234,56, com até duas casas decimais.', 'Valor excede o limite seguro.',
+  'CSV contém bytes inválidos. Salve uma cópia em UTF-8.', 'A base excede o limite de 5.000 linhas.',
+  'Aspas inválidas no CSV. Exporte novamente em UTF-8.', 'Texto após aspas de fechamento no CSV.', 'CSV contém aspas sem fechamento.',
+  'O arquivo não é uma planilha XLSX/XLSM válida.', 'Estrutura da planilha inválida.',
+  'Planilha multipartes, ZIP64 ou com quantidade excessiva de arquivos.', 'Diretório da planilha inválido.',
+  'Planilhas criptografadas ou ZIP64 não são aceitas.', 'Conteúdo ZIP inconsistente.',
+  'Conteúdo expandido excede 20 MiB. Divida a base por uma origem completa autorizada.',
+  'Planilha truncada.', 'Diretório ZIP inconsistente.',
+  'Conteúdo expandido excede o tamanho seguro declarado ou 20 MiB.',
+  'Tamanho expandido da planilha é inconsistente ou excede 20 MiB.',
+  'A cópia para importação deve conter uma única aba com dados.', 'Planilha excede 5.000 linhas ou 100 colunas.',
+  'CNPJ inválido. Informe 14 dígitos, com ou sem pontuação.',
+  'CNPJ deve conter exatamente 14 dígitos. Não complete zeros automaticamente.',
+  'Mais de 100 colunas.', 'Há valores fora das colunas do cabeçalho ou mais de 100 colunas.',
+  'Tipo de célula inválido. Use somente texto, data ou número.',
+  'O valor deve ter no máximo duas casas decimais, sem arredondamento.',
+]);
+const safeMessage = message => SAFE_MESSAGES.has(message) || /^Limite de (?:150|300|1500) caracteres excedido\.$/.test(message) ? message : PARSE_FAILURE;
+
+function originsFrom(raw) {
+  const values = String(raw || '').split(',').map(value => value.trim()).filter(Boolean);
+  if (!values.length) throw new Error('missing_origins');
+  return new Set(values.map(value => {
+    const url = new URL(value);
+    if (url.origin !== value || !['https:', 'http:'].includes(url.protocol)
+      || (url.protocol === 'http:' && !['localhost', '127.0.0.1'].includes(url.hostname))) throw new Error('invalid_origin');
+    return value;
+  }));
+}
+
+async function readBody(request) {
+  if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') || '')) throw new Error('invalid_body');
+  const declared = request.headers.get('content-length');
+  if (declared && (!/^\d+$/.test(declared) || Number(declared) > MAX_BODY_BYTES)) throw new Error('invalid_body');
+  const reader = request.body?.getReader();
+  if (!reader) throw new Error('invalid_body');
+  const chunks = []; let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_BODY_BYTES) { await reader.cancel(); throw new Error('invalid_body'); }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_body');
+  return value;
+}
+
+function decodeFile(encoded) {
+  if (typeof encoded !== 'string' || !encoded.length || encoded.length > MAX_BASE64_LENGTH
+    || encoded.length % 4 || /[^A-Za-z0-9+/=]/.test(encoded)) throw new Error('invalid_base64');
+  const binary = atob(encoded);
+  if (!binary.length || binary.length > MAX_FILE_BYTES || btoa(binary) !== encoded) throw new Error('invalid_base64');
+  return Uint8Array.from(binary, character => character.charCodeAt(0));
+}
+
+function verifiedSessionId(token, userId) {
+  // Supabase Auth must first validate this exact token. Decoding claims alone
+  // never grants identity, permissions, or an approved application session.
+  const part = token.split('.')[1];
+  if (!part) throw new Error('invalid_session');
+  const payload = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')));
+  if (payload.sub !== userId || typeof payload.session_id !== 'string' || !UUID.test(payload.session_id)) throw new Error('invalid_session');
+  return payload.session_id;
+}
+
+function problemsFor(errors) {
+  return errors.slice(0, 100).map(error => ({
+    line: Number.isSafeInteger(error.line) && error.line >= 0 && error.line <= MAX_ROWS + 2 ? error.line : 0,
+    column: typeof error.column === 'string' ? error.column.slice(0, 80) : 'Arquivo',
+    problem: safeMessage(typeof error.problem === 'string' ? error.problem : ''),
+    correction: typeof error.correction === 'string' ? error.correction.slice(0, 300) : CORRECTION,
+  }));
+}
+
+/** Parse the preserved bytes on the server; no financial rows or identities are accepted from a browser. */
+export function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWorkbook, log = () => {} }) {
+  return async function handle(request) {
+    let origins;
+    try { origins = originsFrom(env('ALLOWED_ORIGINS')); }
+    catch { return new Response(JSON.stringify({ error: SERVICE_FAILURE }), { status: 503, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } }); }
+    const origin = request.headers.get('origin');
+    if (!origin || !origins.has(origin)) return new Response(JSON.stringify({ error: 'Origem não autorizada.' }), { status: 403, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', Vary: 'Origin' } });
+    const headers = {
+      'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': origin, Vary: 'Origin',
+    };
+    const respond = (status, payload, extra = {}) => new Response(JSON.stringify(payload), { status, headers: { ...headers, ...extra } });
+    if (request.method === 'OPTIONS') {
+      const requested = (request.headers.get('access-control-request-headers') || '').toLowerCase().split(',').map(name => name.trim()).filter(Boolean);
+      if (request.headers.get('access-control-request-method') !== 'POST'
+        || requested.some(name => !['authorization', 'content-type', 'apikey', 'x-client-info'].includes(name))) return respond(403, { error: 'Solicitação não permitida.' });
+      return new Response(null, { status: 204, headers: { ...headers,
+        'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'authorization, content-type, apikey, x-client-info',
+        'Access-Control-Max-Age': '600',
+      } });
+    }
+    if (request.method !== 'POST') return respond(405, { error: 'Método não permitido.' }, { Allow: 'POST, OPTIONS' });
+    const token = request.headers.get('authorization')?.match(/^Bearer ([A-Za-z0-9._~-]{1,8192})$/i)?.[1];
+    if (!token) return respond(401, { error: 'Sua sessão expirou. Entre novamente.' });
+
+    let base, serviceKey, anonKey;
+    try {
+      serviceKey = env('SUPABASE_SERVICE_ROLE_KEY'); anonKey = env('SUPABASE_ANON_KEY');
+      const url = new URL(env('SUPABASE_URL'));
+      if (!serviceKey || !anonKey || url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('invalid_environment');
+      base = url.origin;
+    } catch { return respond(503, { error: SERVICE_FAILURE }); }
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(10000)]);
+    async function call(path, { service = false, method = 'POST', data } = {}) {
+      const result = await fetcher(`${base}${path}`, {
+        method, headers: { apikey: service ? serviceKey : anonKey, Authorization: `Bearer ${service ? serviceKey : token}`, 'Content-Type': 'application/json' },
+        body: data === undefined ? undefined : JSON.stringify(data), signal,
+      });
+      let payload = null;
+      try { payload = await result.json(); } catch { /* Never forward raw upstream responses. */ }
+      return { ok: result.ok, status: result.status, payload };
+    }
+    function upstreamFailure(result) {
+      const code = result.payload?.code;
+      if (code === '42501') return respond(403, { code, error: 'Seu perfil não tem permissão para esta operação.' });
+      if (code === '40001') return respond(409, { code, error: 'A base mudou desde a análise. Analise o arquivo novamente antes de concluir.' });
+      if (code === '23505') return respond(409, { code, error: 'Este arquivo já foi importado para esta origem. Nenhum dado foi alterado.' });
+      if (code === '23514' && result.payload?.message === IDENTITY_CHANGE) return respond(400, { code, error: IDENTITY_CHANGE });
+      if (code === '22023' || code === '23514') return respond(400, { code, error: 'A importação foi recusada. Confira as linhas, a origem completa e os vínculos de cobradora dos clientes antes de concluir.' });
+      if (result.status === 401) return respond(401, { error: 'Sua sessão expirou. Entre novamente.' });
+      log('upstream_unavailable');
+      return respond(503, { error: SERVICE_FAILURE });
+    }
+    try {
+      // Deny unauthorized/expired/recovery-only sessions before decoding the
+      // base64, inflating XLSX, or parsing any user-supplied financial content.
+      const auth = await call('/auth/v1/user', { method: 'GET' });
+      if (!auth.ok) return auth.status === 401 || auth.status === 403
+        ? respond(401, { error: 'Sua sessão expirou. Entre novamente.' }) : upstreamFailure(auth);
+      if (typeof auth.payload?.id !== 'string' || !UUID.test(auth.payload.id)) throw new Error('invalid_identity');
+      let sessionId;
+      try { sessionId = verifiedSessionId(token, auth.payload.id); }
+      catch { return respond(401, { error: 'Sua sessão expirou. Entre novamente.' }); }
+      const access = await call('/rest/v1/rpc/current_access', { data: {} });
+      if (!access.ok) return upstreamFailure(access);
+      if (access.payload?.profile?.id !== auth.payload.id || access.payload.profile.enabled !== true
+        || !Array.isArray(access.payload.permissions)
+        || !access.payload.permissions.some(permission => permission?.resource === 'contas_receber' && permission.action === 'import')) {
+        return respond(403, { code: '42501', error: 'Seu perfil não tem permissão para esta operação.' });
+      }
+      let body;
+      try { body = await readBody(request); }
+      catch { return respond(400, { error: INVALID_REQUEST }); }
+      if (Object.keys(body).some(key => !['action', 'file_name', 'file_base64', 'complete', 'previous_import_id'].includes(key))
+        || !['preview', 'commit'].includes(body.action)
+        || typeof body.file_name !== 'string' || body.file_name.length < 1 || body.file_name.length > 250
+        || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name)) return respond(400, { error: INVALID_REQUEST });
+      if (/\.xls$/i.test(body.file_name)) return respond(400, { error: 'O formato .xls antigo ainda não é aceito. No Excel, salve uma cópia como .xlsx.' });
+      if (!/\.(xlsx|xlsm|csv)$/i.test(body.file_name)) return respond(400, { error: 'Selecione um arquivo .xlsx, .xlsm ou .csv.' });
+      if (body.action === 'commit' && (body.complete !== true
+        || !(body.previous_import_id === null || (typeof body.previous_import_id === 'string' && UUID.test(body.previous_import_id))))) return respond(400, { error: INVALID_REQUEST });
+      let bytes;
+      try { bytes = decodeFile(body.file_base64); }
+      catch { return respond(400, { error: 'O arquivo está vazio, inválido ou excede 2 MiB. Selecione novamente uma cópia do relatório completo.' }); }
+      let parsed;
+      try {
+        let matrix, excel1904 = false;
+        if (/\.csv$/i.test(body.file_name)) matrix = parseCsv(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+        else {
+          const buffer = bytes.buffer;
+          await validateWorkbookExpandedSize(buffer);
+          if (typeof loadWorkbook !== 'function') throw new Error('workbook_loader_unavailable');
+          const loaded = await loadWorkbook(buffer);
+          matrix = loaded.matrix; excel1904 = loaded.excel1904 === true;
+        }
+        if (!Array.isArray(matrix) || matrix.length > MAX_ROWS + 1 || matrix.some(row => !Array.isArray(row) || row.length > 100)) {
+          throw new Error('Planilha excede 5.000 linhas ou 100 colunas.');
+        }
+        parsed = validateReceivableRows(matrix, { excel1904 });
+      } catch (error) {
+        return respond(422, { error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: [{ line: 0, column: 'Arquivo', problem: safeMessage(error instanceof Error ? error.message : ''), correction: CORRECTION }] });
+      }
+      if (parsed.errors.length) return respond(422, { error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: problemsFor(parsed.errors) });
+      const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+      if (signal.aborted) throw new Error('request_timed_out');
+      if (body.action === 'preview') {
+        const preview = await call('/rest/v1/rpc/preview_receivables_import', { data: { p_scope: 'grupo-consolidado', p_rows: parsed.rows } });
+        if (!preview.ok) return upstreamFailure(preview);
+        if (!preview.payload || preview.payload.row_count !== parsed.rows.length || !Number.isSafeInteger(preview.payload.new_count)
+          || !Number.isSafeInteger(preview.payload.open_count) || !Number.isSafeInteger(preview.payload.pending_count) || !Number.isSafeInteger(preview.payload.validated_in_source_count)) throw new Error('invalid_preview');
+        return respond(200, { rows: parsed.rows, preview: preview.payload, file_sha256: hash });
+      }
+      const committed = await call('/rest/v1/rpc/commit_receivables_import_from_gateway', { service: true, data: {
+        p_user_id: auth.payload.id, p_session_id: sessionId, p_scope: 'grupo-consolidado',
+        p_file_name: body.file_name, p_file_sha256: hash, p_file_base64: body.file_base64,
+        p_rows: parsed.rows, p_complete: true, p_previous_import_id: body.previous_import_id,
+      } });
+      if (!committed.ok) return upstreamFailure(committed);
+      if (!committed.payload || committed.payload.row_count !== parsed.rows.length || typeof committed.payload.import_id !== 'string'
+        || !UUID.test(committed.payload.import_id)) throw new Error('invalid_commit_response');
+      return respond(200, committed.payload);
+    } catch {
+      // Fixed identifiers only. Never log a file, token, credentials, financial
+      // row, environment variable, raw exception, or upstream response.
+      log('request_unavailable');
+      return respond(503, { error: SERVICE_FAILURE });
+    }
+  };
+}

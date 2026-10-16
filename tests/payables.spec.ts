@@ -27,6 +27,7 @@ async function setup(page:Page, options:{ director?:boolean; stale?:boolean; pre
     if(url.pathname==='/rest/v1/rpc/cash_position')return reply({accounts:[],total_cents:null,reported_accounts:0,expected_accounts:11,latest_position_date:null});
     if(url.pathname==='/rest/v1/rpc/current_stock')return reply({value_cents:null,reference_date:null,source:null});
     if(url.pathname==='/rest/v1/rpc/payables_summary')return reply({open_cents:123456,overdue_cents:0,period_cents:123456,active_count:1,latest_import_at:imported?new Date().toISOString():null});
+    if(url.pathname==='/rest/v1/rpc/receivables_summary')return reply({open_cents:0,overdue_cents:0,period_cents:0,active_count:0,pending_count:0,unassigned_count:0,received_period_cents:0,latest_import_at:null,overdue_bps:null,overdue_comlurb_cents:null});
     if(url.pathname==='/rest/v1/director_positions')return reply([],200,0);
     if(url.pathname==='/rest/v1/payable_macros')return reply([{name:'FIXO'},{name:'VARIÁVEL'}],200,2);
     if(url.pathname==='/rest/v1/payable_plan_mappings')return reply([],200,0);

@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -10,15 +10,21 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node --test supabase/functions/auth-gateway/*.test.mjs supabase/functions/payables-import/*.test.mjs config/*.test.mjs src/lib/*.test.mjs",
+    "test": "node --test supabase/functions/auth-gateway/*.test.mjs supabase/functions/payables-import/*.test.mjs supabase/functions/receivables-import/*.test.mjs config/*.test.mjs src/lib/*.test.mjs",
     "test:browser": "playwright test",
     "test:sql": "node scripts/test-sql.mjs",
     "test:auth-sql": "node scripts/test-auth-sql.mjs",
     "test:payables-sql": "node scripts/test-payables-sql.mjs",
     "test:treasury-sql": "node scripts/test-treasury-sql.mjs",
     "test:director-sql": "node scripts/bundle-finance.mjs && node scripts/test-director-sql.mjs",
+    "test:receivables-sql": "node scripts/test-receivables-sql.mjs",
+    "test:collections-sql": "node scripts/test-collections-sql.mjs",
+    "test:bank-import-sql": "node scripts/test-bank-import-sql.mjs",
+    "test:upgrade-sql": "node scripts/bundle-receivables.mjs && node scripts/test-upgrade-sql.mjs",
     "bundle:finance": "node scripts/bundle-finance.mjs",
     "bundle:payables-gateway": "node scripts/bundle-payables-gateway.mjs",
+    "bundle:receivables": "node scripts/bundle-receivables.mjs",
+    "bundle:receivables-gateway": "node scripts/bundle-receivables-gateway.mjs",
     "bundle:gateway": "node scripts/bundle-gateway.mjs"
   },
   "dependencies": {

@@ -7,3 +7,6 @@ verify_jwt = false
 # application session before reading or parsing a file. Do not disable RLS.
 [functions.payables-import]
 verify_jwt = false
+
+[functions.receivables-import]
+verify_jwt = false

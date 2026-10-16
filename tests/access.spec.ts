@@ -31,6 +31,7 @@ async function setup(page:Page,role='gerente_geral',options:{invalid?:boolean,lo
   if(url.pathname==='/rest/v1/rpc/cash_position')return reply({accounts:[],total_cents:null,reported_accounts:0,expected_accounts:11,latest_position_date:null});
   if(url.pathname==='/rest/v1/rpc/current_stock')return reply({value_cents:null,reference_date:null,source:null});
   if(url.pathname==='/rest/v1/rpc/payables_summary')return reply({open_cents:0,overdue_cents:0,period_cents:0,active_count:0,latest_import_at:null});
+  if(url.pathname==='/rest/v1/rpc/receivables_summary')return reply({open_cents:0,overdue_cents:0,period_cents:0,active_count:0,pending_count:0,unassigned_count:0,received_period_cents:0,latest_import_at:null,overdue_bps:null,overdue_comlurb_cents:null});
   if(['/rest/v1/payable_titles','/rest/v1/payable_macros','/rest/v1/payable_plan_mappings','/rest/v1/payable_imports','/rest/v1/director_positions'].includes(url.pathname))return route.fulfill({status:200,headers:{...headers,'content-range':'*/0'},json:[]});
   if(url.pathname==='/rest/v1/rpc/current_access'){
    accessCalls++;if(accessCalls>1&&options.holdAccess)await options.holdAccess();return reply(data.access);
@@ -79,7 +80,7 @@ test('director cannot see administration and can send a CP board message',async(
 });
 test('collector sees only collection navigation and no automatic wallet binding',async({page})=>{
  await setup(page,'cobradora_1');await login(page);const nav=page.getByRole('navigation');await expect(nav.getByRole('button')).toHaveCount(1);await expect(nav).toContainText('Cobrança');
- await expect(page.getByText('Nenhuma carteira é atribuída automaticamente.',{exact:false})).toBeVisible();
+ await expect(page.getByText('Seu login ainda não está vinculado a uma cobradora.',{exact:false})).toBeVisible();
 });
 test('RH does not receive financial navigation',async({page})=>{
  await setup(page,'rh_dp');await login(page);const nav=page.getByRole('navigation');await expect(nav).not.toContainText('Caixa / Bancos');await expect(nav).not.toContainText('Contas a Pagar');await expect(nav).toContainText('RH / DP');

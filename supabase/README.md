@@ -2,7 +2,17 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
-## Estado e ordem de aplicação
+## Projeto existente — atualização 0.4.0
+
+O usuário informou que já configurou 001/003/004, `auth-gateway`, 005/006/007 e `payables-import`, e que cadastrou os onze saldos e importou CP. Esses dados não devem ser refeitos ou substituídos por uma instalação inicial.
+
+Para esta atualização, executar **somente `dashboard/ativar-recebiveis.sql` uma vez** e publicar a nova Edge Function **`receivables-import`** a partir de `dashboard/receivables-import.ts`. O SQL reúne **008/009/010/011** em uma transação e preserva as tabelas e registros anteriores. Não reaplicar os arquivos individuais além do combinado. A função nova usa `ALLOWED_ORIGINS` já existente; manter a origem `https://central-de-cobran-a.pages.dev`, sem barra final. Caixa/Bancos usa RPCs e não precisa de outro serviço de importação.
+
+Procedimento de painel, preenchimento bancário, importação e validação: [../docs/ativacao-recebiveis.md](../docs/ativacao-recebiveis.md). Executar SQL e publicar o site são passos separados; os testes locais não confirmam a ativação remota. Se uma migration nova já tiver sido aplicada separadamente, conferir o histórico antes de executar qualquer combinado. Nunca resolver conflitos apagando tabelas.
+
+## Ordem de instalação em projeto novo
+
+Os passos abaixo são referência da instalação inicial. **Não repeti-los no projeto existente já configurado.**
 
 1. `migrations/001_identidade_rbac.sql`: schema original de perfis, RBAC, vínculos, mensagens e auditoria. **Se já foi executado neste projeto, não executar novamente.** A migration não é um reset e não contém comandos para remover tabelas.
 2. Provisionar o administrador no Supabase Authentication e vincular seu UUID a `public.profiles` pelo procedimento inicial já revisado. Nunca salvar senhas em SQL ou Git. Esse bootstrap não é repetido em deploys.
@@ -10,7 +20,23 @@ Os arquivos neste diretório são código e schema, sem usuários reais, senhas,
 4. Revisar e executar `migrations/004_password_recovery.sql` uma vez, após 001 e 003. Ela acrescenta conclusão auditada de pedidos de recuperação e troca de senha com limitação e revogação das sessões. Não altera `auth.users`, senhas, dados financeiros nem os perfis existentes. Depois atualizar a função com o código completo de `dashboard/auth-gateway.ts` gerado nesta versão.
 5. Para a operação inicial de Painel/Caixa/CP, executar somente `dashboard/ativar-financeiro.sql`, que reúne 005/006/007 em uma transação. Publicar separadamente a nova função `payables-import` usando `dashboard/payables-import.ts`. Não repetir os arquivos individuais depois do combinado. Procedimento e limites em [../docs/ativacao-financeira.md](../docs/ativacao-financeira.md).
 
+6. Após 005/006/007, executar `dashboard/ativar-recebiveis.sql`, que reúne 008/009/010/011, e publicar `receivables-import`. Não executar também as quatro migrations individuais. O script acrescenta CR, Cobrança, validações, posições bancárias completas e indicadores. Não importa dados antigos nem cria valores de exemplo.
+
 Em projetos já configurados manualmente, registrar as migrations aplicadas antes de usar `supabase db push`. Não rodar o histórico inteiro contra um banco existente sem conferir o histórico. Não executar `db reset` em um projeto com dados.
+
+## Importações e posições bancárias — 0.4.0
+
+Para publicar `receivables-import` pelo painel, criar uma função nova **Via Editor**, substituir todo o `index.ts` por `dashboard/receivables-import.ts` e preencher o nome **receivables-import** no campo inferior direito, ao lado de **Deploy function**. Em Settings, desativar **Verify JWT with legacy secret** e salvar. Preservar `auth-gateway` e `payables-import` existentes.
+
+O serviço confirma o Bearer token no Auth e consulta a sessão aprovada e a permissão oficial de importação antes de processar o arquivo. Recebe apenas ação, nome e conteúdo do arquivo, mais confirmação de relatório completo e identificador da análise anterior na conclusão. Não recebe role do cliente nem aceita linhas financeiras derivadas pelo navegador. A leitura inicial em worker melhora a interface; a análise que autoriza a gravação é feita novamente no servidor. Não desativar RLS ou expor `service_role` para contornar falha.
+
+CR aceita `.xlsx`, `.xlsm` e `.csv` UTF-8, até 2 MiB, 5.000 títulos, 100 colunas e uma única aba com dados. `.xls` antigo exige cópia `.xlsx`. Fórmulas, base vazia, linhas inválidas, arquivo repetido e comparação desatualizada impedem a conclusão. As cópias originais e seus hashes ficam privados no banco. Cabeçalhos obrigatórios: documento/NF, cliente/órgão, filial, vencimento e valor; emissão e CNPJ são opcionais. CNPJ informado exige 14 dígitos, sem completar zeros. Alteração da identificação nome/CNPJ exige revisão administrativa para evitar duplicar dívida; não há união automática.
+
+Contagens da análise são disjuntas: `row_count = new_count + open_count + validated_in_source_count`. `pending_count` indica somente novas ausências, não toda a fila acumulada. Títulos ausentes aguardam validação; títulos já validados que reaparecem continuam validados. Um retorno como pagamento não localizado mantém a mesma cobradora e não é reenfileirado como nova ausência em toda importação. Atribuição inicial é administrativa; título novo herda cobradora de dívida ativa do cliente quando existe um vínculo oficial.
+
+As funções operacionais de Cobrança exigem sessão aprovada, permissão e carteira autorizada, com controle de versão. Cobradora informa pagamento e data; somente CR/Gerência validam financeiramente. Não localizado retorna à mesma cobradora, exigindo atribuição antes da devolução quando o título não possui responsável. Os recebimentos validados preservam valor, data, atraso, origem e cobradora em registros imutáveis. O cálculo de comissões continua pendente. O total recebido na semana usa somente validações de origem `IMPORTACAO_DIARIA` e a data real no período sábado–sexta.
+
+`save_bank_position` permite à Gerência salvar todas as contas ativas com uma data e observação, validando versões e centavos exatos numa única transação. Valores vazios não viram zero, e datas anteriores não são copiadas para novos dias. A consulta de caixa do Painel utiliza a data atual de São Paulo mesmo quando os títulos seguem outro período. `register_bank_support` e `download_bank_support` armazenam e recuperam cópias privadas de até 2 MiB, com hash e auditoria. Extratos de apoio não são interpretados e nunca atualizam saldos, validam recebimentos ou conciliam títulos automaticamente. Não é necessário Storage ou uma Edge Function bancária adicional.
 
 ## Publicar o gateway
 

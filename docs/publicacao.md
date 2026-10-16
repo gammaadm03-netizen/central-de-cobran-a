@@ -1,52 +1,60 @@
-# Publicação de homologação
+# Publicação e ativação — 0.4.0
 
-Para atualizar o projeto existente para **0.3.0**, seguir [ativacao-financeira.md](ativacao-financeira.md). Os procedimentos abaixo documentam a instalação inicial de acesso/recuperação das versões 0.1/0.2; não os repetir sobre um projeto já configurado. A operação financeira completa ainda depende de migração e homologação.
+A Central já possui endereço na Cloudflare Pages: https://central-de-cobran-a.pages.dev. O usuário informou que login, Painel, saldos e CP funcionam. A versão 0.4.0 acrescenta a entrada bancária em Importar Bases, CR e Cobrança. Os passos abaixo atualizam esse projeto, preservando seus dados. Testes locais não comprovam que o deploy ou a ativação remota já terminaram.
 
-## 1. Banco
+## 1. Atualizar somente o banco necessário
 
-O usuário informou que executou001 e003 e ativou a Gerente. Confirmar no projeto correto. Para esta atualização, executar **uma vez** `supabase/migrations/004_password_recovery.sql` no SQL Editor. O script é transacional e não apaga registros nem redefine senhas. Se houver conflito, investigar; não excluir tabelas para contornar. Não reaplicar001 ou003 em um projeto já inicializado. Em um projeto novo, seguir a ordem documentada em `supabase/README.md`.
+Seguir [ativacao-recebiveis.md](ativacao-recebiveis.md): no SQL Editor do projeto existente, executar **uma única vez** `supabase/dashboard/ativar-recebiveis.sql`. Ele reúne as migrations **008/009/010/011** numa transação.
 
-## 2. Site estático
+Não repetir 001/003/004, 005/006/007 ou `ativar-financeiro.sql`, já usados neste projeto. Não executar o arquivo combinado e depois as quatro migrations individuais. Se alguma nova migration já foi aplicada, conferir o histórico e aplicar apenas o que falta. Não usar `db reset`, remover tabelas ou restaurar estado vazio para contornar erro. Nenhuma publicação deve refazer usuários, saldos, CP, mensagens ou auditoria.
 
-Criar conta da empresa no Cloudflare e projeto **Pages** em modalidade gratuita disponível. Sem ativar billing. Pode usar upload direto dos arquivos `dist/` gerados por `npm run build`; o ZIP de publicação deve conter index.html na raiz. Escolher nome de projeto. O endereço HTTPS real do provedor será a origem permitida do gateway; não usar domínio fictício nem presumir nome disponível. Domínio próprio é opcional.
+Para um projeto completamente novo, a ordem inicial está em [../supabase/README.md](../supabase/README.md). Essa instalação não é necessária para atualizar o projeto atual.
 
-Na integração por Git, usar build `npm ci && npm run build`, saída `dist` e Node24. O projeto padrão vem de `config/supabase.public.json`, somente URL e chave pública; não depende de variáveis manuais na Cloudflare. Para outro projeto, substituir pelas duas variáveis públicas da `.env.example` nas configurações do build. O repositório da aplicação precisa conter estes arquivos antes da integração. Confirme que a branch selecionada possui package.json, src/ e vite.config.ts; não associe uma branch vazia esperando que o provedor encontre arquivos de outra máquina.
+## 2. Publicar a nova função de recebíveis
 
-O arquivo `_headers` acompanha o build. Esta versão navega na própria página e não precisa de regra global de redirecionamento. A política CSP não autoriza execução de scripts inline nem de origem externa. Não colocar o HTML V75 ou JSON de usuários neste site.
+Em **Edge Functions → Deploy a new function → Via Editor**, copiar o conteúdo completo de `supabase/dashboard/receivables-import.ts` para **index.ts**. No campo **Function name**, na parte inferior direita ao lado de **Deploy function**, colocar **receivables-import** e publicar.
 
-## 3. Gateway
+Em **Settings**, desativar **Verify JWT with legacy secret** e salvar. O próprio código confirma o token no Supabase Auth e a sessão/permissão no banco antes de analisar arquivos. RLS permanece ativa.
 
-Seguir `supabase/README.md`. É possível publicar a função pelo editor do painel. O helper `npm run bundle:gateway` gera uma versão de arquivo único, sem chaves, para facilitar colagem no editor como `index.ts` da função `auth-gateway`. A função precisa de verificação JWT do gateway desativada apenas para esse endpoint de login; o próprio código valida sessões quando necessário. Não desativar RLS.
+Manter as funções **auth-gateway** e **payables-import** já em funcionamento. O secret existente `ALLOWED_ORIGINS` continua sendo `https://central-de-cobran-a.pages.dev`, sem barra final. As chaves privadas do runtime não pertencem ao site, ao Git ou ao chat. Bancos usam RPCs e não exigem outra Edge Function.
 
-Em Secrets da Edge Function, definir `ALLOWED_ORIGINS` com a URL HTTPS real do Pages, sem barra final. O runtime fornece as chaves privadas; não enviá-las para chat, frontend ou Git. Sem origem configurada, o login falha fechado. Não usar `*`.
+Uma função com nome automático, como `quick-worker`, não substitui `receivables-import`. Antes de remover um serviço antigo, conferir que ele não está em uso. Não alterar o nome de `auth-gateway`.
 
-## 4. Habilitar recuperação de senha
+## 3. Atualizar o site no mesmo endereço
 
-No projeto atual, primeiro aplicar004 e atualizar a função `auth-gateway` com o arquivo único desta versão. Manter a verificação JWT legada desativada somente nessa função e a origem `https://central-de-cobran-a.pages.dev` em `ALLOWED_ORIGINS`.
+O projeto Pages já está ligado à branch `main` do repositório. Conferir no painel da Cloudflare se o build/deploy da atualização terminou com sucesso. Configuração esperada: Node 24, instalação `npm ci`, comando de build `npm run build`, pasta de saída **dist**, raiz do projeto sem subpasta. Não publicar o código-fonte inteiro como se fosse a pasta de saída.
 
-Em **Authentication → URL Configuration**, definir:
+A conexão pública vem de `config/supabase.public.json`, contendo somente URL e chave publishable. Não é necessário adicionar chaves privadas à Cloudflare. Para outro projeto, usar apenas as duas configurações públicas previstas em `.env.example`.
+
+O build inclui `_headers` com CSP e política de cache. A navegação atual usa a mesma página e não precisa de regra global de redirecionamento. Não publicar o HTML legado V75, `usuarios.json`, hashes ou bases financeiras como arquivos estáticos.
+
+Após a publicação, abrir a Central, atualizar com **Ctrl + Shift + R** se necessário, entrar e conferir **Versão 0.4.0** no rodapé. Esse deploy não executa o SQL nem publica funções do Supabase. O endereço existente deve permanecer o mesmo; não criar outro site para cada atualização.
+
+## 4. Conferir os dados e os acessos
+
+- Confirmar que os onze saldos e os títulos de CP já lançados continuam disponíveis.
+- Abrir **Importar Bases → Caixa / Bancos** como Gerência e conferir data, onze campos de saldo, total e observação. Uma posição é salva inteira, com confirmação e auditoria; vazio não significa zero. Saldos de dias anteriores precisam ser conferidos para a nova data.
+- Registrar extrato somente como apoio, se necessário. O arquivo privado de até 2 MiB não preenche saldos nem baixa títulos.
+- Importar um relatório completo e real de CR; conferir quantidade e valor antes de concluir. Um título desaparecido aguarda validação financeira e não conta como recebido.
+- Vincular cada login de cobrança à pessoa responsável na Administração, sem presumir nomes. Conferir atribuição e herança por cliente com dívida ativa.
+- Conferir o fluxo de data real, confirmação financeira e não localizado, com retorno à mesma cobradora. Um título sem responsável precisa de atribuição antes da devolução.
+- Verificar carteiras separadas, Diretor em leitura, CP sem importação de CR e CR sem alteração de CP. Conferir auditoria como Gerência.
+- Atualizar o Painel e comparar com as fontes. Títulos e recebimentos seguem o período; o caixa permanece a posição atual na data oficial de São Paulo. A semana financeira é sábado–sexta.
+- Conferir login, logout e acesso externo. Atualizar página ou publicar outra versão não pode apagar dados.
+
+Não usar dados inventados no banco operacional para demonstrar módulos. Os testes automatizados utilizam dados sintéticos em ambiente local; sua evidência está em [estado-verificacao.md](estado-verificacao.md). A homologação remota deve respeitar os dados e os acessos reais, sem registrar credenciais em comandos ou logs.
+
+## Login e recuperação já configurados
+
+Esta atualização não exige reaplicar 004 nem republicar `auth-gateway`. A configuração existente de **Authentication → URL Configuration** deve manter:
 
 - **Site URL:** `https://central-de-cobran-a.pages.dev`
-- **Redirect URLs:** adicionar `https://central-de-cobran-a.pages.dev/?password-reset=1`
+- **Redirect URLs:** `https://central-de-cobran-a.pages.dev/?password-reset=1`
 
-No site atualizado, clicar em **Esqueci minha senha**, informar o usuário e solicitar as instruções. Só essa solicitação pede o envio ao Supabase; deploy e execução de SQL não enviam email. O endereço é resolvido no servidor. A resposta genérica não comprova entrega: verificar caixa de entrada, spam, limites e configuração do provedor. Não enviar links de recuperação, senhas ou tokens pelo chat.
+Somente uma solicitação em **Esqueci minha senha** pede o email ao Supabase. Deploy e SQL não enviam links. A resposta genérica não comprova entrega; conferir caixa de entrada, spam e limites do provedor. Senha ou link de recuperação não devem ser enviados no chat.
 
-Ao abrir o link recebido, o usuário define a nova senha na Central e volta ao login. A sessão de recuperação não autoriza acesso ao painel. A mudança revoga aprovações anteriores e exige novo login. Se ocorrer falha depois da tentativa de alteração, a tela informa incerteza e orienta solicitar outro link. Uma tentativa sem conclusão confirmada impede novas aprovações de login até a conclusão de outra recuperação, preservando as sessões e a auditoria. Não remover esse controle para contornar um erro.
+## Limites e recuperação de falhas
 
-## 5. Homologação remota necessária
+Faturamento, Margens, Comissões, RH/DP, previsões completas e Excel detalhado de CP, conciliação bancária, backups operacionais e migração conferida do estado atual da Central antiga permanecem pendentes. Não considerar concluída a primeira versão de produção enquanto esses itens e os critérios de aceite não forem homologados. Fontes ausentes continuam pendentes, sem números fictícios.
 
-- Login como Gerente com senha digitada somente na tela HTTPS; confirmar perfil oficial.
-- Testar senha inválida, usuário bloqueado, sessão expirada e logout.
-- Solicitar e receber o email de recuperação, abrir o link, definir nova senha e entrar novamente; confirmar que a sessão anterior perdeu acesso. Os testes locais não comprovam entrega de email.
-- Reutilização de JWT revogado deve falhar em current_access e nas tabelas.
-- Diretor deve negar administração e permitir somente mensagens em escrita.
-- Cobradoras devem ver só seus vínculos e, quando a carteira for implementada, só seus títulos.
-- Criar/concluir/reabrir mensagem e conferir auditoria com Gerente.
-- Testar acesso de rede externa com PC da empresa desligado.
-- Novo deploy não deve alterar perfis, mensagens ou auditoria existentes.
-
-Não gravar senhas/tokens em logs ou comandos de teste. Não afirmar versão pronta antes da integração remota e da implementação dos módulos financeiros.
-
-## Recuperação
-
-Preservar banco e ZIP original V75. Publicar código não substitui backup. Falha de gateway deve mostrar indisponibilidade, nunca liberar acesso. Não restaurar estado vazio como solução. Se migration falhar, sua transação deve reverter; conferir resultado antes de repetir. Backup/restauração de produção ainda precisam de implantação e teste.
+Preservar banco, ZIP original e estado operacional anterior. Publicar código não substitui backup. Se houver falha, preservar a mensagem administrativa e investigar; não apagar dados, desativar permissões ou liberar acesso para contornar um erro. A restauração de produção ainda precisa ser implantada e testada. Não ativar billing para resolver cotas ou configuração sem autorização.

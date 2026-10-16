@@ -1,37 +1,38 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.3.0**. Acesso, Painel, Caixa e primeira operação de Contas a Pagar na base central. **Não é a versão financeira completa nem uma publicação de produção.**
+Versão de desenvolvimento **0.4.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. A operação financeira completa ainda depende dos módulos pendentes e de homologação remota.
 
-## O que funciona nesta entrega
+## O que está implementado
 
-React + TypeScript; login por usuário via gateway no Supabase; recuperação de senha por email com tela própria; permissões consultadas no banco; sessão em memória; logout e revogação de acesso; administração de perfis já existentes no Auth; associação configurável de cobradoras; auditoria das alterações implementadas; quadro de mensagens da Diretoria/Gerência com conclusão/reabertura. As alterações passam por RPCs e RLS, inclusive quando a interface é contornada.
+React + TypeScript; login por usuário via gateway no Supabase; recuperação de senha por email com tela própria; RBAC consultado no banco; sessão em memória; logout e revogação; administração de perfis existentes no Auth; vínculo configurável entre login e cobradora; auditoria; mensagens da Diretoria/Gerência. As operações usam RLS e funções autorizadas no servidor.
 
-O Painel recupera a organização da V75 e a marca original: período Hoje/Semana/Mês, movimento financeiro, alertas e Resumo da Diretoria. Os valores disponíveis vêm do banco; fontes ainda não migradas ficam explicitamente pendentes. Caixa inclui as onze contas oficiais, saldos manuais auditados e estoque de contingência. CP possui importação completa atômica, classificação obrigatória, preservação de baixas, filtros, paginação e CSV. O servidor analisa os arquivos e revalida permissões; o navegador não pode gravar lançamentos derivados por conta própria.
+O Painel preserva a organização e a marca da V75: Hoje/Semana/Mês, semana financeira de sábado a sexta, movimento, alertas e Resumo da Diretoria. Os indicadores disponíveis vêm do banco; fontes ausentes permanecem pendentes. Caixa é a posição atual na data oficial de São Paulo, independente do período escolhido para recebíveis e obrigações. A projeção exige as fontes necessárias e não confirma recebimentos.
 
-CR, Cobrança/validações, Faturamento, Margens, Comissões e RH ainda precisam ser portados. Também permanecem pendentes as previsões de CP, os relatórios Excel detalhados de CP, a migração da posição atual, backups operacionais, criação completa de contas Auth, redefinição administrativa e troca obrigatória. Não há números inventados nem bases V75 embutidas nos assets públicos. Leia o escopo e a ativação em [docs/ativacao-financeira.md](docs/ativacao-financeira.md).
+**Importar Bases** centraliza as áreas autorizadas. Em **Caixa / Bancos**, a Gerência informa data, saldos das onze contas e observação, confere o consolidado e salva a posição inteira em uma transação. Zero exige preenchimento explícito; valores de datas anteriores não são copiados automaticamente para um novo dia. Extratos de até 2 MiB são guardados como apoio privado, com hash e auditoria, sem alterar saldos ou conciliar títulos. A consulta de Caixa/Bancos e o estoque de contingência permanecem disponíveis conforme as permissões.
+
+CP possui importação completa atômica, classificação obrigatória, baixas preservadas, filtros, paginação e CSV. CR possui importação completa com arquivo novamente analisado pelo servidor; novas ausências aguardam validação financeira, sem serem consideradas recebimentos. A carteira é herdada da dívida ativa do cliente quando existe uma atribuição oficial. Mudanças na identificação nome/CNPJ exigem conferência para evitar duplicidade; não há união automática. Cobrança oferece carteira individual, contatos, retornos e pagamento informado; CR confirma a data real ou devolve à mesma cobradora como não localizado. Registros de recebimentos validados preservam origem, cobradora e atraso, preparando a futura apuração de comissões.
+
+Faturamento, Margens, Comissões, RH/DP, previsões completas de CP, Excel detalhado de CP, conciliação bancária, migração do estado operacional anterior e backups ainda estão pendentes. Também faltam criação completa de contas Auth, redefinição administrativa e troca obrigatória de senha. Não há valores fictícios nem bases V75 embutidas nos arquivos públicos.
+
+## Atualizar o projeto existente
+
+O usuário informou que login, Painel, onze saldos e uma base completa de CP já funcionam. **Preservar esses registros e não repetir a instalação anterior.** Para 0.4.0, seguir [docs/ativacao-recebiveis.md](docs/ativacao-recebiveis.md): aplicar somente `supabase/dashboard/ativar-recebiveis.sql` uma vez e publicar a nova função `receivables-import`. O script reúne 008/009/010/011. `auth-gateway` e `payables-import` existentes permanecem em uso; bancos não precisam de outra Edge Function.
+
+Não reaplicar 001/003/004/005/006/007 nem `ativar-financeiro.sql` no projeto já configurado. Para um projeto novo, consultar a ordem em [supabase/README.md](supabase/README.md). Deploy do site não executa migrations nem publica funções. Nunca executar reset contra o banco operacional.
 
 ## Desenvolvimento
 
-Requisitos: Node 24, npm 11. Não é necessário criar worktree; cada tarefa cloud já é isolada.
+Requisitos: Node 24 e npm 11. Não é necessário criar worktree; cada tarefa cloud já é isolada.
 
 ```sh
 npm ci --cache /workspace/onboarding-tools/npm-cache --no-audit --no-fund
-```
-
-A conexão pública deste projeto está em `config/supabase.public.json`: URL e chave **publishable**, que não são segredos. Assim, o build do GitHub funciona mesmo sem `.env.local`. Para usar outro projeto, as variáveis públicas da `.env.example` podem substituir esses valores. O Vite expõe somente essas duas configurações e rejeita chaves privadas antes de gerar o site. Chaves administrativas, senhas e tokens de provedor não pertencem ao frontend.
-
-```sh
 npm run dev
 npm run build
 ```
 
-Sem Edge Function publicada, o login retorna indisponibilidade; não existe login de demonstração, senha padrão ou bypass offline. Tokens ficam na memória da aba. Ao recarregar ou fechar a aba é necessário entrar novamente. Dados oficiais não usam localStorage. A sessão da aplicação tem limite absoluto de 12 horas; o perfil é revalidado pelo banco em cada operação.
+`config/supabase.public.json` contém somente URL e chave **publishable**, públicas. O build funciona sem `.env.local`; as duas variáveis públicas da `.env.example` permitem selecionar outro projeto. O Vite rejeita chaves privadas antes de gerar o site. Senhas, chaves administrativas e tokens de provedor não pertencem ao frontend, ao Git ou ao chat.
 
-## Banco e autenticação
-
-Leia [supabase/README.md](supabase/README.md). O projeto atual já recebeu as migrations 001/003/004 manualmente. Para 0.3.0, aplicar uma única vez `supabase/dashboard/ativar-financeiro.sql`, que reúne 005/006/007 atomicamente, e publicar a nova função `payables-import`. Não repetir migrations já aplicadas. A função de login existente permanece independente. Deploy do site não atualiza automaticamente funções ou banco.
-
-A conta inicial de Gerente deve existir no Auth e ter perfil oficial ativo. O código não contém UUID administrativo, contas reais, senhas, hashes ou dados financeiros. Nenhum comando de deploy recria o banco. Nunca execute reset contra o banco operacional.
+Sem as funções publicadas, as operações correspondentes ficam indisponíveis. Não existe login de demonstração ou bypass offline. Tokens ficam somente na memória da aba; recarregar ou fechar exige novo login. Os dados oficiais permanecem no banco, sem localStorage como fonte. A sessão tem limite absoluto de doze horas, com perfil revalidado no servidor.
 
 ## Verificação
 
@@ -42,15 +43,19 @@ npm run test:auth-sql
 npm run test:payables-sql
 npm run test:treasury-sql
 npm run test:director-sql
-npm run bundle:payables-gateway
+npm run test:receivables-sql
+npm run test:collections-sql
+npm run test:bank-import-sql
+npm run test:upgrade-sql
+npm run bundle:receivables-gateway
 npm run build
 npm run test:browser
 ```
 
-Os testes SQL executam PostgreSQL via PGlite com Auth simulado; os testes do gateway simulam serviços HTTP; o navegador usa respostas sintéticas e não acessa o Supabase real. A configuração de browser deste ambiente usa Chromium em `/usr/bin/chromium`; ajuste `CHROMIUM_PATH` em outra máquina. Uma suíte local aprovada não comprova autenticação remota ou publicação.
+Os testes SQL usam PostgreSQL local via PGlite e Auth simulado. Gateway e navegador utilizam serviços sintéticos; não acessam dados financeiros reais. Chromium deste ambiente: `/usr/bin/chromium`, substituível por `CHROMIUM_PATH`. Resultados e limites de verificação estão em [docs/estado-verificacao.md](docs/estado-verificacao.md). Testes locais aprovados não comprovam publicação, entrega de email ou homologação remota.
 
-## Hospedagem
+## Hospedagem e dados anteriores
 
-Frontend estático na Cloudflare Pages e banco/Auth/serviços no Supabase. Deploy separado do banco, seguindo [docs/publicacao.md](docs/publicacao.md) e [ativação financeira](docs/ativacao-financeira.md). O acesso não depende de PC ou túnel na empresa. A origem local fornece relatórios completos para importação; a posição real anterior ainda precisa ser migrada do estado operacional, sem substituir históricos por dados embutidos antigos.
+Frontend estático na Cloudflare Pages e banco/Auth/serviços no Supabase, independentes do PC da empresa. A base local fornece relatórios completos para atualização. A posição operacional antiga ainda precisa ser inventariada e migrada com conferência, sem substituir os saldos e títulos já lançados nem usar números de capturas de tela. Preservar o ZIP original e o estado operacional. Procedimentos: [publicação](docs/publicacao.md), [ativação atual](docs/ativacao-recebiveis.md) e [mapeamento da V75](docs/v75-mapeamento.md).
 
-Planos gratuitos precisam ser confirmados no painel quanto a cotas, pausas, retenção e disponibilidade. Nenhum recurso pago foi habilitado. Este repositório não contém autorização ou credenciais para publicar na conta de um provedor.
+Nenhum recurso pago é habilitado pelo código. Cotas, pausas e disponibilidade dos planos gratuitos precisam ser conferidas nos provedores. Backup/restauração de produção ainda requerem implantação e teste.

@@ -6,7 +6,9 @@ import Administration from './components/Administration';
 import ExecutiveDashboard from './components/ExecutiveDashboard';
 import Treasury from './components/Treasury';
 import Payables from './components/Payables';
-import PayablesImport from './components/PayablesImport';
+import ImportsHub from './components/ImportsHub';
+import Receivables from './components/Receivables';
+import Collections from './components/Collections';
 import PasswordRecovery from './components/PasswordRecovery';
 import PasswordResetRequest from './components/PasswordResetRequest';
 import { consumeRecoveryLink } from './lib/passwordRecovery';
@@ -67,6 +69,7 @@ export default function App() {
 function CentralApp({ initialNotice }: { initialNotice: string }) {
   const [access, setAccess] = useState<Access | null>(null);
   const [selected, setSelected] = useState('painel');
+  const [importArea, setImportArea] = useState('contas_pagar');
   const [notice, setNotice] = useState(initialNotice);
   const [busyLogout, setBusyLogout] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -172,10 +175,12 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
   function navigate(id: string) { setSelected(id); setMobileOpen(false); }
   let content: ReactNode;
   if (safeSelected === 'administracao' && isManager) content = <Administration onAccessChanged={reloadAccess} />;
-  else if (safeSelected === 'painel') content = <ExecutiveDashboard canManage={isManager} canReadDirectorSummary={permits(access, 'resumo_diretoria')} canViewPayables={permits(access, 'contas_pagar')} canViewCash={permits(access, 'caixa')} onNavigate={navigate} />;
+  else if (safeSelected === 'painel') content = <ExecutiveDashboard canManage={isManager} canReadDirectorSummary={permits(access, 'resumo_diretoria')} canViewPayables={permits(access, 'contas_pagar')} canViewCash={permits(access, 'caixa')} canViewReceivables={permits(access, 'contas_receber')} onNavigate={navigate} />;
   else if (safeSelected === 'caixa') content = <Treasury canWrite={permits(access, 'caixa', 'write')} />;
-  else if (safeSelected === 'importar_bases') content = <PayablesImport canImport={permits(access, 'contas_pagar', 'import')} />;
-  else if (safeSelected === 'contas_pagar') content = <><Payables onImport={permits(access, 'contas_pagar', 'import') ? () => navigate('importar_bases') : undefined} />{permits(access, 'mensagens_cp') && <ManagementMessages canWrite={permits(access, 'mensagens_cp', 'write')} />}</>;
+  else if (safeSelected === 'importar_bases') content = <ImportsHub access={access} initialArea={importArea} />;
+  else if (safeSelected === 'contas_receber') content = <Receivables canWrite={permits(access, 'contas_receber', 'write')} canValidate={permits(access, 'contas_receber', 'validate')} onImport={permits(access, 'contas_receber', 'import') ? () => { setImportArea('contas_receber'); navigate('importar_bases'); } : undefined} />;
+  else if (safeSelected === 'cobranca') content = <Collections canWrite={permits(access, 'cobranca', 'write')} canManage={permits(access, 'contas_receber', 'write')} collectorId={access.collector_id} isCollector={['cobradora_1', 'cobradora_2'].includes(access.profile.role_key)} />;
+  else if (safeSelected === 'contas_pagar') content = <><Payables onImport={permits(access, 'contas_pagar', 'import') ? () => { setImportArea('contas_pagar'); navigate('importar_bases'); } : undefined} />{permits(access, 'mensagens_cp') && <ManagementMessages canWrite={permits(access, 'mensagens_cp', 'write')} />}</>;
   else if (safeSelected) content = <PendingModule id={safeSelected} collectorId={access.collector_id} />;
   else content = <section className="panel"><h2>Nenhum módulo autorizado</h2><p>Procure a Gerência Geral para revisar suas permissões.</p></section>;
 
