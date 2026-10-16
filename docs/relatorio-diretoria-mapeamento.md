@@ -1,25 +1,41 @@
-# Mapeamento do relatório da Diretoria — pendente de identificação das linhas
+# Relatório da Diretoria — fórmula confirmada, sem M49
 
-O usuário solicitou que o Painel Gerencial apresente todas as informações do Excel diário enviado à Diretoria. A captura recebida mostra datas e valores, mas não a coluna com os nomes dos indicadores. Nenhum valor da captura deve ser incorporado como dado inicial.
+O usuário forneceu a coluna das descrições e retirou explicitamente M49 da fórmula. Esta orientação também substitui “imposto fixo” por “impostos do mês passado”. Nenhum número das capturas foi incorporado ao código ou ao banco.
 
 A fórmula visível mais recente é:
 
 ```text
-=((M12+M13+M14+M49)-(M17+(M4*0,14)+M15+M16))/1000000
+=((M12+M13+M14)-(M17+(M4*0,14)+M15+M16))/1000000
 ```
 
-É necessário identificar os indicadores correspondentes a **M4, M12, M13, M14, M15, M16, M17 e M49** e as demais descrições das linhas para montar o relatório completo. Foi solicitada essa identificação ao usuário. O Excel original com as descrições é a fonte mais direta para concluir o mapeamento.
+| Linha original | Indicador | Fonte nesta versão |
+| --- | --- | --- |
+| M2 | Faturamento mês, exceto COMLURB | Complemento diário da Gerência |
+| M3 | Faturamento COMLURB | Complemento diário da Gerência |
+| M4 | Faturamento geral | M2 + M3; exige os dois valores |
+| M5 | Valor de pedido em sistema | Complemento diário da Gerência |
+| M6 | Valor de pedidos bloqueados | Complemento diário da Gerência |
+| M7 | Valor total pendência | Complemento diário da Gerência |
+| M8 | Contas a receber total | Carteira ativa de CR |
+| M9 | Contas a receber atrasado | Carteira ativa vencida |
+| M10 | Atrasado COMLURB | Complemento conferido; limitado ao atraso central de CR |
+| M11 | Percentual em atraso | Atrasado ÷ carteira; sem denominador, fica pendente |
+| M12 | Valor total caixa | Soma das 17 contas e caixas; ausência mantém total pendente |
+| M13 | Total contas a receber | Mesmo total de M8; repetido somente na apresentação |
+| M14 | Valor total estoque | Posição manual vigente, com data e origem |
+| M15 | Total pagamento mercadoria | CP: todos os títulos NEW/OPEN da macro COMPRA DE MERCADORIA |
+| M16 | Parcelamentos | Complemento diário da Gerência |
+| M17 | Impostos do mês passado | Complemento do mês anterior à referência |
+| M18 | Ativo circulante | Fórmula acima, resultado em milhões |
+| M20–M36 | Contas e caixas | As 17 posições na ordem da imagem |
+| M37 | Total caixa / bancos | Mesmo consolidado de M12; sem duplicação no cálculo |
 
-O código legado V75 não contém essa fórmula ou um exportador com coluna M. Seu resumo usa três parcelas positivas — Caixa, Recebíveis e Estoque — enquanto a fórmula da imagem tem quatro referências positivas. Não se pode presumir que M49 represente caixas adicionais, outro ativo ou um subtotal já incluído no caixa. Uma interpretação indevida poderia contar o mesmo valor duas vezes.
+Os complementos manuais são entradas oficiais auditadas enquanto as importações de Fechamento/Faturamento e Pedidos não estiverem implantadas. Não representam uma integração automática desses módulos. Não classificam clientes por nome nem presumem que um órgão seja COMLURB. Mercadoria depende da macro aprovada na importação completa de CP; títulos quitados não entram.
 
-A regra financeira anterior expressamente informada pelo usuário era:
+O cálculo ocorre no PostgreSQL com `numeric`: centavos, dedução de `14/100` sem arredondar frações de centavo e divisão por `100.000.000` para obter milhões de reais. O resultado trafega como string decimal exata. Cada um dos sete componentes é obrigatório; ausência não significa zero. O ativo pode estar calculado e o relatório continuar parcial se faltar outro indicador, como pedidos.
 
-```text
-(Caixa total + A Receber total + Estoque total
- − Imposto fixo − Faturamento geral × 0,14
- − Pagamento de mercadoria − Parcelamentos) ÷ 1.000.000
-```
+O Resumo é uma posição de hoje em America/Sao_Paulo, com faturamento do mês atual. Hoje/Semana/Mês selecionam o fluxo por vencimento; não apresentam o caixa atual como histórico. Complementos são lidos na data exata, sem carregar ontem silenciosamente. Estoque e saldos conservam suas datas visíveis.
 
-A orientação mais recente prevalece quando suas referências forem identificadas. Até lá, nenhum cálculo novo foi ativado nem rótulo/indicador inventado. O Ativo Circulante permanece pendente no Painel quando faltam suas fontes ou parâmetros. O estoque manual acrescentado nesta versão alimenta a base central e o indicador de estoque existente, sem modificar as demais regras financeiras.
+Snapshots novos preservam valores, contas, complementos e versão da fórmula; antigos não são recalculados. O Excel mantém a aba detalhada existente e acrescenta Posição diária, na sequência da imagem, e Memória do cálculo. Datas, moedas e percentuais são tipos nativos; valores que excedem os 15 algarismos de precisão do Excel interrompem a exportação com explicação.
 
-Para concluir após receber o arquivo/descrições: mapear cada linha para sua fonte oficial, confirmar o tratamento das 17 posições de bancos/caixas, preservar o alerta de estoque ausente e a origem/data de cada indicador, implementar o cálculo exato sem arredondamento intermediário e validar totais com o relatório original. Alterações devem gerar novos snapshots, sem recalcular posições históricas.
+Ativação: [ativacao-resumo-diretoria.md](ativacao-resumo-diretoria.md).

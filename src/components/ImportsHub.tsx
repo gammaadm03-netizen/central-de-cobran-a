@@ -4,12 +4,14 @@ import PayablesImport from './PayablesImport';
 import ReceivablesImport from './ReceivablesImport';
 import BankImport from './BankImport';
 import StockImport from './StockImport';
+import DirectorInputs from './DirectorInputs';
 
 const areas = [
   { id: 'contas_pagar', label: 'Contas a Pagar' },
   { id: 'contas_receber', label: 'Contas a Receber' },
   { id: 'caixa', label: 'Caixa / Bancos' },
   { id: 'estoque', label: 'Estoque' },
+  { id: 'resumo_diretoria', label: 'Resumo da Diretoria' },
   { id: 'fechamento', label: 'Fechamento / Faturamento' },
   { id: 'rh_dp', label: 'RH / DP' },
   { id: 'custos', label: 'Custos' },
@@ -17,7 +19,8 @@ const areas = [
 
 export default function ImportsHub({ access, initialArea = 'contas_pagar', onDashboard }: { access: Access; initialArea?: string; onDashboard?: () => void }) {
   const canWriteStock = access.profile.role_key === 'gerente_geral' && permits(access, 'caixa', 'write');
-  const available = areas.filter(area => area.id === 'estoque' ? canWriteStock : permits(access, area.id, 'import'));
+  const canWriteDirector = access.profile.role_key === 'gerente_geral' && permits(access, 'resumo_diretoria', 'write');
+  const available = areas.filter(area => area.id === 'estoque' ? canWriteStock : area.id === 'resumo_diretoria' ? canWriteDirector : permits(access, area.id, 'import'));
   const [selected, setSelected] = useState(available.find(area => area.id === initialArea)?.id ?? available[0]?.id ?? '');
   const active = available.find(area => area.id === selected) ?? available[0];
   if (!active) return <section className="panel"><h2>Importar Bases</h2><p className="notice">Seu perfil não permite importar bases. Consulte os módulos autorizados na navegação.</p></section>;
@@ -26,7 +29,7 @@ export default function ImportsHub({ access, initialArea = 'contas_pagar', onDas
       <div className="tabs" role="tablist" aria-label="Bases para atualização" style={{ marginTop: 18, marginBottom: 0 }}>{available.map(area => <button type="button" role="tab" key={area.id} id={`import-tab-${area.id}`} aria-selected={active.id === area.id} aria-controls={`import-panel-${area.id}`} onClick={() => setSelected(area.id)}>{area.label}</button>)}</div>
     </div>
     <div role="tabpanel" id={`import-panel-${active.id}`} aria-labelledby={`import-tab-${active.id}`} key={active.id}>
-      {active.id === 'contas_pagar' ? <PayablesImport canImport /> : active.id === 'contas_receber' ? <ReceivablesImport canImport /> : active.id === 'caixa' ? <BankImport canImport /> : active.id === 'estoque' ? <StockImport canWrite={canWriteStock} onDashboard={onDashboard} /> : <section className="panel"><h2>{active.label}</h2><p className="notice">Esta importação ainda está em implantação. Nenhum arquivo ou registro dessa base será alterado nesta versão.</p></section>}
+      {active.id === 'contas_pagar' ? <PayablesImport canImport /> : active.id === 'contas_receber' ? <ReceivablesImport canImport /> : active.id === 'caixa' ? <BankImport canImport /> : active.id === 'estoque' ? <StockImport canWrite={canWriteStock} onDashboard={onDashboard} /> : active.id === 'resumo_diretoria' ? <DirectorInputs canWrite={canWriteDirector} onDashboard={onDashboard} /> : <section className="panel"><h2>{active.label}</h2><p className="notice">Esta importação ainda está em implantação. Nenhum arquivo ou registro dessa base será alterado nesta versão.</p></section>}
     </div>
   </div>;
 }

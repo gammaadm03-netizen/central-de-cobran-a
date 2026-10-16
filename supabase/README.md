@@ -2,6 +2,10 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
+## Resumo da Diretoria — 0.6.0
+
+Após confirmar a 012, executar somente `migrations/013_director_report.sql`. Adiciona complementos diários auditados, fórmula oficial sem M49 com impostos do mês passado, leitura consistente e novas posições com os componentes preservados. Exige permissão oficial e sessão aprovada; Diretor consulta e Gerência escreve. Não altera dados anteriores ou exige nova Edge Function. Guia: [ativação do resumo](../docs/ativacao-resumo-diretoria.md).
+
 ## Estoque manual — 0.5.0
 
 A orientação mais recente do usuário é cadastrar estoque manualmente em **Importar Bases → Estoque**. Esse card utiliza `save_manual_stock`, `current_stock` e `stock_positions` da migration006 já instalada. Não há nova migration ou Edge Function nesta versão, nem integração automática com o portal privado. A autorização de escrita continua validada no banco e o histórico/auditoria existentes são preservados. Procedimento: [../docs/estoque-manual.md](../docs/estoque-manual.md).
@@ -28,6 +32,8 @@ Os passos abaixo são referência da instalação inicial. **Não repeti-los no 
 
 6. Após 005/006/007, executar `dashboard/ativar-recebiveis.sql`, que reúne 008/009/010/011, e publicar `receivables-import`. Não executar também as quatro migrations individuais. O script acrescenta CR, Cobrança, validações, posições bancárias completas e indicadores. Não importa dados antigos nem cria valores de exemplo.
 7. Após 008/009/010/011, executar `migrations/012_treasury_accounts.sql` uma vez, acrescentando as seis posições da lista atual. As contas novas aguardam saldo explícito; nenhuma posição financeira é inventada.
+
+8. Após 012, executar `migrations/013_director_report.sql` uma vez. Não repetir a instalação inicial em projetos já existentes.
 
 Em projetos já configurados manualmente, registrar as migrations aplicadas antes de usar `supabase db push`. Não rodar o histórico inteiro contra um banco existente sem conferir o histórico. Não executar `db reset` em um projeto com dados.
 

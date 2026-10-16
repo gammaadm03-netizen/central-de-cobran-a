@@ -1,4 +1,8 @@
-# Publicação e ativação — 0.5.0
+# Publicação e ativação — 0.6.0
+
+Para a atualização atual, seguir [ativacao-resumo-diretoria.md](ativacao-resumo-diretoria.md): confirmar 012 e executar somente a nova migration 013. Ela acrescenta os complementos oficiais e o cálculo sem M49, preservando o banco. Nenhuma Edge Function precisa ser criada ou republicada para o Resumo da Diretoria. O site deve exibir **Versão 0.6.0**.
+
+Os passos abaixo preservam o histórico de publicação das versões anteriores.
 
 Para o estoque manual em **Importar Bases → Estoque**, basta o deploy da versão 0.5.0 do site; seguir [estoque-manual.md](estoque-manual.md). O banco atual já possui as tabelas e RPCs necessárias. Não criar integração automática, conector, chave ou nova Edge Function para essa entrega. Os passos anteriores de 012/CR continuam independentes e não precisam ser repetidos para o card de estoque.
 

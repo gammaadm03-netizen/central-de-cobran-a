@@ -8,3 +8,15 @@
 @media(hover:hover) and (pointer:fine) and (prefers-reduced-motion:no-preference){.bank-company{transition:transform 140ms ease,box-shadow 140ms ease}.bank-company:hover,.bank-company:focus-within{transform:translateY(-3px);box-shadow:0 10px 26px #174b3214}.bank-company tbody tr,.bank-import-table tbody tr{transition:background-color 140ms ease}.bank-company tbody tr:hover,.bank-import-table tbody tr:hover,.bank-import-table tbody tr:focus-within{background:#f2f8f3}}
 @media(prefers-reduced-motion:reduce){.bank-company{transform:none!important;transition:none!important}.bank-company tbody tr,.bank-import-table tbody tr{transition:none!important}}
 @media(max-width:760px){.cash-coverage-alert .financial-card-heading{flex-wrap:wrap;gap:10px}.cash-coverage-alert li{align-items:flex-start}.cash-coverage-alert>.financial-card-heading>strong{font-size:19px}}
+.director-calculation { margin-top: 18px; border: 1px solid var(--line, #dce8e1); border-radius: 12px; padding: 14px 18px; background: #f8fbf9; }
+.director-calculation summary, .director-snapshot-details summary { cursor: pointer; font-weight: 650; color: #175340; }
+.director-calculation p { font-size: 13px; line-height: 1.65; }
+.director-calculation dl, .director-snapshot-details dl { margin: 14px 0; }
+.director-calculation dl > div, .director-snapshot-details dl > div { display: flex; justify-content: space-between; gap: 24px; padding: 7px 0; border-bottom: 1px solid #e5eee9; }
+.director-calculation dd, .director-snapshot-details dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.director-calculation li { margin: 8px 0; font-size: 13px; }
+.director-snapshot-details { margin-top: 8px; min-width: 160px; }
+.director-snapshot-details[open] { min-width: 330px; }
+.director-snapshot-details dl { font-size: 12px; }
+.director-summary-column dd { overflow-wrap: anywhere; }
+@media (max-width: 650px) { .director-calculation dl > div { display: block; } .director-calculation dd { margin-top: 5px; text-align: left; } }

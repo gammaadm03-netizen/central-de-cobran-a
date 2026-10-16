@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -26,7 +26,8 @@
     "bundle:payables-gateway": "node scripts/bundle-payables-gateway.mjs",
     "bundle:receivables": "node scripts/bundle-receivables.mjs",
     "bundle:receivables-gateway": "node scripts/bundle-receivables-gateway.mjs",
-    "bundle:gateway": "node scripts/bundle-gateway.mjs"
+    "bundle:gateway": "node scripts/bundle-gateway.mjs",
+    "test:director-report-sql": "node scripts/test-director-report-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

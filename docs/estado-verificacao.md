@@ -2,7 +2,7 @@
 
 16/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.5.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.6.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -122,3 +122,25 @@ A inspeção HTTP do portal privado não forneceu acesso à origem. Isso não bl
 O usuário também solicitou todas as informações do relatório diário da Diretoria e forneceu uma fórmula com referências M4/M12/M13/M14/M15/M16/M17/M49. A imagem está cortada na coluna das descrições. A fórmula exata e seu mapeamento não existem no exportador V75; foi solicitada a identificação das células. O novo cálculo não foi ativado, nenhum campo financeiro foi presumido e as regras existentes permanecem preservadas. Essa parte depende do Excel original ou das descrições completas: `docs/relatorio-diretoria-mapeamento.md`.
 
 O retorno vazio de `pg_advisory_xact_lock` mostrado pelo usuário após a migration 012 é normal, mas não comprova isoladamente que todo o arquivo foi executado. Foi indicada consulta de leitura à quantidade de contas ativas, esperando 17. O resultado dessa consulta ainda não foi informado. O card manual usa a migration 006 e não exige repetir a migration 012 ou outro script.
+
+## Atualização 0.6.0 — relatório da Diretoria e fórmula sem M49
+
+O usuário forneceu as descrições completas do relatório e retirou expressamente a célula M49 do cálculo. M4 é Faturamento Geral; M12 Caixa; M13 o mesmo recebível total de M8; M14 Estoque; M15 Mercadoria; M16 Parcelamentos; M17 Impostos do mês passado. O mapeamento anterior pendente foi substituído pela regra confirmada em `relatorio-diretoria-mapeamento.md`. Não foram carregados números das imagens como valores atuais.
+
+Implementados: complementos diários oficiais em Importar Bases → Resumo da Diretoria, com oito campos opcionais, observação, revisão por data, confirmação, controle de concorrência, autoria oficial e auditoria. Caixa, CR, estoque e mercadoria usam suas bases centrais; os complementos não sobrescrevem essas fontes. Faturamento geral soma mês sem COMLURB e COMLURB quando ambos estiverem informados. O complemento de atraso COMLURB é limitado ao atraso central conhecido. A entrada manual de faturamento/pedidos não equivale à importação ou à implantação completa desses módulos.
+
+O cálculo é server-side em numeric exato, sem arredondar os 14% intermediários, com resultado decimal em milhões transmitido como texto e somente formatado na interface. Cada fonte ausente permanece null; zero explícito e resultado negativo são válidos. Caixa e recebíveis não são duplicados. O relatório novo usa uma leitura consistente no banco, complementos apenas da data atual em São Paulo e mês anterior identificado para impostos. O período selecionado continua controlando o fluxo financeiro, separado da data da posição atual.
+
+Novos snapshots preservam componentes, as 17 contas, complementos e versão da fórmula; a auditoria guarda o mesmo JSON. Os históricos anteriores permanecem inalterados. Histórico permite abrir indicadores salvos sem recalcular. Excel preserva os tipos nativos, adiciona a posição diária na sequência da imagem e memória do cálculo, com controle explícito do limite de precisão do Excel.
+
+Verificações locais concluídas:
+
+- Build TypeScript/Vite de produção aprovado, inclusive com versão 0.6.0.
+- **21 grupos SQL novos passaram** em PostgreSQL local PGlite: preservação incremental, origem dos valores, RBAC, requisições diretas, sessão aprovada/bloqueada/expirada/revogada, concorrência, auditoria, rollback, histórico imutável, precisão exata, zero, negativo e componentes ausentes.
+- A 013 exige a 012 antes de qualquer nova DDL; teste reproduz ausência da 012 e confirma rollback sem tabela/função/marcador novo nem alteração dos onze cadastros anteriores. Depois, 012+013 aplicam corretamente.
+- **4 testes Node novos passaram**: decimal exato de PostgreSQL, zero e resultado mínimo, recusa de perda de precisão Excel, centavos seguros e ordem das contas sem excluir futuras inclusões.
+- **67 testes de navegador passaram** na execução integrada de bancos, estoque, Painel e complementos: 16 do formulário novo, oito novos do relatório, 43 cenários existentes. Cobrem dados ausentes, datas, permissões, confirmação, falha incerta, revisões, XSS como texto, histórico, exportação de arquivo XLSX real sintético, tipos numéricos e as 17 contas.
+- Revisão independente de regras, SQL e interface concluída. Corrigido antes da entrega um caso em que zeros decimais adicionais do PostgreSQL fariam resultado legítimo parecer indisponível; o valor é normalizado sem arredondamento. Screenshot local conferido visualmente com dados sintéticos.
+- Migrations anteriores e arquivos combinados de ativação preservados. Lockfile mudou apenas a versão, sem alteração de dependências. Nenhum serviço pago, chave privada, dado legado ou senha foi adicionado.
+
+A aplicação remota da 013, o término do deploy Cloudflare e a conferência com os valores operacionais reais não foram executados pelo agente. O usuário ainda deve confirmar a 012 e aplicar somente a 013 conforme `ativacao-resumo-diretoria.md`. O frontend mantém as consultas financeiras anteriores enquanto o relatório novo aguarda ativação. Não é necessário criar ou republicar Edge Functions nesta entrega. Permanecem os módulos completos e demais critérios de produção já listados; esta atualização não declara toda a Central concluída.

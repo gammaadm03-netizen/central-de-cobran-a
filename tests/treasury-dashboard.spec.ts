@@ -1,6 +1,90 @@
 import { test, expect, type Page } from '@playwright/test';
 import ExcelJS from 'exceljs';
 
+test('the complete Director report renders the official sources, prior-month taxes and exact assets without M49', async ({ page }) => {
+  await setup(page, { report: 'complete', complete: true, imported: true, receivableImported: true, expanded: true });
+  const summary = page.locator('.director-summary');
+  await expect(summary.getByText('POSIÇÃO COMPLETA', { exact: true })).toBeVisible();
+  await expect(summary.locator('.director-summary-column').nth(0)).toContainText('R$ 1.300,00');
+  await expect(summary.locator('.director-summary-column').nth(2)).toContainText('0,024368 mi');
+  await expect(summary.locator('.director-summary-column').nth(2)).toContainText('setembro de 2026');
+  await summary.getByText('Memória do cálculo do Ativo Circulante', { exact: true }).click();
+  await expect(summary.locator('.director-calculation').first()).toContainText('Faturamento geral × 14%');
+  await expect(summary.locator('.director-calculation').first()).not.toContainText('M49');
+  await expect(summary.locator('.director-cash-detail tbody tr')).toHaveCount(17);
+  await expect(summary.locator('.director-cash-detail tbody tr').first()).toContainText('BRADESCO ECOPLAST');
+  await page.screenshot({ path: '/tmp/central-diretoria-formula.png', fullPage: true });
+});
+
+test('missing stock blocks the assets calculation without becoming zero', async ({ page }) => {
+  await setup(page, { report: 'partial', complete: true, imported: true, receivableImported: true, expanded: true });
+  const summary = page.locator('.director-summary');
+  await expect(summary.locator('.director-summary-column').nth(2)).toContainText('CÁLCULO AGUARDANDO INFORMAÇÕES');
+  await expect(summary.locator('.director-summary-column').nth(1)).toContainText('ESTOQUE AGUARDANDO ATUALIZAÇÃO');
+  await summary.getByText('Informações pendentes (1)', { exact: true }).click();
+  await expect(summary.locator('.director-pending')).toContainText('Estoque aguardando atualização.');
+});
+
+test('zero and fractional-cent assets from the official backend remain exact on screen', async ({ page }) => {
+  await setup(page, { report: 'zero', complete: true, expanded: true });
+  await expect(page.locator('.director-summary-column').nth(2)).toContainText('0,00 mi');
+  await page.unrouteAll({ behavior: 'wait' });
+  await setup(page, { report: 'tiny', complete: true, expanded: true });
+  await expect(page.locator('.director-summary-column').nth(2)).toContainText('−0,0000000014 mi');
+});
+
+test('the daily Excel reproduces the description rows and 17 accounts with numeric amounts', async ({ page }) => {
+  await setup(page, { report: 'complete', complete: true, imported: true, receivableImported: true, expanded: true });
+  const pending = page.waitForEvent('download'); await page.getByRole('button', { name: 'Baixar Excel', exact: true }).click();
+  const download = await pending; const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile((await download.path())!);
+  const daily = workbook.getWorksheet('Posição diária')!;
+  expect(daily.getCell('B1').value).toBeInstanceOf(Date);
+  expect(daily.getCell('B4').value).toBe(1300);
+  expect(daily.getCell('B8').value).toBe(20000);
+  expect(daily.getCell('B13').value).toBe(20000);
+  expect(daily.getCell('B17').value).toBe(70);
+  expect(daily.getCell('B18').value).toBe(0.024368);
+  expect(daily.getCell('B18').numFmt).toContain('mi');
+  expect(daily.getCell('A20').value).toBe('BRADESCO ECOPLAST');
+  expect(daily.getCell('A36').value).toBe('CAIXA EASY CLEAN');
+  expect(daily.getCell('B37').value).toBe(1700);
+  const memory = workbook.getWorksheet('Memória do cálculo')!;
+  expect(memory.getCell('B9').value).toBe(0.024368);
+  expect(memory.getCell('B10').value).not.toContain('M49');
+});
+
+test('the assets result that exceeds Excel precision is refused explicitly', async ({ page }) => {
+  await setup(page, { report: 'huge', complete: true, expanded: true });
+  await page.getByRole('button', { name: 'Baixar Excel', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('excede os 15 algarismos do Excel');
+});
+
+test('a failed complete report keeps the core modules and blocks saving an uncertain position', async ({ page }) => {
+  await setup(page, { report: 'fail', complete: true, imported: true, receivableImported: true });
+  await expect(page.locator('.director-report-notice')).toContainText('Não foi possível consultar');
+  await expect(page.locator('.financial-kpis')).toContainText('R$ 1.234,56');
+  await expect(page.getByRole('button', { name: 'Salvar posição', exact: true })).toBeDisabled();
+  await expect(page.getByText('private SQL secret trace')).toHaveCount(0);
+});
+
+test('new saved positions show the preserved assets result and inputs in history', async ({ page }) => {
+  await setup(page, { report: 'complete', complete: true, imported: true, receivableImported: true, expanded: true });
+  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Salvar posição', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Posição completa salva');
+  await page.getByRole('button', { name: 'Histórico das posições', exact: true }).click();
+  await expect(page.locator('.director-history')).toContainText('0,024368 mi');
+  await page.locator('.director-history').getByText('Ver indicadores', { exact: true }).click();
+  await expect(page.locator('.director-snapshot-details')).toContainText('R$ 1.300,00');
+  await expect(page.locator('.director-snapshot-details')).toContainText('BANCO CORA ECO PLAST');
+});
+
+test('a manager without specific Director write permission is kept in read-only summary mode', async ({ page }) => {
+  const { calls } = await setup(page, { report: 'complete', complete: true, noDirectorWrite: true });
+  await expect(page.getByRole('button', { name: 'Salvar posição', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Informar posição da Diretoria →', exact: true })).toHaveCount(0);
+  expect(calls.some(call => call.name === 'save_director_position')).toBe(false);
+});
+
 const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const fixedTime = new Date('2026-10-15T15:00:00Z');
 const accountNames = [['F2G', 'Bradesco'], ['EASY CLEAN', 'Bradesco'], ['EASY CLEAN', 'Banco do Brasil'], ['FAST CLEAN', 'Bradesco'], ['FAST CLEAN', 'Banco do Brasil'], ['ECOPLAST', 'Bradesco'], ['ECOPLAST', 'Banco do Brasil'], ['GAMMA', 'Bradesco'], ['LIMPE FÁCIL', 'Bradesco'], ['LIMPE FÁCIL', 'Cora'], ['MY CLEAN', 'Cora']];
@@ -12,14 +96,20 @@ function cashFixture(complete = false, expanded = false) {
   return { accounts: roster.map((account, index) => ({ ...account, id: `10000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, amount_cents: complete || index === 0 ? 10000 : null, balance_date: complete || index === 0 ? '2026-10-15' : null, updated_at: complete || index === 0 ? stamp : null })), reported_accounts: complete ? roster.length : 1, expected_accounts: roster.length, total_cents: complete ? roster.length * 10000 : null, latest_position_date: '2026-10-15' };
 }
 
-interface FixtureOptions { role?: 'gerente_geral' | 'diretor' | 'contas_pagar' | 'contas_receber'; imported?: boolean; complete?: boolean; fail?: boolean; failOldWeek?: boolean; receivableImported?: boolean; receivableFailure?: string; expanded?: boolean; negatives?: boolean; panelOnly?: boolean }
+function reportFixture(cash: ReturnType<typeof cashFixture>, mode = 'complete') {
+  const inputs = { id: '90000000-0000-4000-8000-000000000099', reference_date: '2026-10-15', created_at: stamp, observation: 'Conferência sintética.' };
+  const indicators = { turnover_month_cents: 100000, turnover_comlurb_cents: 30000, turnover_cents: 130000, orders_cents: 80000, blocked_orders_cents: 500, pending_orders_cents: 700, receivable_cents: 2000000, receivable_overdue_cents: 750000, receivable_overdue_bps: 3750, receivable_overdue_comlurb_cents: 2000, cash_cents: cash.total_cents, stock_cents: mode === 'partial' ? null : 300000, merchandise_cents: 5000, installments_cents: 3000, previous_month_taxes_cents: 7000, payable_period_cents: 123456, projected_cash_cents: 546544, current_assets_millions: mode === 'partial' ? null : mode === 'zero' ? '0' : mode === 'tiny' ? '-0.0000000014' : mode === 'huge' ? '123456789.123456789' : '0.024368', complete: mode !== 'partial', formula_version: '2026-10-sem-m49' };
+  return { as_of_date: '2026-10-15', inputs, indicators, cash, stock: { value_cents: indicators.stock_cents, reference_date: '2026-10-15', source: 'MANUAL' }, missing_sources: mode === 'partial' ? ['Estoque aguardando atualização.'] : [], complete: mode !== 'partial', formula_version: '2026-10-sem-m49' };
+}
+
+interface FixtureOptions { role?: 'gerente_geral' | 'diretor' | 'contas_pagar' | 'contas_receber'; imported?: boolean; complete?: boolean; fail?: boolean; failOldWeek?: boolean; receivableImported?: boolean; receivableFailure?: string; expanded?: boolean; negatives?: boolean; panelOnly?: boolean; report?: 'complete' | 'partial' | 'fail' | 'zero' | 'tiny' | 'huge'; noDirectorWrite?: boolean }
 async function setup(page: Page, options: FixtureOptions = {}) {
   await page.clock.setFixedTime(fixedTime);
   const role = options.role ?? 'gerente_geral';
   const id = '90000000-0000-4000-8000-000000000001';
   const permissions = options.panelOnly ? [{ resource: 'painel', action: 'read' }] : ['painel', 'caixa', role === 'contas_receber' ? 'contas_receber' : 'contas_pagar', 'importar_bases'].map(resource => ({ resource, action: 'read' }));
   if (['diretor', 'gerente_geral'].includes(role)) permissions.push({ resource: 'resumo_diretoria', action: 'read' });
-  if (role === 'gerente_geral') permissions.push({ resource: 'usuarios', action: 'admin' }, { resource: 'caixa', action: 'write' });
+  if (role === 'gerente_geral') { permissions.push({ resource: 'usuarios', action: 'admin' }, { resource: 'caixa', action: 'write' }); if (!options.noDirectorWrite) permissions.push({ resource: 'resumo_diretoria', action: 'write' }); }
   const access = { profile: { id, username: 'TesteFinanceiro', display_name: 'Pessoa Teste', role_key: role, enabled: true }, permissions, collector_id: null };
   const claims = { sub: id, session_id: '90000000-0000-4000-8000-000000000002', exp: Math.floor(fixedTime.getTime() / 1000) + 3600, iat: Math.floor(fixedTime.getTime() / 1000), role: 'authenticated' };
   const token = [Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'), Buffer.from(JSON.stringify(claims)).toString('base64url'), 'synthetic-test-only'].join('.');
@@ -47,6 +137,11 @@ async function setup(page: Page, options: FixtureOptions = {}) {
       return reply({ ...cash, accounts: options.panelOnly ? [] : accounts, reported_accounts: reported.length, total_cents: reported.length === accounts.length ? reported.reduce((sum, account) => sum + account.amount_cents!, 0) : null, negative_accounts_count: negative.length, coverage_required_cents: negative.reduce((sum, account) => sum - account.amount_cents!, 0) });
     }
     if (name === 'current_stock') return reply(stock);
+    if (name === 'director_report') {
+      if (!options.report) return reply({ code: 'PGRST202' }, 404);
+      if (options.report === 'fail') return reply({ message: 'private SQL secret trace' }, 503);
+      return reply(reportFixture(cash, options.report));
+    }
     if (name === 'payables_summary') return options.failOldWeek && body.p_start === '2026-10-03' ? reply({ message: 'private SQL secret trace' }, 500) : reply({ open_cents: 900000, overdue_cents: 300000, period_cents: 123456, active_count: 20, latest_import_at: options.imported ? stamp : null });
     if (name === 'receivables_summary') return options.receivableFailure ? reply({ code: options.receivableFailure, message: 'private SQL secret trace' }, 404) : reply({ open_cents: 2000000, overdue_cents: 750000, period_cents: 500000, active_count: 30, pending_count: 2, unassigned_count: 3, received_period_cents: 12345, latest_import_at: options.receivableImported ? stamp : null, overdue_bps: 3750, overdue_comlurb_cents: null });
     if (name === 'set_bank_balance') {
@@ -55,7 +150,7 @@ async function setup(page: Page, options: FixtureOptions = {}) {
       return reply(account.id);
     }
     if (name === 'save_manual_stock') { stock = { value_cents: body.p_value_cents, reference_date: body.p_reference_date, source: 'MANUAL' }; return reply('90000000-0000-4000-8000-000000000010'); }
-    if (name === 'save_director_position') { history.push({ id: '90000000-0000-4000-8000-000000000011', created_at: stamp, created_by: id, period_start: body.p_start, period_end: body.p_end, indicators: { cash_cents: cash.total_cents, stock_cents: stock.value_cents, payable_period_cents: options.imported ? 123456 : null, complete: false } }); return reply(history[0].id); }
+    if (name === 'save_director_position') { history.push({ id: '90000000-0000-4000-8000-000000000011', created_at: stamp, created_by: id, period_start: body.p_start, period_end: body.p_end, indicators: options.report && options.report !== 'fail' ? { ...reportFixture(cash, options.report).indicators, cash_accounts: cash.accounts } : { cash_cents: cash.total_cents, stock_cents: stock.value_cents, payable_period_cents: options.imported ? 123456 : null, complete: false } }); return reply(history[0].id); }
     if (name === 'director_positions') return route.fulfill({ status: 200, headers: { ...headers, 'content-range': history.length ? `0-${history.length - 1}/${history.length}` : '*/0' }, json: history });
     throw new Error(`Unexpected fixture request ${name}`);
   });
