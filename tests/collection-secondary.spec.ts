@@ -21,6 +21,8 @@ async function setup(page: Page, options: Options = {}) {
     if (name === 'auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', token_type: 'bearer', expires_in: 3600 }, access });
     if (url.pathname === '/auth/v1/user') return reply({ id: id(1), aud: 'authenticated', role: 'authenticated', email: 'fixture@example.invalid', created_at: '2026-10-18T10:00:00Z', app_metadata: {}, user_metadata: {} });
     if (name === 'current_access') return reply(access);
+    if (name === 'collection_workbench') return reply({ as_of_date: '2026-10-18', server_now: '2026-10-18T15:00:00Z', snapshot_revision: 'secondary-empty-returns', active_timer: null, count: 0, total_cents: 0, rows: [], workflow: { version: '029', normal_pause: true, finish_requires_started: true, pending_read_only: true, returns_priority: true }, priority: { collector_id: collector ? own : null, due_count: 0, total_cents: 0, next_title_id: null, next_due_date: null } });
+    if (name === 'receivable_collection_events') return reply(options.sourceCollection ? [{ id: id(91), title_id: titleId, action: 'PAID', collector_id: own, contact_date: '2026-10-17', observation: 'Pagamento informado no atendimento sintético.', return_note: null, payment_date: title.payment_reported_date, created_at: '2026-10-17T15:00:00Z' }] : []);
     if (['collections_overdue_summary', 'receivables_management_summary'].includes(name)) return reply({ code: 'PGRST202' }, 404);
     if (name === 'collection_agents') return reply([{ id: own, display_name: 'Responsável A' }, ...(!collector ? [{ id: other, display_name: 'Responsável B' }] : [])]);
     if (name === 'receivable_titles' || name === 'collection_overdue_titles') {

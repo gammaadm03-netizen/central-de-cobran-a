@@ -484,6 +484,32 @@ function receiptColumn(value) {
 }
 var validRevision = (value) => typeof value === "string" && value.length > 0 && value.length <= 256 && value === value.trim();
 var sourceFields = ["document", "due_date", "amount_cents"];
+var validCustomerKey = (value) => typeof value === "string" && value.length <= 1505 && !/[\u0000-\u001f\u007f-\u009f]/.test(value) && (/^cnpj:\d{14}$/.test(value) || value.startsWith("name:") && value.length > 5 && value.slice(5) === value.slice(5).trim());
+function validCollectorMappings(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length <= MAX_ROWS && Object.entries(value).every(([key, collector]) => validCustomerKey(key) && typeof collector === "string" && UUID.test(collector)) && new TextEncoder().encode(JSON.stringify(value)).byteLength <= 1024 * 1024;
+}
+function validCollectorPreview(preview, rows) {
+  if (preview.collector_assignment_version !== "030" || !Array.isArray(preview.customer_collector_assignments) || preview.customer_collector_assignments.length > rows.length || !Number.isSafeInteger(preview.missing_collector_count) || preview.missing_collector_count < 0 || preview.missing_collector_count > preview.customer_collector_assignments.length) return false;
+  if (preview.rows.some((row, index) => row.customer_key !== receivableCustomerKey(rows[index]) || ["client_name", "client_document", "branch", "issued_on"].some((key) => row[key] !== rows[index][key]))) return false;
+  const groups = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    const key = receivableCustomerKey(row), group = groups.get(key) ?? [];
+    group.push(row);
+    groups.set(key, group);
+  }
+  if (preview.customer_collector_assignments.length !== groups.size) return false;
+  const seen = /* @__PURE__ */ new Set();
+  let missing = 0;
+  for (const assignment of preview.customer_collector_assignments) {
+    if (!assignment || typeof assignment !== "object" || Array.isArray(assignment) || !validCustomerKey(assignment.customer_key) || seen.has(assignment.customer_key)) return false;
+    const group = groups.get(assignment.customer_key);
+    if (!group) return false;
+    if (typeof assignment.client_name !== "string" || !group.some((row) => row.client_name === assignment.client_name) || assignment.client_document !== group[0].client_document || assignment.row_count !== group.length || !(assignment.collector_id === null || typeof assignment.collector_id === "string" && UUID.test(assignment.collector_id)) || !(assignment.collector_name === null || typeof assignment.collector_name === "string" && !!assignment.collector_name.trim() && assignment.collector_name.length <= 1500 && !/[\u0000-\u001f\u007f-\u009f]/.test(assignment.collector_name)) || assignment.collector_id === null !== (assignment.collector_name === null) || typeof assignment.requires_selection !== "boolean" || typeof assignment.locked !== "boolean") return false;
+    seen.add(assignment.customer_key);
+    if (assignment.requires_selection && assignment.collector_id === null) missing++;
+  }
+  return missing === preview.missing_collector_count && (!missing || preview.can_commit === false);
+}
 function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWorkbook, log = () => {
 } }) {
   return async function handle(request) {
@@ -548,6 +574,7 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       if (code === "23505") return respond(409, { code, error: "Este arquivo j\xE1 foi importado para esta origem. Nenhum dado foi alterado." });
       if (code === "P0023") return respond(409, { code, error: "Confira os v\xEDnculos e as poss\xEDveis altera\xE7\xF5es de identifica\xE7\xE3o dos t\xEDtulos antes de confirmar. Nenhum dado foi alterado." });
       if (code === "P0024") return respond(409, { code, error: "H\xE1 recebimentos que precisam de revis\xE3o. Confira os v\xEDnculos, valores e hist\xF3rico antes de confirmar. Nenhum dado foi alterado." });
+      if (code === "P0030") return respond(409, { code, error: "Confira os v\xEDnculos dos t\xEDtulos e selecione a respons\xE1vel de cada cliente sem carteira antes de concluir. Nenhum dado foi alterado." });
       if (code === "23514" && result.payload?.message === IDENTITY_CHANGE) return respond(400, { code, error: IDENTITY_CHANGE });
       if (code === "22023" || code === "23514") return respond(400, { code, error: "A importa\xE7\xE3o foi recusada. Confira as linhas, a origem completa e os v\xEDnculos de cobradora dos clientes antes de concluir." });
       if (result.status === 401) return respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." });
@@ -575,7 +602,7 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       } catch {
         return respond(400, { error: INVALID_REQUEST });
       }
-      if (Object.keys(body).some((key) => !["action", "file_name", "file_base64", "complete", "previous_import_id", "mode", "title_mappings", "previous_financial_revision", "confirm_corrections"].includes(key)) || !["preview", "commit"].includes(body.action) || Object.hasOwn(body, "mode") && !["open", "received"].includes(body.mode) || !body.mode && (Object.hasOwn(body, "title_mappings") || Object.hasOwn(body, "previous_financial_revision") || Object.hasOwn(body, "confirm_corrections")) || body.mode !== "received" && Object.hasOwn(body, "confirm_corrections") || typeof body.file_name !== "string" || body.file_name.length < 1 || body.file_name.length > 250 || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name)) return respond(400, { error: INVALID_REQUEST });
+      if (Object.keys(body).some((key) => !["action", "file_name", "file_base64", "complete", "previous_import_id", "mode", "title_mappings", "previous_financial_revision", "confirm_corrections", "collector_mappings"].includes(key)) || !["preview", "commit"].includes(body.action) || Object.hasOwn(body, "mode") && !["open", "received"].includes(body.mode) || !body.mode && (Object.hasOwn(body, "title_mappings") || Object.hasOwn(body, "previous_financial_revision") || Object.hasOwn(body, "confirm_corrections")) || body.mode !== "received" && Object.hasOwn(body, "confirm_corrections") || Object.hasOwn(body, "collector_mappings") && (body.mode !== "open" || !validCollectorMappings(body.collector_mappings)) || typeof body.file_name !== "string" || body.file_name.length < 1 || body.file_name.length > 250 || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name)) return respond(400, { error: INVALID_REQUEST });
       if (Object.hasOwn(body, "title_mappings") && (!body.title_mappings || typeof body.title_mappings !== "object" || Array.isArray(body.title_mappings) || Object.keys(body.title_mappings).length > MAX_ROWS || Object.entries(body.title_mappings).some(([key, value]) => !/^[1-9]\d{0,3}$/.test(key) || Number(key) > MAX_ROWS || typeof value !== "string" || !(value === "NEW" || UUID.test(value)))) || Object.hasOwn(body, "previous_financial_revision") && !validRevision(body.previous_financial_revision) || Object.hasOwn(body, "confirm_corrections") && typeof body.confirm_corrections !== "boolean") return respond(400, { error: INVALID_REQUEST });
       if (body.mode && !["read", "write"].every((action) => access.payload.permissions.some((permission) => permission?.resource === "contas_receber" && permission.action === action))) {
         return respond(403, { code: "42501", error: "Seu perfil n\xE3o tem permiss\xE3o para esta opera\xE7\xE3o." });
@@ -610,6 +637,7 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
         return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: [{ line: 0, column: "Arquivo", problem: safeMessage(error instanceof Error ? error.message : ""), correction: CORRECTION }] });
       }
       if (parsed.errors.length) return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: problemsFor(parsed.errors) });
+      const withCollectors = Object.hasOwn(body, "collector_mappings");
       if (body.mode) {
         if (Object.keys(body.title_mappings ?? {}).some((key) => Number(key) > parsed.rows.length)) return respond(400, { error: INVALID_REQUEST });
         const capabilities = await call("/rest/v1/rpc/receivables_import_capabilities", { data: {} });
@@ -622,8 +650,9 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
       if (signal.aborted) throw new Error("request_timed_out");
       if (body.action === "preview") {
-        const path2 = body.mode === "open" ? "preview_receivables_open_import" : body.mode === "received" ? "preview_receivables_received_import" : "preview_receivables_import";
-        const preview = await call(`/rest/v1/rpc/${path2}`, { data: { p_scope: "grupo-consolidado", p_rows: parsed.rows, ...body.mode ? { p_title_mappings: body.title_mappings ?? {} } : {} } });
+        const path2 = withCollectors ? "preview_receivables_open_import_with_collectors" : body.mode === "open" ? "preview_receivables_open_import" : body.mode === "received" ? "preview_receivables_received_import" : "preview_receivables_import";
+        const preview = await call(`/rest/v1/rpc/${path2}`, { data: { p_scope: "grupo-consolidado", p_rows: parsed.rows, ...body.mode ? { p_title_mappings: body.title_mappings ?? {} } : {}, ...withCollectors ? { p_collector_mappings: body.collector_mappings } : {} } });
+        if (!preview.ok && withCollectors && ["PGRST202", "42883"].includes(preview.payload?.code)) return respond(409, { code: "P0030", activation_required: true, error: "Ative a atualiza\xE7\xE3o das respons\xE1veis na importa\xE7\xE3o de t\xEDtulos em aberto antes de concluir. Nenhum dado foi alterado." });
         if (!preview.ok) return upstreamFailure(preview);
         if (!preview.payload || preview.payload.row_count !== parsed.rows.length) throw new Error("invalid_preview");
         if (body.mode) {
@@ -632,9 +661,10 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
           const checkedFields = body.mode === "received" ? [...sourceFields, "received_on", "received_amount_cents"] : sourceFields;
           if (preview.payload.mode !== body.mode || !validRevision(preview.payload.financial_revision) || !counters.every((key) => Number.isSafeInteger(preview.payload[key]) && preview.payload[key] >= 0) || typeof preview.payload.can_commit !== "boolean" || !Array.isArray(preview.payload.errors) || !Array.isArray(preview.payload.rows) || preview.payload.rows.length !== parsed.rows.length || preview.payload.rows.some((row, index) => !row || typeof row !== "object" || Array.isArray(row) || row.line !== index + 1 || !outcomes.includes(row.outcome) || !(row.title_id === null || typeof row.title_id === "string" && UUID.test(row.title_id)) || checkedFields.some((key) => row[key] !== parsed.rows[index][key]))) throw new Error("invalid_preview");
         } else if (!Number.isSafeInteger(preview.payload.new_count) || !Number.isSafeInteger(preview.payload.open_count) || !Number.isSafeInteger(preview.payload.pending_count) || !Number.isSafeInteger(preview.payload.validated_in_source_count)) throw new Error("invalid_preview");
+        if (withCollectors && !validCollectorPreview(preview.payload, parsed.rows)) throw new Error("invalid_collector_preview");
         return respond(200, { rows: body.mode ? preview.payload.rows : parsed.rows, preview: preview.payload, file_sha256: hash });
       }
-      const path = body.mode === "open" ? "commit_receivables_open_import_from_gateway" : body.mode === "received" ? "commit_receivables_received_import_from_gateway" : "commit_receivables_import_from_gateway";
+      const path = withCollectors ? "commit_receivables_open_import_with_collectors_from_gateway" : body.mode === "open" ? "commit_receivables_open_import_from_gateway" : body.mode === "received" ? "commit_receivables_received_import_from_gateway" : "commit_receivables_import_from_gateway";
       const committed = await call(`/rest/v1/rpc/${path}`, { service: true, data: {
         p_user_id: auth.payload.id,
         p_session_id: sessionId,
@@ -645,10 +675,13 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
         p_rows: parsed.rows,
         p_previous_import_id: body.previous_import_id,
         ...body.mode ? { p_title_mappings: body.title_mappings ?? {}, p_previous_financial_revision: body.previous_financial_revision } : { p_complete: true },
-        ...body.mode === "received" ? { p_confirm_corrections: body.confirm_corrections ?? false } : {}
+        ...body.mode === "received" ? { p_confirm_corrections: body.confirm_corrections ?? false } : {},
+        ...withCollectors ? { p_collector_mappings: body.collector_mappings } : {}
       } });
+      if (!committed.ok && withCollectors && ["PGRST202", "42883"].includes(committed.payload?.code)) return respond(409, { code: "P0030", activation_required: true, error: "Ative a atualiza\xE7\xE3o das respons\xE1veis na importa\xE7\xE3o de t\xEDtulos em aberto antes de concluir. Nenhum dado foi alterado." });
       if (!committed.ok) return upstreamFailure(committed);
       if (!committed.payload || committed.payload.row_count !== parsed.rows.length || typeof committed.payload.import_id !== "string" || !UUID.test(committed.payload.import_id) || body.mode && committed.payload.mode !== body.mode) throw new Error("invalid_commit_response");
+      if (withCollectors && (committed.payload.collector_assignment_version !== "030" || !["assigned_title_count", "assigned_customer_count"].every((key) => Number.isSafeInteger(committed.payload[key]) && committed.payload[key] >= 0) || committed.payload.assigned_customer_count > committed.payload.assigned_title_count)) throw new Error("invalid_collector_commit_response");
       return respond(200, committed.payload);
     } catch {
       log("request_unavailable");

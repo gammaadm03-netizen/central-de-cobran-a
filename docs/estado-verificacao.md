@@ -2,7 +2,7 @@
 
 18/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.11.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.12.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -290,3 +290,28 @@ Hashes SHA256 dos artefatos finais:
 - Migration 028: `76b86bd4c2a086fc56a7c3a4405f214dd0d862e9ca9c6d72526e4ca384b098d0`.
 - Combinado 022..028: `4279adc5a03be12d24a9848f7e76df1ba2a3b13678637e2657c285b3be2c82cf`.
 - Gateway único: `827d45692ac9f455382ee339dd2e37b509200b735f898843e8c6cf15e0e4ac97`.
+
+## Atualização 0.12.0 — atendimento, retornos e responsáveis na importação
+
+O usuário relatou que Iniciar, Pausar e Salvar andamento estavam desabilitados, sem mensagem, e informou que a responsável deve ser definida na importação. A implementação acrescenta escolha explícita por cliente no relatório de abertos e mantém as carteiras existentes nas atualizações diárias. Não foi presumido vínculo entre quem importa e uma cobradora. Sem acesso administrativo remoto, a causa exata no banco de produção não foi confirmada; o estado sem responsável observado pelo usuário é tratado pelo novo fluxo.
+
+A 029 mantém pausa e rascunhos, exige um ciclo iniciado ainda não finalizado para encerrar atendimento e separa a agenda oficial de rascunhos. Retornos de hoje ou atrasados, pela data de São Paulo, têm prioridade na carteira da responsável do título; filtros locais e carteiras de outras pessoas não alteram esse bloqueio. A abertura do portal apresenta o total e os primeiros cinco retornos, além do intervalo próprio recuperado. Os controles explicam ausência de responsável, pendência financeira, leitura, ausência de alterações, atualização necessária e confirmação em andamento.
+
+Pagamento informado exige observação e data real até hoje; a data é acrescentada pelo servidor. Finalizar ou marcar como pago encerra o intervalo e encaminha à validação de Contas a Receber, fora da fila ativa. Salvar rascunho pago não confirma recebimento nem encaminha ao financeiro. A conferência mostra o relato original separado da justificativa financeira. Não localizado mantém a responsável e o relato anterior, devolve o título com próxima ação para hoje e não cria recebimento. A confirmação continua usando as regras financeiras existentes; não há percentuais ou pagamento de comissão presumidos.
+
+A 030 acrescenta prévia e conclusão autorizadas para responsáveis na importação de abertos. Somente clientes ativos sem vínculo recebem escolha; responsáveis existentes, vínculos bloqueados, títulos quitados e recebimentos são preservados. O arquivo original é reinterpretado no gateway. Um arquivo já importado pode completar vínculos ausentes sem criar outro lote financeiro. Atribuições são transacionais, auditadas e exigem uma análise vigente; repetições preservam o resultado. O frontend exige nova análise após alterar escolhas e preserva arquivo/modo/parcelas em resposta incerta. Se quitação ou mudança oficial tornar uma escolha obsoleta, uma nova consulta somente de leitura permite revisar os vínculos ainda necessários, sem liberar outro arquivo ou alterar recebimentos.
+
+Validações locais desta entrega:
+
+- **206 testes Node aprovados**, incluindo dez novos testes do gateway de recebíveis; preservados os limites financeiros, autorização, interpretação do original e os modos antigos/quitados.
+- **24 cenários SQL da 029**, **18 da 030** e **23 do combinado** aprovados em PostgreSQL local descartável, com dados sintéticos. Incluem sessão/perfil/carteira, prioridade, pausa, rascunho, fechamento, pagamento, recusa, importação e correções existentes, atribuição idempotente, rollback integral e preservação de arquivos privados/contatos/tempos.
+- **376 cenários distintos de navegador aprovados no conjunto das execuções locais**, com respostas sintéticas. A passagem geral executou 374: 356 passaram e 18 identificaram fixtures/seletores desatualizados ou leituras assíncronas ainda em andamento. Foram corrigidos sem retirar as verificações de valores, carteiras, permissões e repetição segura. Na build final passaram **70 casos** de atendimento, retornos, validação e importações, incluindo dois novos de recuperação; depois passaram **11 regressões focadas**, cobrindo os casos restantes da passagem geral. Nenhuma falha ficou pendente. A passagem geral inteira não foi repetida após os ajustes específicos.
+- Build de produção e TypeScript aprovados. As migrations **001..028 permanecem inalteradas**.
+
+Hashes SHA256:
+
+- 029: `0471c84f89a89a0810d78896e392b0599158af5a750071e6ef8142d27c1ca0b3`.
+- 030: `6b2093f97ac98ee2a2992eca0bbbf7ab1e1dffe79e65158e3883f5fd112d6ed3`.
+- Combinado 022..030: `2071e417b7193d31531cfd98569aefbbbf6492ededb3b7952034ca9cc3b34660`.
+
+Ativação remota necessária: executar **ativar-recebiveis-operacao.sql**, atualizar a função existente **receivables-import** e conferir o site **0.12.0**. Depois, reimportar o relatório de abertos e escolher as responsáveis ausentes. [Guia de ativação e uso](cobranca-atendimento-retornos.md). Não foi executado SQL, importado arquivo real ou publicado gateway no Supabase pelo agente. Não há novas credenciais, nomes presumidos ou alterações financeiras de demonstração em produção. Os demais módulos e critérios de homologação pendentes continuam registrados nas seções anteriores.

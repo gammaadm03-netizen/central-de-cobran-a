@@ -16,12 +16,13 @@ export function receivableError(error: unknown, fallback: string) {
   if (code === '40001') return 'A base mudou desde a análise. Analise o arquivo novamente antes de concluir.';
   if (code === '23505') return 'Este arquivo já foi importado para esta origem. Nenhum dado foi alterado.';
   if (code === '23514' || code === '22023') return 'A importação foi recusada. Confira as linhas e confirme o relatório completo da mesma origem.';
+  if (code === 'P0030') return error && typeof error === 'object' && 'activation_required' in error && error.activation_required === true ? 'Atualize o banco e a função receivables-import para definir as cobradoras na importação.' : 'Confira a responsável de cada cliente sem carteira e os vínculos das parcelas. Analise o mesmo arquivo novamente antes de concluir.';
   if (code === 'P0023' || code === 'P0024') return error && typeof error === 'object' && 'activation_required' in error && error.activation_required === true ? 'Ative a atualização de importação de Contas a Receber no banco e no serviço antes de concluir. Nenhum dado foi alterado.' : 'A importação encontrou uma divergência. Confira os vínculos entre as parcelas e reanalise o arquivo antes de concluir. Nenhum dado desta tentativa foi alterado.';
   if (code === 'PGRST202' || code === '42P01') return 'Este módulo precisa da atualização do banco de dados. Solicite a atualização de Contas a Receber à administração.';
   return fallback;
 }
 
-export async function receivableImportRequest<T>(body: { action: 'preview' | 'commit'; file_name: string; file_base64: string; complete?: boolean; previous_import_id?: string | null; mode?: 'open' | 'received'; title_mappings?: Record<string, string>; previous_financial_revision?: string | null; confirm_corrections?: boolean }, signal?: AbortSignal): Promise<T> {
+export async function receivableImportRequest<T>(body: { action: 'preview' | 'commit'; file_name: string; file_base64: string; complete?: boolean; previous_import_id?: string | null; mode?: 'open' | 'received'; title_mappings?: Record<string, string>; collector_mappings?: Record<string, string>; previous_financial_revision?: string | null; confirm_corrections?: boolean }, signal?: AbortSignal): Promise<T> {
   const client = supabase;
   if (!client) throw { code: 'PGRST301' };
   const { data: { session } } = await client.auth.getSession();

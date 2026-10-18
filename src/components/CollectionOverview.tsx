@@ -4,7 +4,7 @@ import { addCivilDays } from '../lib/financial-dates';
 import { dateLabel, formatCents } from '../lib/payables';
 import '../collections-management.css';
 
-export interface CollectionSelection { start?: string; end?: string; status?: string; collector?: string; nextAction?: string }
+export interface CollectionSelection { start?: string; end?: string; status?: string; collector?: string; nextAction?: string; titleId?: string; queue?: 'active' | 'returns' | 'history' | 'all' }
 interface Group { title_count: number; amount_cents: number }
 interface DelayBand extends Group { key: string; label: string; min_days: number; max_days: number | null }
 interface CollectionSummary {

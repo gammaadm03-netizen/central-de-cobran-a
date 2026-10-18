@@ -1,6 +1,6 @@
 # Contas a Receber, Cobrança e base de comissões — 0.9.0
 
-As regras de importação e recebimento desta página permanecem vigentes. A interface operacional de cobrança foi ampliada na **0.10.0**, com quatro abas, atendimento lateral e tempo persistente; consultar [Central de Cobrança](central-cobranca-operacao.md).
+As regras de importação e recebimento desta página permanecem vigentes. A atualização **0.12.0** permite escolher responsáveis na importação dos abertos, acrescenta retornos prioritários e encaminha pagamentos informados à validação fora da fila ativa. Consultar o [guia atual de atendimento e retornos](cobranca-atendimento-retornos.md). As referências à interface anterior abaixo são históricas.
 
 A operação utiliza os dois modelos Excel enviados pelo usuário, sem renomear colunas. A equipe registra no sistema de origem e importa na Central; o arquivo de quitados confirma os recebimentos, sem exigir que a cobradora informe manualmente o mesmo pagamento.
 
@@ -42,7 +42,7 @@ Vencido significa **vencimento anterior ao dia atual de São Paulo**. Um título
 
 A visão gerencial recupera carteira por responsável, títulos/clientes, valor vencido, atraso médio, títulos com/sem ação, pendências de validação, retornos de hoje/atrasados e as seis faixas de atraso. Os atalhos abrem os títulos correspondentes sem perder a restrição de vencidos. Contato, retorno do cliente, promessa, próxima ação, atribuição e histórico continuam nos formulários existentes. A Diretoria consulta; a cobradora trabalha somente na própria carteira.
 
-Pagamento apenas informado continua pendente até a confirmação financeira ou o relatório de quitados. Recebimentos validados saem da carteira ativa. Histórico permanece consultável, sem gerar nova cobrança ou redistribuição de responsáveis.
+Pagamento apenas informado continua pendente até a confirmação financeira ou o relatório de quitados. Na 0.12.0, fica na validação financeira, fora da fila ativa de atendimentos. Se não localizado, volta à mesma cobradora com retorno para hoje. Recebimentos validados saem da cobrança e alimentam a base de comissões. Histórico permanece consultável, sem gerar nova cobrança ou redistribuição de responsáveis.
 
 ## Diretoria e comissões
 

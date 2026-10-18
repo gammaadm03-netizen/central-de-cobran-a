@@ -5,6 +5,7 @@ import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { createReceivablesGateway } from './handler.mjs';
 import { isReceivableIdentifierHeader, readReceivableIdentifierCell } from '../../../src/lib/receivables-parser.mjs';
+import { receivableCustomerKey } from '../../../src/lib/receivables-parser.mjs';
 
 const USER = '10000000-0000-4000-8000-000000000001';
 const SESSION = '20000000-0000-4000-8000-000000000001';
@@ -63,20 +64,25 @@ function setup(options = {}) {
       if (options.capabilityError) return json(options.capabilityError, options.capabilityStatus ?? 404);
       return json(options.capabilities ?? { open_sync:true, received_import:true });
     }
-    if (['/rest/v1/rpc/preview_receivables_import','/rest/v1/rpc/preview_receivables_open_import','/rest/v1/rpc/preview_receivables_received_import'].includes(path)) {
+    if (['/rest/v1/rpc/preview_receivables_import','/rest/v1/rpc/preview_receivables_open_import','/rest/v1/rpc/preview_receivables_received_import','/rest/v1/rpc/preview_receivables_open_import_with_collectors'].includes(path)) {
       assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
       if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
       if (options.previewPayload) return json(options.previewPayload);
       if (!path.endsWith('/preview_receivables_import')) {
-        const mode = path.endsWith('/preview_receivables_open_import') ? 'open' : 'received';
-        return json({ mode,previous_import_id:null,financial_revision:'17',row_count:data.p_rows.length,new_count:data.p_rows.length,open_count:0,changed_count:0,pending_count:0,validated_in_source_count:0,received_count:data.p_rows.length,matched_count:0,correction_count:0,historical_count:0,conflict_count:0,can_commit:true,errors:[],rows:data.p_rows.map((row,index) => ({ ...row,line:index+1,title_id:null,outcome:mode==='open'?'NEW':'NEW_RECEIPT',candidates:[] })) });
+        const withCollectors = path.endsWith('/preview_receivables_open_import_with_collectors');
+        const mode = path.endsWith('/preview_receivables_open_import') || withCollectors ? 'open' : 'received';
+        const groups = new Map(); for (const row of data.p_rows) { const key = receivableCustomerKey(row), group = groups.get(key) ?? []; group.push(row); groups.set(key, group); }
+        const assignments = [...groups].map(([customer_key, rows]) => ({ customer_key, client_name: rows[0].client_name, client_document: rows[0].client_document, collector_id: data.p_collector_mappings?.[customer_key] ?? null, collector_name: data.p_collector_mappings?.[customer_key] ? 'Responsável sintética' : null, row_count: rows.length, requires_selection: true, locked: false }));
+        const missing = assignments.filter(row => row.collector_id === null).length;
+        return json({ mode,previous_import_id:null,financial_revision:'17',row_count:data.p_rows.length,new_count:data.p_rows.length,open_count:0,changed_count:0,pending_count:0,validated_in_source_count:0,received_count:data.p_rows.length,matched_count:0,correction_count:0,historical_count:0,conflict_count:0,can_commit:!withCollectors || missing === 0,errors:[],rows:data.p_rows.map((row,index) => ({ ...row,line:index+1,title_id:null,outcome:mode==='open'?'NEW':'NEW_RECEIPT',candidates:[], ...(withCollectors ? { customer_key: receivableCustomerKey(row) } : {}) })), ...(withCollectors ? { collector_assignment_version: '030', customer_collector_assignments: assignments, missing_collector_count: missing } : {}) });
       }
       return json({ previous_import_id: null, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, pending_count: 0, validated_in_source_count: 0 });
     }
-    if (['/rest/v1/rpc/commit_receivables_import_from_gateway','/rest/v1/rpc/commit_receivables_open_import_from_gateway','/rest/v1/rpc/commit_receivables_received_import_from_gateway'].includes(path)) {
+    if (['/rest/v1/rpc/commit_receivables_import_from_gateway','/rest/v1/rpc/commit_receivables_open_import_from_gateway','/rest/v1/rpc/commit_receivables_received_import_from_gateway','/rest/v1/rpc/commit_receivables_open_import_with_collectors_from_gateway'].includes(path)) {
       assert.equal(init.headers.apikey, SERVICE); assert.equal(init.headers.Authorization, `Bearer ${SERVICE}`);
       if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
-      return json(options.commitPayload ?? { import_id: IMPORT, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, pending_count: 0, validated_in_source_count: 0, ...(path.endsWith('/commit_receivables_open_import_from_gateway') ? { mode:'open' } : path.endsWith('/commit_receivables_received_import_from_gateway') ? { mode:'received' } : {}) });
+      const withCollectors = path.endsWith('/commit_receivables_open_import_with_collectors_from_gateway');
+      return json(options.commitPayload ?? { import_id: IMPORT, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, pending_count: 0, validated_in_source_count: 0, ...(path.endsWith('/commit_receivables_open_import_from_gateway') || withCollectors ? { mode:'open' } : path.endsWith('/commit_receivables_received_import_from_gateway') ? { mode:'received' } : {}), ...(withCollectors ? { collector_assignment_version: '030', assigned_title_count: data.p_rows.length, assigned_customer_count: Object.keys(data.p_collector_mappings).length } : {}) });
     }
     throw new Error('Unexpected upstream path');
   };
@@ -358,5 +364,121 @@ test('activation_required distinguishes missing schema capabilities from financi
     assert.equal(unavailable.status, 409); const activation = await unavailable.json(); assert.equal(activation.code, code); assert.equal(activation.activation_required, true);
     const conflict = setup({ rpcError:{ code,message:'private SQL' } }); const refused = await conflict.send(request);
     assert.equal(refused.status, 409); const financial = await refused.json(); assert.equal(financial.code, code); assert.equal(Object.hasOwn(financial, 'activation_required'), false);
+  }
+});
+
+test('collector choices route only explicit open imports through 030 while preserving verified source and actor proof', async () => {
+  const collector = '40000000-0000-4000-8000-000000000001';
+  const choices = { 'name:CLIENTE EXCLUSIVAMENTE SINTÉTICO': collector };
+  for (const action of ['preview', 'commit']) {
+    const app = setup(), request = body(action, { mode: 'open', file_base64: encode(OPEN_CSV), title_mappings: { '1': 'NEW' }, collector_mappings: choices });
+    const response = await app.send(request); assert.equal(response.status, 200);
+    const payload = await response.json(), call = app.calls.at(-1);
+    assert.equal(call.path, `/rest/v1/rpc/${action === 'preview' ? 'preview_receivables_open_import_with_collectors' : 'commit_receivables_open_import_with_collectors_from_gateway'}`);
+    assert.deepEqual(call.data.p_collector_mappings, choices); assert.deepEqual(call.data.p_title_mappings, { '1': 'NEW' });
+    assert.equal(call.data.p_rows[0].client_name, ERP_ROW[0]); assert.equal(call.data.p_rows[0].amount_cents, 12590);
+    assert.equal(Object.hasOwn(call.data, 'p_complete'), false); assert.equal(Object.hasOwn(call.data, 'p_confirm_corrections'), false);
+    if (action === 'preview') {
+      assert.equal(call.init.headers.Authorization, `Bearer ${TOKEN}`); assert.equal(payload.preview.collector_assignment_version, '030');
+      assert.equal(payload.preview.customer_collector_assignments[0].collector_id, collector); assert.equal(payload.preview.missing_collector_count, 0); assert.equal(payload.preview.can_commit, true);
+      assert.deepEqual(Object.keys(call.data).sort(), ['p_collector_mappings', 'p_rows', 'p_scope', 'p_title_mappings']);
+    } else {
+      assert.equal(call.init.headers.Authorization, `Bearer ${SERVICE}`); assert.equal(call.data.p_user_id, USER); assert.equal(call.data.p_session_id, SESSION);
+      assert.equal(call.data.p_previous_financial_revision, '17'); assert.equal(call.data.p_previous_import_id, null);
+      assert.equal(call.data.p_file_sha256, createHash('sha256').update(OPEN_CSV).digest('hex')); assert.equal(call.data.p_file_base64, request.file_base64);
+      assert.equal(payload.collector_assignment_version, '030'); assert.equal(payload.assigned_title_count, 1); assert.equal(payload.assigned_customer_count, 1); assert.equal(Object.keys(call.data).length, 11);
+    }
+  }
+});
+
+test('an explicit empty collector selection permits a read-only preview and keeps completion blocked', async () => {
+  const app = setup(), response = await app.send(body('preview', { mode: 'open', collector_mappings: {}, file_base64: encode(OPEN_CSV) }));
+  assert.equal(response.status, 200); const payload = await response.json();
+  assert.equal(payload.preview.missing_collector_count, 1); assert.equal(payload.preview.can_commit, false);
+  assert.deepEqual(payload.preview.customer_collector_assignments, [{ customer_key: 'name:CLIENTE EXCLUSIVAMENTE SINTÉTICO', client_name: ERP_ROW[0], client_document: null, collector_id: null, collector_name: null, row_count: 1, requires_selection: true, locked: false }]);
+  assert.equal(app.calls.some(call => call.path.includes('/commit_')), false);
+});
+
+test('collector selections enforce bounded official keys and UUID values before decoding financial content', async () => {
+  const collector = '40000000-0000-4000-8000-000000000001';
+  const invalid = [null, [], 'selection', true, { 'name:CLIENTE': 'NEW' }, { 'name:CLIENTE': { id: collector } }, { 'name:CLIENTE': null }, { 'name:CLIENTE': 1 }, { 'name:CLIENTE': ' ' + collector },
+    { '': collector }, { 'CLIENTE': collector }, { 'name:': collector }, { 'name: ': collector }, { 'name: CLIENTE': collector }, { 'name:CLIENTE ': collector }, { 'name:CLIENTE\n': collector }, { 'name:CLIENTE\u007f': collector }, { 'name:CLIENTE\u0085': collector }, { ['name:' + 'A'.repeat(1501)]: collector }, { 'cnpj:123': collector }, { 'cnpj:12345678000195x': collector }, { 'cnpj:12.345.678/0001-95': collector }, Object.fromEntries(Array.from({ length: 5001 }, (_, n) => [`name:CLIENTE ${n}`, collector]))];
+  const oversized = Object.fromEntries(Array.from({ length: 5000 }, (_, n) => [`name:CLIENTE ${n} ${'A'.repeat(200)}`, collector]));
+  assert(new TextEncoder().encode(JSON.stringify(oversized)).byteLength > 1024 * 1024); invalid.push(oversized);
+  for (const collector_mappings of invalid) {
+    const app = setup(), response = await app.send(body('commit', { mode: 'open', collector_mappings, file_name: 'invalid.xlsx', file_base64: '!bad!' }));
+    assert.equal(response.status, 400); assert.equal(app.calls.length, 2); assert.equal(app.workbookCalls(), 0);
+  }
+});
+
+test('legacy requests and received reports cannot carry collector choices, and absent choices preserve old RPCs', async () => {
+  for (const mode of [undefined, 'received']) for (const action of ['preview', 'commit']) {
+    const app = setup(), response = await app.send(body(action, { ...(mode ? { mode } : {}), collector_mappings: {}, file_base64: encode(mode === 'received' ? RECEIVED_CSV : OPEN_CSV) }));
+    assert.equal(response.status, 400); assert.equal(app.calls.length, 2);
+  }
+  for (const mode of ['open', 'received']) for (const action of ['preview', 'commit']) {
+    const app = setup(), response = await app.send(body(action, { mode, file_base64: encode(mode === 'received' ? RECEIVED_CSV : OPEN_CSV) }));
+    assert.equal(response.status, 200); assert.equal(Object.hasOwn(app.calls.at(-1).data, 'p_collector_mappings'), false);
+    assert.equal(app.calls.at(-1).path.includes('with_collectors'), false);
+  }
+});
+
+test('missing 030 functions require activation and never retry a permissive earlier import path', async () => {
+  for (const action of ['preview', 'commit']) for (const code of ['PGRST202', '42883']) {
+    const app = setup({ rpcError: { code, message: 'SECRET SQL', details: SERVICE, hint: TOKEN }, rpcStatus: 404 });
+    const response = await app.send(body(action, { mode: 'open', collector_mappings: {}, file_base64: encode(OPEN_CSV) }));
+    assert.equal(response.status, 409); const payload = await response.json(); assert.equal(payload.code, 'P0030'); assert.equal(payload.activation_required, true);
+    assert.match(payload.error, /Ative a atualização/); assert.equal(app.calls.length, 4); assert(app.calls.at(-1).path.includes('with_collectors'));
+    assert(!JSON.stringify({ payload, logs: app.logs }).includes('SECRET')); assert(!JSON.stringify(payload).includes(SERVICE)); assert(!JSON.stringify(payload).includes(TOKEN));
+  }
+});
+
+test('030 selection conflicts return safe review guidance without falsely requesting schema activation', async () => {
+  for (const action of ['preview', 'commit']) {
+    const app = setup({ rpcError: { code: 'P0030', message: 'SECRET SQL', details: SERVICE, hint: TOKEN }, rpcStatus: 400 });
+    const response = await app.send(body(action, { mode: 'open', collector_mappings: {}, file_base64: encode(OPEN_CSV) }));
+    assert.equal(response.status, 409); const payload = await response.json(); assert.equal(payload.code, 'P0030'); assert.equal(Object.hasOwn(payload, 'activation_required'), false);
+    assert.match(payload.error, /selecione a responsável/); assert.equal(app.calls.filter(call => call.path.includes('with_collectors')).length, 1);
+    assert(!JSON.stringify({ payload, logs: app.logs }).includes('SECRET')); assert(!JSON.stringify(payload).includes(SERVICE)); assert(!JSON.stringify(payload).includes(TOKEN));
+  }
+});
+
+test('030 preview validates official customer grouping and every assignment field without forwarding malformed envelopes', async () => {
+  const request = body('preview', { mode: 'open', collector_mappings: {}, file_base64: encode(OPEN_CSV) }), app = setup();
+  const response = await app.send(request); assert.equal(response.status, 200); const good = (await response.json()).preview, assignment = good.customer_collector_assignments[0];
+  const updates = [{ collector_assignment_version: undefined }, { collector_assignment_version: '029' }, { customer_collector_assignments: null }, { customer_collector_assignments: [] }, { customer_collector_assignments: [assignment, assignment] }, { missing_collector_count: -1 }, { missing_collector_count: 0 }, { missing_collector_count: 1.5 }, { can_commit: true },
+    ...[{ customer_key: 'name:OTHER' }, { client_name: 'Outra origem' }, { client_document: '12345678000195' }, { branch: 'Outra filial' }, { issued_on: '2026-10-02' }].map(update => ({ rows: [{ ...good.rows[0], ...update }] })),
+    ...[{ customer_key: 'name:OTHER' }, { client_name: 'Outra origem' }, { client_document: '12345678000195' }, { row_count: 2 }, { row_count: '1' }, { collector_id: 'invalid' }, { collector_name: 'Sem vínculo' }, { requires_selection: 'true' }, { locked: null }].map(update => ({ customer_collector_assignments: [{ ...assignment, ...update }] }))];
+  for (const update of updates) {
+    const invalid = setup({ previewPayload: { ...good, ...update } }), result = await invalid.send(request);
+    assert.equal(result.status, 503); assert.deepEqual(await result.json(), { error: 'Não foi possível confirmar a operação. Atualize o histórico antes de tentar novamente.' });
+  }
+});
+
+test('030 groups repeated customers across rows and preserves CNPJ identity and existing locked owners', async () => {
+  const collector = '40000000-0000-4000-8000-000000000001', csv = CSV + CSV.split('\r\n')[1].replace('NF-1', 'NF-2') + '\r\n';
+  const request = body('preview', { mode: 'open', collector_mappings: { 'cnpj:12345678000195': collector }, file_base64: encode(csv) }), app = setup();
+  const response = await app.send(request); assert.equal(response.status, 200); const preview = (await response.json()).preview;
+  assert.equal(preview.customer_collector_assignments.length, 1); assert.equal(preview.customer_collector_assignments[0].row_count, 2);
+  const locked = setup({ previewPayload: { ...preview, customer_collector_assignments: [{ ...preview.customer_collector_assignments[0], requires_selection: false, locked: true }] } });
+  const inherited = await locked.send({ ...request, collector_mappings: {} }); assert.equal(inherited.status, 200);
+  assert.equal((await inherited.json()).preview.customer_collector_assignments[0].locked, true);
+});
+
+test('030 does not relax source limits, authenticated permissions, or financial revision fences', async () => {
+  for (const extra of [{ file_base64: encode(Buffer.alloc(2 * 1024 * 1024 + 1)) }, { previous_financial_revision: null }, { complete: false }, { p_user_id: USER }]) {
+    const app = setup(), response = await app.send(body('commit', { mode: 'open', collector_mappings: {}, file_base64: encode(OPEN_CSV), ...extra }));
+    assert.equal(response.status, 400); assert.equal(app.calls.length, 2);
+  }
+  const app = setup({ permissions: [{ resource: 'contas_receber', action: 'import' }] }), response = await app.send(body('commit', { mode: 'open', collector_mappings: {}, file_name: 'bad.xlsx', file_base64: '!bad!' }));
+  assert.equal(response.status, 403); assert.equal(app.calls.length, 2); assert.equal(app.workbookCalls(), 0);
+});
+
+test('030 commit requires its assignment version and safe outcome counters before claiming success', async () => {
+  const request = body('commit', { mode: 'open', collector_mappings: {}, file_base64: encode(OPEN_CSV) });
+  const good = { mode: 'open', import_id: IMPORT, row_count: 1, collector_assignment_version: '030', assigned_title_count: 1, assigned_customer_count: 1 };
+  for (const update of [{ collector_assignment_version: undefined }, { collector_assignment_version: '029' }, { assigned_title_count: -1 }, { assigned_customer_count: 2 }, { assigned_title_count: Number.MAX_SAFE_INTEGER + 1 }, { assigned_customer_count: '1' }]) {
+    const app = setup({ commitPayload: { ...good, ...update } }), response = await app.send(request);
+    assert.equal(response.status, 503); assert.equal(app.calls.filter(call => call.path.includes('/commit_')).length, 1);
   }
 });

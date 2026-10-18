@@ -1,11 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import { dateLabel, formatCents } from '../lib/payables';
+import { collectionDateTime } from '../lib/collection-workbench';
 import '../collection-secondary.css';
 
 interface Title { id: string; document: string; client_name: string; branch: string; due_date: string; amount_cents: number; collector_id: string | null; payment_source: string | null; payment_reported_date: string | null; revision: number }
 interface Agent { id: string; display_name: string }
 interface Receipt { id: string; amount_cents: number; payment_date: string; validated_at: string }
+interface PaymentReport { id: string; title_id: string; action: 'PAID'; collector_id: string | null; contact_date: string | null; observation: string | null; return_note: string | null; payment_date: string | null; created_at: string }
 export interface CollectionValidationProps { canRead: boolean; canReadFinance?: boolean; canWrite: boolean; canValidate: boolean; isCollector?: boolean; collectorId?: string | null; onChange?: () => void; refreshKey?: number }
 const fields = 'id,document,client_name,branch,due_date,amount_cents,collector_id,payment_source,payment_reported_date,revision';
 function message(error: unknown, fallback: string) {
@@ -56,26 +58,47 @@ export default function CollectionValidation({ canRead, canReadFinance = false, 
     {canReadFinance && <label className="field collection-secondary-filter">Responsável pela carteira<select value={collector} onChange={event => { setCollector(event.target.value); setPage(0); }}><option value="">Todas as responsáveis</option><option value="unassigned">Sem responsável definida</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.display_name}</option>)}</select></label>}
     <div className="table-wrap" aria-busy={loading}><table className="data-table"><caption>Pagamentos aguardando validação financeira</caption><thead><tr><th>Cliente / NF</th><th>Responsável</th><th>Vencimento</th><th>Valor original</th><th>Pagamento informado</th><th>Origem</th><th>Conferência</th></tr></thead><tbody>{loading ? <tr><td colSpan={7} className="empty-state">Carregando fila…</td></tr> : rows.length ? rows.map(row => <tr key={row.id}><td><strong>{row.client_name}</strong><div>{row.document} · Filial {row.branch}</div></td><td>{agents.find(agent => agent.id === row.collector_id)?.display_name ?? (row.collector_id ? 'Responsável atribuída' : 'Sem responsável definida')}</td><td>{dateLabel(row.due_date)}</td><td>{formatCents(row.amount_cents)}</td><td>{dateLabel(row.payment_reported_date)}</td><td>{row.payment_source === 'COBRANCA' ? 'Cobrança' : row.payment_source === 'IMPORTACAO_DIARIA' ? 'Importação diária' : 'Origem pendente'}</td><td><button type="button" className="button secondary" onClick={() => { setSelected(row); setNotice(''); }}>Conferir {row.document}</button></td></tr>) : <tr><td colSpan={7} className="empty-state">{error ? 'Fila indisponível.' : 'Nenhum pagamento pendente para este filtro.'}</td></tr>}</tbody></table></div>
     <div className="pagination"><span>{count.toLocaleString('pt-BR')} pendentes · página {page + 1} de {Math.max(1, Math.ceil(count / 25))}</span><button type="button" className="button secondary" disabled={loading || !page} onClick={() => setPage(value => value - 1)}>Página anterior da fila</button><button type="button" className="button secondary" disabled={loading || (page + 1) * 25 >= count} onClick={() => setPage(value => value + 1)}>Próxima página da fila</button></div>
-    {selected && <ValidationDetail key={`${selected.id}:${selected.revision}`} row={selected} canWrite={canReadFinance && canWrite} canValidate={canReadFinance && canValidate} onClose={() => setSelected(null)} onCompleted={completed} />}
+    {selected && <ValidationDetail key={`${selected.id}:${selected.revision}`} row={selected} agents={agents} canWrite={canReadFinance && canWrite} canValidate={canReadFinance && canValidate} onClose={() => setSelected(null)} onCompleted={completed} />}
   </section>;
 }
 
-function ValidationDetail({ row, canWrite, canValidate, onClose, onCompleted }: { row: Title; canWrite: boolean; canValidate: boolean; onClose: () => void; onCompleted: (text: string) => void }) {
+function ValidationDetail({ row, agents, canWrite, canValidate, onClose, onCompleted }: { row: Title; agents: Agent[]; canWrite: boolean; canValidate: boolean; onClose: () => void; onCompleted: (text: string) => void }) {
   const [date, setDate] = useState(row.payment_reported_date ?? ''), [decision, setDecision] = useState('CONFIRM'), [observation, setObservation] = useState('');
   const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [readReady, setReadReady] = useState(false), [receipts, setReceipts] = useState<Receipt[]>([]), [error, setError] = useState('');
+  const [report, setReport] = useState<PaymentReport | null>(null);
   useEffect(() => {
     const client = supabase, abort = new AbortController();
     if (!client) { setLoading(false); setError('Sua sessão expirou. Entre novamente.'); return; }
-    const read = async () => {
+    const readReceipts = async () => {
       const columns = 'id,amount_cents,payment_date,validated_at';
       let result = await client.from('effective_receivable_receipts').select(columns).eq('title_id', row.id).limit(1).abortSignal(abort.signal);
       if (result.error && ['PGRST205', '42P01'].includes(result.error.code)) result = await client.from('receivable_receipts').select(columns).eq('title_id', row.id).limit(1).abortSignal(abort.signal);
       if (result.error) throw result.error;
       return (result.data ?? []) as unknown as Receipt[];
     };
-    void read().then(data => { if (!abort.signal.aborted) { setReceipts(data); setReadReady(true); } }).catch(failure => { if (!abort.signal.aborted) setError(message(failure, 'Não foi possível conferir os recebimentos já registrados. Atualize a fila.')); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
+    const readReport = async (): Promise<PaymentReport | null> => {
+      if (row.payment_source !== 'COBRANCA') return null;
+      const result = await client.from('receivable_collection_events').select('id,title_id,action,collector_id,contact_date,observation,return_note,payment_date,created_at').eq('title_id', row.id).eq('action', 'PAID').order('created_at', { ascending: false }).order('id', { ascending: false }).limit(1).abortSignal(abort.signal);
+      if (result.error) throw result.error;
+      if (!Array.isArray(result.data) || result.data.length > 1) throw new Error('invalid_payment_report');
+      const found = result.data[0] as PaymentReport | undefined;
+      const nullableText = (value: unknown) => value === null || typeof value === 'string';
+      if (found && (found.title_id !== row.id || found.action !== 'PAID' || typeof found.id !== 'string' || !found.id
+        || !nullableText(found.collector_id) || !nullableText(found.contact_date) || !nullableText(found.payment_date)
+        || !nullableText(found.observation) || !nullableText(found.return_note) || typeof found.created_at !== 'string' || !Number.isFinite(Date.parse(found.created_at)))) throw new Error('invalid_payment_report');
+      return found ?? null;
+    };
+    void Promise.allSettled([readReceipts(), readReport()]).then(results => {
+      if (abort.signal.aborted) return;
+      const [receiptResult, reportResult] = results;
+      if (receiptResult.status === 'fulfilled') setReceipts(receiptResult.value);
+      if (reportResult.status === 'fulfilled') setReport(reportResult.value);
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') { setReadReady(false); setError(message(failed.reason, 'Não foi possível conferir os recebimentos ou o relato original da cobrança. Atualize a fila.')); return; }
+      setReadReady(true);
+    }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
-  }, [row.id]);
+  }, [row.id, row.payment_source]);
   function validDate() {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < '1900-01-01' || date > '2199-12-31') return false;
     const parsed = new Date(`${date}T12:00:00Z`);
@@ -106,9 +129,13 @@ function ValidationDetail({ row, canWrite, canValidate, onClose, onCompleted }: 
   }
   return <section className="collection-validation-detail" aria-label={`Conferência financeira de ${row.document}`}><div className="panel-header"><h3>Conferência de {row.document}</h3><button type="button" className="button secondary" disabled={busy} onClick={onClose}>Fechar conferência</button></div>
     <p>{row.client_name} · Valor original {formatCents(row.amount_cents)} · Vencimento {dateLabel(row.due_date)}</p>
+    {row.payment_source === 'COBRANCA' && <section className="notice" aria-label="Relato original da cobrança"><strong>Relato original da cobrança</strong>{loading ? <p>Consultando o relato registrado…</p> : report ? <>
+      <p><strong>Pagamento informado pela cobradora:</strong> {dateLabel(report.payment_date)}<br /><strong>Registrado em:</strong> {collectionDateTime(report.created_at)}<br /><strong>Responsável pelo relato:</strong> {agents.find(agent => agent.id === report.collector_id)?.display_name || 'Responsável registrada na cobrança'}</p>
+      <p><strong>Observação da cobradora:</strong></p><p style={{ whiteSpace: 'pre-wrap' }}>{report.observation || 'Não informada.'}</p>{report.return_note && <p style={{ whiteSpace: 'pre-wrap' }}>{report.return_note}</p>}
+    </> : <p>{readReady ? 'Não há relato de pagamento da cobrança disponível para este título.' : 'O relato original ainda não pôde ser conferido. Atualize a fila.'}</p>}<p className="help-text">O relato é preservado no histórico. Confirme a entrada bancária e informe abaixo a data real do recebimento.</p></section>}
     {loading && <p className="help-text" role="status">Conferindo recebimentos registrados…</p>}{error && <p className="notice error" role="alert">{error}</p>}
     {receipts.map(receipt => <p className="notice" key={receipt.id}>Já existe recebimento validado: {formatCents(receipt.amount_cents)} em {dateLabel(receipt.payment_date)}. Atualize a fila antes de qualquer nova conferência.</p>)}
-    {!canWrite && !canValidate ? <p className="notice">Pagamento informado em {dateLabel(row.payment_reported_date)}. Este acesso permite somente consulta.</p> : <form onSubmit={event => void submit(event)}><fieldset disabled={busy || loading || !readReady || receipts.length > 0}><div className="form-grid">
+    {!canWrite && !canValidate ? <p className="notice">Pagamento informado em {dateLabel(row.payment_reported_date)}. Este acesso permite somente consulta.</p> : <form onSubmit={event => void submit(event)}><fieldset disabled={busy || loading || !readReady || receipts.length > 0}>{!row.collector_id && <p className="notice">Este título está sem responsável definida. Para devolver à cobrança, atribua uma cobradora nos detalhes do título em Contas a Receber.</p>}<div className="form-grid">
       <label className="field">Data real do recebimento<input type="date" min="1900-01-01" max="2199-12-31" value={date} onChange={event => { setDate(event.target.value); setError(''); }} /></label>
       {canValidate && <label className="field">Decisão da validação<select value={decision} onChange={event => { setDecision(event.target.value); setError(''); }}><option value="CONFIRM">Confirmar recebimento</option><option value="NOT_LOCATED" disabled={!row.collector_id}>Não localizado — cobrar novamente</option></select></label>}
       {canValidate && <label className="field">Justificativa / observação da validação<textarea value={observation} maxLength={5000} onChange={event => setObservation(event.target.value)} required={decision === 'NOT_LOCATED'} /></label>}

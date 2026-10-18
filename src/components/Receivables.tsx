@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import { dateLabel, formatCents } from '../lib/payables';
+import CollectionValidation from './CollectionValidation';
 import '../receivables.css';
 
 const scope = 'grupo-consolidado';
@@ -30,6 +31,7 @@ export interface ReceivableWorkspaceProps {
   collectorId?: string | null; isCollector?: boolean; onImport?: () => void;
   collectionFilter?: { requestId: number; start?: string; end?: string; status?: string; collector?: string; nextAction?: string };
   onCollectionChange?: () => void; refreshKey?: number;
+  onChange?: () => void; onOpenValidation?: () => void;
 }
 const initialFilters: Filters = { search: '', status: 'ACTIVE', start: '', end: '', branch: '', collector: '', nextAction: '' };
 
@@ -92,10 +94,28 @@ function csv(rows: OperationalTitle[], agents: Agent[], name: string) {
 }
 
 export default function Receivables({ canWrite, canValidate, onImport }: { canWrite: boolean; canValidate: boolean; onImport?: () => void }) {
-  return <ReceivableWorkspace mode="receivables" canWrite={canWrite} canManage={canWrite} canValidate={canValidate} onImport={onImport} />;
+  const [active, setActive] = useState<'titles' | 'validation'>('titles');
+  const [validationVisited, setValidationVisited] = useState(false), [revision, setRevision] = useState(0);
+  const titlesTab = useRef<HTMLButtonElement | null>(null), validationTab = useRef<HTMLButtonElement | null>(null);
+  function openValidation() { setValidationVisited(true); setActive('validation'); }
+  function changed() { setRevision(value => value + 1); }
+  function tabKey(event: KeyboardEvent<HTMLButtonElement>) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 'titles' : event.key === 'End' ? 'validation' : active === 'titles' ? 'validation' : 'titles';
+    if (next === 'validation') { openValidation(); validationTab.current?.focus(); } else { setActive('titles'); titlesTab.current?.focus(); }
+  }
+  return <div className="receivables-module">
+    <div className="tabs" role="tablist" aria-label="Contas a Receber">
+      <button ref={titlesTab} type="button" role="tab" id="receivables-tab-titles" aria-controls="receivables-panel-titles" aria-selected={active === 'titles'} tabIndex={active === 'titles' ? 0 : -1} onKeyDown={tabKey} onClick={() => setActive('titles')}>Títulos</button>
+      <button ref={validationTab} type="button" role="tab" id="receivables-tab-validation" aria-controls="receivables-panel-validation" aria-selected={active === 'validation'} tabIndex={active === 'validation' ? 0 : -1} onKeyDown={tabKey} onClick={openValidation}>Validação financeira</button>
+    </div>
+    <div role="tabpanel" id="receivables-panel-titles" aria-labelledby="receivables-tab-titles" hidden={active !== 'titles'}><ReceivableWorkspace mode="receivables" canWrite={canWrite} canManage={canWrite} canValidate={canValidate} onImport={onImport} onOpenValidation={openValidation} onChange={changed} refreshKey={revision} /></div>
+    <div role="tabpanel" id="receivables-panel-validation" aria-labelledby="receivables-tab-validation" hidden={active !== 'validation'}>{validationVisited && <CollectionValidation canRead canReadFinance canWrite={canWrite} canValidate={canValidate} refreshKey={revision} onChange={changed} />}</div>
+  </div>;
 }
 
-export function ReceivableWorkspace({ mode, canWrite, canManage, canValidate = false, collectorId = null, isCollector = false, onImport, collectionFilter, onCollectionChange, refreshKey = 0 }: ReceivableWorkspaceProps) {
+export function ReceivableWorkspace({ mode, canWrite, canManage, canValidate = false, collectorId = null, isCollector = false, onImport, collectionFilter, onCollectionChange, onChange, onOpenValidation, refreshKey = 0 }: ReceivableWorkspaceProps) {
   const prefix = mode === 'collections' ? 'collection' : 'receivable';
   const [filters, setFilters] = useState(initialFilters), [search, setSearch] = useState('');
   const [rows, setRows] = useState<OperationalTitle[]>([]), [agents, setAgents] = useState<Agent[]>([]);
@@ -133,7 +153,7 @@ export function ReceivableWorkspace({ mode, canWrite, canManage, canValidate = f
     return () => abort.abort();
   }, [filters, page, size, isCollector, collectorId, refresh, mode, refreshKey]);
   function change(key: keyof Filters, value: string) { setFilters(previous => ({ ...previous, [key]: value })); setPage(0); }
-  function completed(message: string) { setNotice(message); setSelected(null); setRefresh(value => value + 1); if (mode === 'collections') onCollectionChange?.(); workspaceRef.current?.scrollIntoView({ block: 'start' }); }
+  function completed(message: string) { setNotice(message); setSelected(null); setRefresh(value => value + 1); if (mode === 'collections') onCollectionChange?.(); onChange?.(); workspaceRef.current?.scrollIntoView({ block: 'start' }); }
   async function exportRows() {
     if (loading || exporting || !count) return;
     const abort = new AbortController(), frozen = { ...filters }; exportAbort.current = abort; setExporting(true); setExportProgress('Preparando exportação…'); setError('');
@@ -163,10 +183,10 @@ export function ReceivableWorkspace({ mode, canWrite, canManage, canValidate = f
   const pages = Math.max(1, Math.ceil(count / size)), unbound = isCollector && !collectorId;
   const collectionDateLimit = mode === 'collections' ? previousDay(rows[0]?.collection_as_of_date ?? today()) : undefined;
   return <section ref={workspaceRef} className="panel receivables-workspace" aria-labelledby={`${prefix}-title`}>
-    <div className="panel-header"><div><h2 id={`${prefix}-title`}>{mode === 'collections' ? isCollector ? 'Minha carteira de cobrança' : 'Carteiras de cobrança' : 'Títulos de Contas a Receber'}</h2><p className="muted">{mode === 'collections' ? 'Somente títulos com vencimento anterior a hoje, pela data oficial de São Paulo. Contatos e pagamentos informados preservam a carteira até a validação financeira.' : 'Importação completa identifica ausências; somente a validação financeira confirma o recebimento.'}</p></div><div className="inline-actions">{onImport && <button type="button" className="button" onClick={onImport}>Ir para Importar Bases</button>}<button type="button" className="button secondary" disabled={loading || unbound} onClick={() => { setNotice(''); setRefresh(value => value + 1); }}>Atualizar títulos</button></div></div>
+    <div className="panel-header"><div><h2 id={`${prefix}-title`}>{mode === 'collections' ? isCollector ? 'Minha carteira de cobrança' : 'Carteiras de cobrança' : 'Títulos de Contas a Receber'}</h2><p className="muted">{mode === 'collections' ? 'Somente títulos com vencimento anterior a hoje, pela data oficial de São Paulo. Contatos e pagamentos informados preservam a carteira até a validação financeira.' : 'Consulte os títulos importados e confira os pagamentos informados pela cobrança na aba Validação financeira.'}</p></div><div className="inline-actions">{onImport && <button type="button" className="button" onClick={onImport}>Ir para Importar Bases</button>}<button type="button" className="button secondary" disabled={loading || unbound} onClick={() => { setNotice(''); setRefresh(value => value + 1); }}>Atualizar títulos</button></div></div>
     {unbound ? <p className="notice" role="status">Seu login ainda não está vinculado a uma cobradora. Peça à Gerência Geral para configurar o vínculo em Administração. Nenhuma carteira está disponível até essa configuração.</p> : <>
       {error && <p className="notice error" role="alert">{error}</p>}{agentsError && <p className="notice error" role="alert">{agentsError}</p>}{notice && <p className="notice success" role="status">{notice}</p>}
-      {canValidate && mode === 'receivables' && <div className="receivable-queue"><div><strong>Validação financeira</strong><p>Confira a data real e a entrada bancária antes de confirmar. Pagamento apenas informado não compõe o valor recebido.</p></div><button className="button secondary" type="button" onClick={() => change('status', 'PENDING_VALIDATION')}>Abrir fila de validação</button></div>}
+      {canValidate && mode === 'receivables' && <div className="receivable-queue"><div><strong>Validação financeira</strong><p>Confira a data real e a entrada bancária antes de confirmar. Pagamento apenas informado não compõe o valor recebido.</p></div><button className="button secondary" type="button" onClick={() => onOpenValidation ? onOpenValidation() : change('status', 'PENDING_VALIDATION')}>Abrir fila de validação</button></div>}
       <div className="form-grid receivable-filters">
         <label className="field" htmlFor={`${prefix}-search`}>Pesquisar cliente / órgão<input id={`${prefix}-search`} value={search} onChange={event => setSearch(event.target.value)} placeholder="Nome do cliente ou órgão" maxLength={200} /></label>
         <label className="field" htmlFor={`${prefix}-status`}>Situação do título<select id={`${prefix}-status`} value={filters.status} onChange={event => change('status', event.target.value)}><option value="ACTIVE">{mode === 'collections' ? 'Vencidos em aberto' : 'Carteira ativa'}</option><option value="">{mode === 'collections' ? 'Vencidos, incluindo histórico' : 'Todos, incluindo histórico'}</option>{Object.entries(statuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
@@ -180,7 +200,7 @@ export function ReceivableWorkspace({ mode, canWrite, canManage, canValidate = f
       {exportProgress && <p className="help-text" role="status">{exportProgress}</p>}
       <div className="table-wrap" aria-busy={loading}><table className="data-table"><caption className="sr-only">{mode === 'collections' ? 'Carteira de cobrança' : 'Contas a Receber'} com filtros e paginação</caption><thead><tr><th>Cliente / Documento</th><th>Filial / Emissão</th><th>Vencimento / Atraso</th><th>Valor</th>{!isCollector && <th>Cobradora</th>}<th>Situação / Última ação</th><th>Próxima ação</th><th>Pagamento</th><th>Detalhes</th></tr></thead><tbody>{loading ? <tr><td colSpan={isCollector ? 8 : 9} className="empty-state">Carregando títulos…</td></tr> : rows.length ? rows.map(row => <tr key={row.id} className={selected?.id === row.id ? 'receivable-selected' : ''}><td><strong>{row.client_name}</strong><div>Documento / NF: {row.document}</div>{row.client_document && <small>CNPJ: {row.client_document}</small>}</td><td>{row.branch}<div>{dateLabel(row.issued_on)}</div></td><td>{dateLabel(row.due_date)}<div className={delayDays(row) ? 'receivable-overdue' : 'muted'}>{delayDays(row)} dias · {delayLabel(delayDays(row))}</div></td><td className="receivable-money">{formatCents(row.amount_cents)}</td>{!isCollector && <td>{agents.find(agent => agent.id === row.collector_id)?.display_name ?? (row.collector_id ? 'Cobradora atribuída' : 'Sem cobradora definida')}</td>}<td><span className={`badge receivable-status status-${row.status.toLowerCase()}`}>{statuses[row.status]}</span><div>{actions[row.last_action ?? ''] ?? 'Sem ação registrada'}</div>{!row.in_latest_report && row.status !== 'VALIDATED' && <small className="receivable-warning">Ausente no último relatório completo</small>}</td><td>{actions[row.next_action ?? ''] ?? '—'}<div>{dateLabel(row.next_action_date)}</div></td><td><div>Informado: {dateLabel(row.payment_reported_date)}</div><div>Validado: {dateLabel(row.payment_date)}</div></td><td><button type="button" className="button secondary" onClick={() => { setSelected(row); setNotice(''); }} aria-label={`Detalhar título ${row.document} de ${row.client_name}`}>Detalhar</button></td></tr>) : <tr><td colSpan={isCollector ? 8 : 9} className="empty-state">{error ? 'Lista indisponível.' : 'Nenhum título para os filtros selecionados.'}</td></tr>}</tbody></table></div>
       <div className="pagination"><label className="field" htmlFor={`${prefix}-size`}>Por página<select id={`${prefix}-size`} value={size} onChange={event => { setSize(Number(event.target.value)); setPage(0); }}><option value="25">25</option><option value="50">50</option></select></label><span>{count.toLocaleString('pt-BR')} títulos · página {page + 1} de {pages}</span><button type="button" className="button secondary" disabled={loading || !page} onClick={() => setPage(value => value - 1)}>Anterior</button><button type="button" className="button secondary" disabled={loading || page + 1 >= pages} onClick={() => setPage(value => value + 1)}>Próxima</button></div>
-      {selected && <TitleDetails key={`${selected.id}:${selected.revision}`} row={selected} agents={agents} canAssign={canWrite && canManage && !agentsLoading && !agentsError} canContact={canWrite && mode === 'collections' && collectionTitleIsOverdue(selected)} canValidate={canValidate && mode === 'receivables'} onClose={() => setSelected(null)} onCompleted={completed} />}
+      {selected && <TitleDetails key={`${selected.id}:${selected.revision}`} row={selected} agents={agents} canAssign={canWrite && canManage && !agentsLoading && !agentsError} canContact={canWrite && mode === 'collections' && selected.status !== 'PENDING_VALIDATION' && collectionTitleIsOverdue(selected)} canValidate={canValidate && mode === 'receivables'} onClose={() => setSelected(null)} onCompleted={completed} />}
     </>}
   </section>;
 }

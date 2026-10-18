@@ -38,7 +38,7 @@ async function setup(page: Page, options: Options = {}) {
     if (name === 'cash_position') return reply({ accounts: [], total_cents: null, reported_accounts: 0, expected_accounts: 17, latest_position_date: null });
     if (name === 'payables_summary' || name === 'receivables_summary') return reply({ open_cents: 0, overdue_cents: 0, period_cents: 0, active_count: 0, latest_import_at: null });
     if (name === 'current_stock') return reply({ value_cents: null, reference_date: null, source: null });
-    if (name === 'stock_positions' || ['payable_macros', 'payable_imports', 'payable_plan_mappings', 'receivable_imports'].includes(name)) return reply([]);
+    if (name === 'stock_positions' || ['payable_macros', 'payable_imports', 'payable_plan_mappings', 'receivable_imports', 'collection_agents'].includes(name)) return reply([]);
     if (name === 'read_director_inputs') {
       if (body.p_reference_date === options.holdDate) await new Promise<void>(resolve => held.push(resolve));
       if (options.failRead || body.p_reference_date === options.failDate) return reply({ code: 'XX000', message: 'private query and secret' }, 503);

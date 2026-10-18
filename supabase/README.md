@@ -2,6 +2,12 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
+## Atendimento e responsáveis na importação — 0.12.0
+
+O combinado atual `dashboard/ativar-recebiveis-operacao.sql` inclui **022..030**, pulando versões registradas. A 029 acrescenta ciclo de atendimento, pausa, rascunho, finalização e prioridade de retornos oficiais por carteira; integra pendência financeira e devolução à mesma responsável. A 030 permite atribuição explícita de clientes sem carteira durante a importação de abertos e a complementação idempotente de um arquivo já importado. Preserva carteiras existentes, recebimentos e logs anteriores.
+
+Atualizar também a função existente **receivables-import** com `dashboard/receivables-import.ts` e o site **0.12.0**. Não criar outro nome de função nem repetir a instalação inicial. [Guia de ativação e uso](../docs/cobranca-atendimento-retornos.md).
+
 ## Contatos e descrições de Cobrança — 0.11.0
 
 O combinado atual `dashboard/ativar-recebiveis-operacao.sql` inclui **022..028**, pulando versões registradas. A 027 acrescenta contatos compartilhados, alterações auditadas, relatórios e contexto autorizado exclusivamente para títulos vencidos ativos da Cobrança. A 028 acrescenta importações de apoio com original no bucket privado `collection-reference-files`, CSVs privados validados no servidor, prévia e publicação transacional. Não altera identidades financeiras, valores ou recebimentos; contatos mantidos manualmente são preservados em novas importações.

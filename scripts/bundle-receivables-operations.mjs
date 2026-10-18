@@ -11,6 +11,8 @@ export const RECEIVABLES_OPERATION_MIGRATIONS = [
   '026_collection_workbench.sql',
   '027_collection_customer_context.sql',
   '028_collection_reference_imports.sql',
+  '029_collection_workflow.sql',
+  '030_receivable_import_collectors.sql',
 ];
 
 function stripTransaction(sql, source) {
@@ -41,13 +43,15 @@ export async function buildReceivablesOperationsSql() {
     const wrapperTag = dollarTag(`cf_cr_apply_${version.slice(0, 3)}`, statements);
     parts.push(`-- SOURCE: ${source}\nDO ${wrapperTag}\n${statements}\n${wrapperTag};`);
   }
-  return `-- CENTRAL FINANCEIRA — ativação da operação de Contas a Receber e Cobrança (022 a 028).
+  return `-- CENTRAL FINANCEIRA — ativação da operação de Contas a Receber e Cobrança (022 a 030).
 -- Copie o arquivo inteiro no SQL Editor. Uma transação: falha desfaz toda a ativação.
 -- Pode ser executado novamente: pula versões já registradas, sem refazer dados.
 -- Preserva usuários, títulos, responsáveis, recebimentos, saldos, arquivos e históricos.
 -- Exige a base de Contas a Receber e Cobrança até 009; não depende de CP 010 a 021.
 -- Não executa importação de planilhas nem deploy de funções.
 -- 027/028 acrescentam contatos e descrições somente no atendimento da Cobrança.
+-- 029 acrescenta o ciclo de atendimento, a agenda e o encaminhamento para conferência financeira.
+-- 030 exige a escolha oficial de responsável na importação de clientes sem carteira.
 BEGIN;
 
 DO $cf_receivables_activation_base$

@@ -6,21 +6,25 @@ export type CollectionStatus = typeof COLLECTION_STATUSES[number];
 export const COLLECTION_BANDS = [['1_30', '1–30 dias'], ['31_60', '31–60 dias'], ['61_90', '61–90 dias'], ['91_180', '91–180 dias'], ['181_365', '181–365 dias'], ['ACIMA_365', 'Acima de 365 dias']] as const;
 export const COLLECTION_SORTS = [['delay_desc', 'Maior atraso'], ['amount_desc', 'Maior valor'], ['amount_asc', 'Menor valor'], ['delay_asc', 'Menor atraso'], ['client_asc', 'Cliente A–Z'], ['next_date_asc', 'Próximo retorno']] as const;
 export const FINANCIAL_STATUSES: Record<string, string> = { ACTIVE: 'Vencidos em aberto', NEW: 'Novos', OPEN: 'Em aberto', PENDING_VALIDATION: 'Pagamento aguardando validação', NOT_LOCATED: 'Pagamento não localizado', VALIDATED: 'Quitados — histórico' };
-export interface CollectionFilters { search: string; collector: string; band: string; sort: string; status: string; financialStatus: string; dueStart: string; dueEnd: string; nextAction: string; queue: 'active' | 'history' | 'all' }
+export interface CollectionFilters { search: string; collector: string; band: string; sort: string; status: string; financialStatus: string; dueStart: string; dueEnd: string; nextAction: string; queue: 'active' | 'returns' | 'history' | 'all' }
 export const INITIAL_COLLECTION_FILTERS: CollectionFilters = { search: '', collector: '', band: '', sort: 'delay_desc', status: '', financialStatus: 'ACTIVE', dueStart: '', dueEnd: '', nextAction: '', queue: 'active' };
-export interface CollectionTimer { title_id: string; running: boolean; session_id: string | null; started_at: string | null; elapsed_seconds: number; total_seconds: number; actor_total_seconds: number; server_now: string }
+export interface CollectionWorkflow { version: '029'; normal_pause: true; finish_requires_started: true; pending_read_only: true; returns_priority: true; started?: boolean; can_finish?: boolean; recovery_allowed?: boolean }
+export interface CollectionPriority { collector_id: string | null; due_count: number; total_cents: number; next_title_id: string | null; next_due_date: string | null }
+export type CollectionStartBlock = 'RETURN_PRIORITY' | 'ALREADY_RUNNING' | 'UNASSIGNED' | 'PENDING_VALIDATION' | 'SETTLED' | 'READ_ONLY';
+export interface CollectionTimer { title_id: string; running: boolean; session_id: string | null; started_at: string | null; elapsed_seconds: number; total_seconds: number; actor_total_seconds: number; server_now: string; recovery_allowed?: boolean }
 export interface CollectionRow {
   id: string; customer_key: string; document: string; client_name: string; client_document: string | null; branch: string; due_date: string; amount_cents: number;
   collector_id: string | null; collector_name: string | null; status: string; validation_status: string; payment_source: string | null; payment_reported_date: string | null;
   revision: number; operational_status: CollectionStatus; case_revision: number; observation: string | null; next_action_text: string | null; next_date: string | null;
+  return_due?: boolean; return_due_date?: string | null; can_start?: boolean; start_block_reason?: CollectionStartBlock | null;
   delay_days: number; total_work_seconds: number; operational_label?: string; legacy_worked?: boolean; current_timer: { session_id: string | null; started_at: string | null; running: boolean; elapsed_seconds: number };
 }
-export interface CollectionWorkbench { as_of_date: string; server_now: string; count: number; total_cents: number; snapshot_revision: string; rows: CollectionRow[]; active_timer: CollectionTimer | null }
+export interface CollectionWorkbench { as_of_date: string; server_now: string; count: number; total_cents: number; snapshot_revision: string; rows: CollectionRow[]; active_timer: CollectionTimer | null; workflow?: CollectionWorkflow; priority?: CollectionPriority }
 export interface CollectionCase { status: CollectionStatus; observation: string | null; next_action: string | null; next_date: string | null; payment_date: string | null; revision: number; updated_at: string | null; updated_by: string | null; finalized_at: string | null }
 export interface CollectionHistory { id: string; action: string; observation: string | null; created_at: string; contact_date?: string | null; next_action?: string | null; next_date?: string | null; payment_date?: string | null; return_note?: string | null }
 export interface CollectionWorkSession { id: string; [key: string]: unknown }
 export interface CollectionCaseHistory { id: string; status: CollectionStatus; observation: string | null; next_action: string | null; next_date: string | null; finalized: boolean; created_at: string }
-export interface CollectionDetail { title: CollectionRow; case: CollectionCase; timer: CollectionTimer; history: CollectionHistory[]; case_history?: CollectionCaseHistory[]; work_sessions: CollectionWorkSession[] }
+export interface CollectionDetail { title: CollectionRow; case: CollectionCase; timer: CollectionTimer; history: CollectionHistory[]; case_history?: CollectionCaseHistory[]; work_sessions: CollectionWorkSession[]; workflow?: CollectionWorkflow; priority?: CollectionPriority }
 export interface CollectionDraft { status: CollectionStatus; observation: string; nextAction: string; nextDate: string; paymentDate: string }
 export interface CollectionSaveResult { title_id: string; revision: number; case_revision: number; event_id: string | null; finished: boolean; timer: CollectionTimer }
 export interface CollectionAgent { id: string; display_name: string; enabled: boolean }
@@ -50,18 +54,44 @@ export function validCollectionTimer(value: unknown): value is CollectionTimer {
     && integer(timer.elapsed_seconds) && integer(timer.total_seconds) && integer(timer.actor_total_seconds) && timer.total_seconds >= timer.actor_total_seconds && timer.actor_total_seconds >= timer.elapsed_seconds
     && instant(timer.server_now) && (!timer.running || !!timer.session_id && instant(timer.started_at));
 }
+export function collectionWorkflowReady(value: CollectionWorkflow | undefined): value is CollectionWorkflow {
+  return value?.version === '029' && value.normal_pause === true && value.finish_requires_started === true && value.pending_read_only === true && value.returns_priority === true;
+}
+function validPriority(value: CollectionPriority | undefined, day: string) {
+  return !!value && nullableText(value.collector_id) && integer(value.due_count) && integer(value.total_cents) && nullableText(value.next_title_id)
+    && (value.next_due_date === null || collectionDate(value.next_due_date) && value.next_due_date <= day)
+    && (value.due_count === 0 ? value.total_cents === 0 && value.next_title_id === null && value.next_due_date === null : !!value.next_title_id && !!value.next_due_date);
+}
+function validWorkflowRow(row: CollectionRow, day: string) {
+  return typeof row.return_due === 'boolean' && (row.return_due_date === null || collectionDate(row.return_due_date))
+    && (!row.return_due || !!row.return_due_date && row.return_due_date <= day) && typeof row.can_start === 'boolean'
+    && (row.start_block_reason === null || ['RETURN_PRIORITY', 'ALREADY_RUNNING', 'UNASSIGNED', 'PENDING_VALIDATION', 'SETTLED', 'READ_ONLY'].includes(row.start_block_reason ?? ''))
+    && (!row.can_start || row.start_block_reason === null);
+}
+export function collectionStartReason(reason: CollectionStartBlock | null | undefined) {
+  return reason === 'RETURN_PRIORITY' ? 'Atenda primeiro os retornos devidos desta carteira, com data até hoje.'
+    : reason === 'ALREADY_RUNNING' ? 'Já existe um atendimento em andamento. Pause ou finalize esse atendimento antes de iniciar outro.'
+    : reason === 'UNASSIGNED' ? 'Este título está sem responsável definida. Acesse Importar Bases → Contas a Receber para definir as responsáveis na importação. A Gerência Geral também pode conferir a atribuição excepcional.'
+    : reason === 'PENDING_VALIDATION' ? 'Pagamento informado aguarda validação de Contas a Receber. Este título está em leitura.'
+    : reason === 'SETTLED' ? 'Recebimento já validado. O título está disponível somente no histórico.'
+    : reason === 'READ_ONLY' ? 'Seu perfil permite somente leitura; não pode iniciar ou alterar este atendimento.' : '';
+}
 export function assertCollectionWorkbench(value: unknown, isCollector: boolean, collectorId: string | null, filters: CollectionFilters): asserts value is CollectionWorkbench {
   const result = value as CollectionWorkbench;
+  const ready = collectionWorkflowReady(result?.workflow);
   if (!result || !collectionDate(result.as_of_date) || !instant(result.server_now) || !integer(result.count) || !integer(result.total_cents) || typeof result.snapshot_revision !== 'string' || !result.snapshot_revision || !Array.isArray(result.rows) || result.rows.length > 500 || result.rows.length > result.count
     || result.active_timer !== null && (!validCollectionTimer(result.active_timer) || !result.active_timer.running)
-    || result.rows.some(row => !validRow(row, result.as_of_date) || isCollector && row.collector_id !== collectorId || filters.queue === 'active' && row.status === 'VALIDATED') || new Set(result.rows.map(row => row.id)).size !== result.rows.length
+    || ready && (!validPriority(result.priority, result.as_of_date) || result.rows.some(row => !validWorkflowRow(row, result.as_of_date)) || result.active_timer !== null && typeof result.active_timer.recovery_allowed !== 'boolean')
+    || result.rows.some(row => !validRow(row, result.as_of_date) || isCollector && row.collector_id !== collectorId || (filters.queue === 'active' || filters.queue === 'returns') && (row.status === 'VALIDATED' || ready && row.status === 'PENDING_VALIDATION') || ready && filters.queue === 'returns' && row.return_due !== true) || new Set(result.rows.map(row => row.id)).size !== result.rows.length
     || result.rows.reduce((sum, row) => sum + BigInt(row.amount_cents), 0n) > BigInt(result.total_cents) || result.count === 0 && result.total_cents !== 0) throw new Error('invalid_workbench');
 }
 export function assertCollectionDetail(value: unknown, isCollector: boolean, collectorId: string | null): asserts value is CollectionDetail {
   const data = value as CollectionDetail;
   const state = data?.case;
   const day = data?.timer?.server_now && collectionServerDay(data.timer.server_now);
+  const ready = collectionWorkflowReady(data?.workflow);
   if (!data || !validCollectionTimer(data.timer) || !collectionDate(day) || !validRow(data.title, day) || data.timer.title_id !== data.title.id || isCollector && data.title.collector_id !== collectorId
+    || ready && (!validPriority(data.priority, day) || !validWorkflowRow(data.title, day) || typeof data.workflow?.started !== 'boolean' || typeof data.workflow.can_finish !== 'boolean' || typeof data.workflow.recovery_allowed !== 'boolean')
     || !state || !COLLECTION_STATUSES.includes(state.status) || !integer(state.revision) || !nullableText(state.observation) || !nullableText(state.next_action) || state.next_date !== null && !collectionDate(state.next_date)
     || state.payment_date !== null && !collectionDate(state.payment_date) || !Array.isArray(data.history) || data.history.length > 100 || !Array.isArray(data.work_sessions) || data.work_sessions.length > 50
     || data.history.some(item => !item || typeof item.id !== 'string' || typeof item.action !== 'string' || !instant(item.created_at) || !nullableText(item.observation))
@@ -90,6 +120,8 @@ export function workTime(seconds: number) { const value = Math.max(0, Math.floor
 export function collectionError(error: unknown, fallback = 'Não foi possível concluir a operação. Confira sua conexão e tente novamente.') {
   const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
   if (['PGRST202', 'PGRST205', '42883', '42P01', '42703'].includes(code)) return 'A central operacional da Cobrança precisa da atualização do banco. Peça à administração para ativar a operação de cobrança.';
+  if (code === 'P0029') return 'Atenda primeiro os retornos devidos desta carteira. Atualize os títulos e abra a fila de retornos.';
+  if (code === '55000') return 'Inicie este atendimento antes de finalizar. Uma pausa preserva o atendimento já iniciado.';
   if (code === '40001') return 'Este título foi alterado por outra operação. Atualize o detalhe, confira o rascunho e tente novamente.';
   if (code === '42501') return 'Seu perfil não tem permissão para esta operação ou carteira. Atualize os dados de acesso.';
   if (code === 'PGRST301' || code === 'PGRST303') return 'Sua sessão expirou. Entre novamente.';

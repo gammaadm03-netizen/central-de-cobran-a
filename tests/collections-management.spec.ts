@@ -43,17 +43,23 @@ async function setup(page: Page, options: Options = {}) {
     };
   }
   const calls: { name: string; query: string; body: any }[] = [], events: any[] = [];
+  const workflow = { version: '029', normal_pause: true, finish_requires_started: true, pending_read_only: true, returns_priority: true };
+  const started = new Set<string>(); let running: string | null = null;
   const caseState = new Map<string, { status: string; observation: string; next_action: string; next_date: string | null; revision: number }>();
-  const timer = (title_id: string) => ({ title_id, running: false, session_id: null, started_at: null, elapsed_seconds: 0, total_seconds: 0, actor_total_seconds: 0, server_now: `${serverDate}T15:00:00Z` });
+  const timer = (title_id: string) => ({ title_id, running: running === title_id, session_id: running === title_id ? id(800) : null, started_at: running === title_id ? `${serverDate}T15:00:00Z` : null, elapsed_seconds: 0, total_seconds: 0, actor_total_seconds: 0, server_now: `${serverDate}T15:00:00Z`, recovery_allowed: false });
+  const returns = () => visible().filter(row => ['NEW', 'OPEN', 'NOT_LOCATED'].includes(row.status) && row.collector_id && row.next_action_date && row.next_action_date <= serverDate).sort((a, b) => a.next_action_date!.localeCompare(b.next_action_date!) || a.due_date.localeCompare(b.due_date) || a.id.localeCompare(b.id));
+  const priority = () => ({ collector_id: options.collector ? own : null, due_count: returns().length, total_cents: returns().reduce((sum, row) => sum + row.amount_cents, 0), next_title_id: returns()[0]?.id ?? null, next_due_date: returns()[0]?.next_action_date ?? null });
   const stateOf = (row: typeof records[number]) => caseState.get(row.id) ?? { status: row.status === 'PENDING_VALIDATION' ? 'TÍTULO PAGO' : 'NOVO TÍTULO - COBRAR', observation: '', next_action: '', next_date: row.next_action_date, revision: 0 };
   const enrich = (row: typeof records[number]) => ({ ...row, collection_as_of_date: serverDate, operational_status: stateOf(row).status,
     case_revision: stateOf(row).revision, observation: stateOf(row).observation, next_action_text: stateOf(row).next_action,
     next_date: stateOf(row).next_date, delay_days: Math.max(0, Math.round((Date.parse(`${serverDate}T12:00:00Z`) - Date.parse(`${row.due_date}T12:00:00Z`)) / 86400000)),
     collector_name: row.collector_id === own ? 'Responsável A' : row.collector_id === other ? 'Responsável B' : null,
-    total_work_seconds: 0, current_timer: timer(row.id) });
+    total_work_seconds: 0, current_timer: timer(row.id), return_due: returns().some(item => item.id === row.id), return_due_date: returns().some(item => item.id === row.id) ? row.next_action_date : null,
+    can_start: !options.director && !!row.collector_id && ['NEW', 'OPEN', 'NOT_LOCATED'].includes(row.status) && (!running || running === row.id) && (!returns().some(item => item.collector_id === row.collector_id) || returns().some(item => item.id === row.id)), start_block_reason: null });
   function workbench(body: any) {
     let rows = visible();
-    if ((body.p_queue ?? 'active') === 'active') rows = rows.filter(row => row.status !== 'VALIDATED');
+    if ((body.p_queue ?? 'active') === 'active') rows = rows.filter(row => ['NEW', 'OPEN', 'NOT_LOCATED'].includes(row.status));
+    if (body.p_queue === 'returns') rows = returns();
     if (body.p_collector_id) rows = rows.filter(row => row.collector_id === body.p_collector_id);
     if (body.p_unassigned) rows = rows.filter(row => row.collector_id === null);
     if (body.p_financial_status && body.p_financial_status !== 'ACTIVE') rows = rows.filter(row => row.status === body.p_financial_status);
@@ -64,7 +70,7 @@ async function setup(page: Page, options: Options = {}) {
     if (body.p_status) rows = rows.filter(row => stateOf(row).status === body.p_status);
     if (body.p_search) rows = rows.filter(row => [row.client_name, row.document, stateOf(row).observation].join(' ').toLowerCase().includes(body.p_search.toLowerCase()));
     const count = rows.length, total_cents = rows.reduce((sum, row) => sum + row.amount_cents, 0), offset = body.p_offset ?? 0;
-    return { as_of_date: serverDate, server_now: `${serverDate}T15:00:00Z`, snapshot_revision: 'management-fixture-stable', active_timer: null, count, total_cents, rows: rows.slice(offset, offset + (body.p_limit ?? 25)).map(enrich) };
+    return { as_of_date: serverDate, server_now: `${serverDate}T15:00:00Z`, snapshot_revision: 'management-fixture-stable', active_timer: running ? timer(running) : null, workflow, priority: priority(), count, total_cents, rows: rows.slice(offset, offset + (body.p_limit ?? 25)).map(enrich) };
   }
   await page.route(`${project}/**`, async route => {
     const request = route.request(), url = new URL(request.url()), name = url.pathname.split('/').at(-1)!;
@@ -81,13 +87,14 @@ async function setup(page: Page, options: Options = {}) {
     if (name === 'collection_workbench') return reply(workbench(body));
     if (name === 'collection_case_detail') {
       const row = visible().find(item => item.id === body.p_title_id)!;
-      return reply({ title: enrich(row), case: { ...stateOf(row), payment_date: row.payment_reported_date, finalized_at: null, updated_at: null, updated_by: null },
+      return reply({ title: enrich(row), workflow: { ...workflow, started: started.has(row.id), can_finish: started.has(row.id) && row.status !== 'PENDING_VALIDATION', recovery_allowed: false }, priority: priority(), case: { ...stateOf(row), payment_date: row.payment_reported_date, finalized_at: null, updated_at: null, updated_by: null },
         timer: timer(row.id), history: events.filter(event => event.title_id === row.id), work_sessions: [] });
     }
+    if (name === 'collection_work_action') { started.add(body.p_title_id); running = body.p_action === 'START' ? body.p_title_id : null; return reply(timer(body.p_title_id)); }
     if (name === 'save_collection_case') {
       const row = records.find(item => item.id === body.p_title_id)!, previous = stateOf(row);
       const next = { status: body.p_status, observation: body.p_observation, next_action: body.p_next_action, next_date: body.p_next_date, revision: previous.revision + 1 };
-      caseState.set(row.id, next); row.revision++; row.last_action = 'CONTACT'; row.next_action = 'OTHER'; row.next_action_date = body.p_next_date;
+      caseState.set(row.id, next); row.revision++; row.last_action = 'CONTACT'; row.next_action = 'OTHER'; row.next_action_date = body.p_next_date; if (body.p_finish) { started.delete(row.id); running = null; }
       events.push({ id: id(900 + events.length), title_id: row.id, action: 'CONTACT', contact_date: serverDate,
         next_action: 'OTHER', next_date: body.p_next_date, observation: body.p_observation, return_note: null, payment_date: null, created_at: fixed.toISOString() });
       return reply({ title_id: row.id, revision: row.revision, case_revision: next.revision, event_id: events.at(-1)!.id, finished: body.p_finish, timer: timer(row.id) });
@@ -133,14 +140,17 @@ test('restores the overdue portfolio, aging bands, coverage and return indicator
   expect(calls.some(call => /^(commit_|validate_|record_|assign_|save_|collection_work_action)/.test(call.name))).toBe(false);
 });
 
-test('aging-band and pending-payment drilldowns apply real server-date bounds to the existing workspace', async ({ page }) => {
+test('aging-band uses the server date and pending-payment shortcut opens financial validation', async ({ page }) => {
   const { calls } = await setup(page, { serverDate: '2026-11-05' });
   await overview(page).getByRole('button', { name: 'Ver títulos de 31–60 dias', exact: true }).click();
   await expect(page.getByLabel('Vencimento inicial')).toHaveValue(shifted('2026-11-05', -60)); await expect(page.getByLabel('Vencimento final')).toHaveValue(shifted('2026-11-05', -31));
-  await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(1);
-  await general(page); await card(page, 'Pagamento informado').getByRole('button').click(); await expect(page.getByRole('combobox', { name: 'Situação financeira', exact: true })).toHaveValue('PENDING_VALIDATION');
-  await expect(page.getByLabel('Vencimento inicial')).toHaveValue('');
-  expect(calls.some(call => call.name === 'collection_workbench' && call.body.p_financial_status === 'PENDING_VALIDATION')).toBe(true);
+  // This band contains one payment already reported; it remains in the global
+  // obligation summary but no longer belongs to the operational active queue.
+  await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(0);
+  await general(page); await card(page, 'Pagamento informado').getByRole('button').click();
+  await expect(page.getByRole('tab', { name: 'Validação financeira', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByText('A consulta depende do vínculo com sua carteira ou da permissão de Contas a Receber.', { exact: false })).toBeVisible();
+  expect(calls.some(call => call.name === 'collection_workbench' && call.body.p_financial_status === 'PENDING_VALIDATION')).toBe(false);
 });
 
 test('wallet and next-action shortcuts retain visible filters and do not infer a responsible person', async ({ page }) => {
@@ -154,21 +164,22 @@ test('wallet and next-action shortcuts retain visible filters and do not infer a
 test('a collector sees only their own summary and can retain contact, return and historical workflows', async ({ page }) => {
   const { calls } = await setup(page, { collector: true });
   await expect(card(page, 'Carteira vencida atual')).toContainText('R$ 300,00'); await expect(overview(page).getByText('Responsável B', { exact: true })).toHaveCount(0); await expect(overview(page).getByText('Sem cobradora definida', { exact: true })).toHaveCount(0);
-  await titles(page); await page.getByRole('button', { name: 'Abrir título NF-1', exact: true }).click();
+  await titles(page); await page.getByRole('button', { name: 'Abrir título NF-3', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Histórico do título', exact: true })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Status do atendimento', exact: true })).toBeVisible(); await expect(page.getByLabel('Observações', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Iniciar', exact: true }).click(); await expect(page.getByRole('button', { name: 'Pausar', exact: true })).toBeEnabled();
   await page.getByRole('combobox', { name: 'Status do atendimento', exact: true }).selectOption('AGUARDANDO RETORNO');
   await page.getByLabel('Observações', { exact: true }).fill('Contato sintético para organizar o retorno. Retorno sintético combinado.');
   await page.getByLabel('Próxima ação', { exact: true }).fill('Ligar novamente');
   await page.getByLabel('Data da próxima ação', { exact: true }).fill(today);
   await page.getByRole('button', { name: 'Finalizar atendimento', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('finalizado');
-  await expect.poll(() => calls.filter(call => call.name === 'collections_overdue_summary').length).toBe(2);
+  await expect.poll(() => calls.filter(call => call.name === 'collections_overdue_summary').length).toBe(3);
   await general(page);
   await expect(card(page, 'Retornos para hoje').locator('strong')).toHaveText('2');
   expect(calls.find(call => call.name === 'save_collection_case')?.body).toMatchObject({ p_status: 'AGUARDANDO RETORNO', p_next_action: 'Ligar novamente', p_next_date: today, p_observation: 'Contato sintético para organizar o retorno. Retorno sintético combinado.', p_expected_revision: 1, p_expected_case_revision: 0, p_finish: true });
   expect(calls.some(call => call.name === 'validate_receivable_payment')).toBe(false); await titles(page);
-  await page.getByRole('button', { name: 'Abrir título NF-1', exact: true }).click();
+  await page.getByRole('button', { name: 'Abrir título NF-3', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Histórico do título', exact: true })).toBeVisible(); await expect(page.locator('.collection-case-history').getByText('Contato sintético para organizar o retorno. Retorno sintético combinado.', { exact: true })).toBeVisible();
   expect(calls.filter(call => call.name === 'collection_workbench').every(call => call.body.p_collector_id === own)).toBe(true);
 });
@@ -185,7 +196,7 @@ test('the Director can drill down and consult history without collection write c
 
 test('missing summary activation keeps the working overdue workspace and never falls back to all receivables', async ({ page }) => {
   const { calls } = await setup(page, { missing: true }); await expect(overview(page).getByRole('alert')).toContainText('aguarda ativação');
-  await titles(page); await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(7);
+  await titles(page); await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(6);
   await expect(page.getByText('private SQL sensitive details')).toHaveCount(0); expect(calls.some(call => call.name === 'receivable_titles')).toBe(false);
 });
 
@@ -208,7 +219,7 @@ test('an empty overdue wallet has no invented balances, contacts or collector di
 
 test('refresh updates both the management summary and the existing title workspace', async ({ page }) => {
   const { calls } = await setup(page); await expect(card(page, 'Carteira vencida atual')).toContainText('R$ 700,00');
-  await titles(page); await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(7); await general(page);
+  await titles(page); await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(6); await general(page);
   const before = calls.filter(call => call.name === 'collection_workbench').length;
   await page.getByRole('button', { name: 'Atualizar visão da cobrança', exact: true }).click(); await expect.poll(() => calls.filter(call => call.name === 'collections_overdue_summary').length).toBe(2); await expect.poll(() => calls.filter(call => call.name === 'collection_workbench').length).toBeGreaterThan(before);
   expect(await page.evaluate(() => ({ local: Object.keys(localStorage), session: Object.keys(sessionStorage) }))).toEqual({ local: [], session: [] });

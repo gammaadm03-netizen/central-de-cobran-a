@@ -4,6 +4,7 @@ import CollectionDesk from './CollectionDesk';
 import CollectionValidation from './CollectionValidation';
 import CollectionWorkTime from './CollectionWorkTime';
 import CollectionContactsReport from './CollectionContactsReport';
+import CollectionFollowups from './CollectionFollowups';
 import '../collection-central.css';
 
 const tabs = [
@@ -23,11 +24,15 @@ export default function Collections({ canWrite, canManage, canReadFinance = fals
   const [visited, setVisited] = useState<Set<Tab>>(() => new Set(['overview']));
   const [revision, setRevision] = useState(0);
   const [contactsRevision, setContactsRevision] = useState(0);
+  const [followupsRevision, setFollowupsRevision] = useState(0);
   const [selection, setSelection] = useState<(CollectionSelection & { requestId: number }) | undefined>();
   const requestId = useRef(0), tabButtons = useRef<(HTMLButtonElement | null)[]>([]);
   const unbound = isCollector && !collectorId;
-  function show(id: Tab) { setActive(id); setVisited(previous => new Set([...previous, id])); }
-  function details(filters: CollectionSelection) { setSelection({ ...filters, requestId: ++requestId.current }); show('titles'); }
+  function show(id: Tab) { if (id === 'overview' && active !== id) setFollowupsRevision(value => value + 1); setActive(id); setVisited(previous => new Set([...previous, id])); }
+  function details(filters: CollectionSelection) {
+    if (filters.status === 'PENDING_VALIDATION') { show('validation'); return; }
+    setSelection({ ...filters, requestId: ++requestId.current }); show('titles');
+  }
   function changed() { setRevision(value => value + 1); }
   function keyboard(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     let next: number;
@@ -43,6 +48,7 @@ export default function Collections({ canWrite, canManage, canReadFinance = fals
       {tabs.map((tab, index) => <button key={tab.id} type="button" role="tab" id={`collections-tab-${tab.id}`} aria-controls={`collections-panel-${tab.id}`} aria-selected={active === tab.id} tabIndex={active === tab.id ? 0 : -1} ref={element => { tabButtons.current[index] = element; }} onClick={() => show(tab.id)} onKeyDown={event => keyboard(event, index)}>{tab.label}</button>)}
     </div>
     {unbound && <p className="notice" role="status">Seu login ainda não está vinculado a uma cobradora. Peça à Gerência Geral para configurar o vínculo em Administração. Nenhuma carteira está disponível até essa configuração.</p>}
+    {!unbound && <CollectionFollowups isCollector={isCollector} collectorId={collectorId} canWrite={canWrite} refreshKey={revision + followupsRevision} onDetails={details} />}
     {tabs.map(tab => <div key={tab.id} className="collections-central-panel" role="tabpanel" id={`collections-panel-${tab.id}`} aria-labelledby={`collections-tab-${tab.id}`} hidden={active !== tab.id}>
       {!unbound && visited.has(tab.id) && <>
         {tab.id === 'overview' && <CollectionOverview isCollector={isCollector} collectorId={collectorId} refreshKey={revision} onDetails={details} onRefresh={changed} />}

@@ -51,11 +51,11 @@ async function allTableState(db) {
 }
 async function schemaInventory(db) {
   await db.exec('RESET ROLE');
-  return (await db.query(`SELECT 'relation' AS kind,n.nspname||'.'||c.relname AS name,c.relkind::text AS definition
+  return (await db.query(`SELECT 'relation' AS kind,n.nspname||'.'||c.relname AS name,c.relkind::text||':'||coalesce(c.relacl::text,'NULL')||':'||c.relrowsecurity::text||':'||c.relforcerowsecurity::text AS definition
     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN('public','cf_private','auth','storage')
-    UNION ALL SELECT 'function',n.nspname||'.'||p.proname||'('||pg_get_function_identity_arguments(p.oid)||')',pg_get_functiondef(p.oid)
+    UNION ALL SELECT 'function',n.nspname||'.'||p.proname||'('||pg_get_function_identity_arguments(p.oid)||')',pg_get_functiondef(p.oid)||E'\\nACL:'||coalesce(p.proacl::text,'NULL')
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname IN('public','cf_private','auth','storage')
-    UNION ALL SELECT 'policy',schemaname||'.'||tablename||'.'||policyname,coalesce(qual,'')||'/'||coalesce(with_check,'')
+    UNION ALL SELECT 'policy',schemaname||'.'||tablename||'.'||policyname,cmd||':'||roles::text||':'||permissive||':'||coalesce(qual,'')||'/'||coalesce(with_check,'')
     FROM pg_policies WHERE schemaname IN('public','cf_private','auth','storage') ORDER BY kind,name`)).rows;
 }
 async function assertExistingTablesPreserved(db, before, ignored = ['public.central_schema_migrations']) {
@@ -99,6 +99,19 @@ async function prepareReferenceJob(db, mode, label, row) {
   await referenceGateway(db, 'stage_collection_reference_chunk_from_gateway', stageArgs);
   await referenceGateway(db, 'finish_collection_reference_prepare_from_gateway', [job.job_id, 1]);
   return { job, beginArgs, stageArgs, artifact, original };
+}
+async function work(db, document, action) {
+  const item=await title(db,document);
+  return scalar(db,'SELECT public.collection_work_action($1,$2,$3,$4) AS r',[item.id,action,item.revision,randomUUID()]);
+}
+async function saveCase(db,document,{status='AGUARDANDO RETORNO',observation='Atendimento sintético',nextAction='Retorno sintético',nextDate=null,paymentDate=null,finish=false}={}) {
+  const item=await title(db,document),caseRevision=await scalar(db,'SELECT coalesce((SELECT revision FROM public.collection_cases WHERE title_id=$1),0) AS r',[item.id]);
+  return scalar(db,'SELECT public.save_collection_case($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS r',
+    [item.id,status,observation,nextAction,nextDate,item.revision,caseRevision,paymentDate,finish,randomUUID()]);
+}
+async function publishReferenceJob(db, prepared) {
+  const preview=await referenceGateway(db,'preview_collection_reference_import_from_gateway',[prepared.job.job_id]);
+  return referenceGateway(db,'publish_collection_reference_import_from_gateway',[prepared.job.job_id,preview.financial_revision,false,randomUUID()]);
 }
 
 async function fixture() {
@@ -166,14 +179,16 @@ async function assertUpgradeAbsent(db) {
     assert.equal(await scalar(db, 'SELECT to_regclass($1)::text AS r', [relation]), null, relation);
   }
   assert.equal(await scalar(db, "SELECT to_regprocedure('public.collections_overdue_summary()')::text AS r"), null);
+  assert.equal(await scalar(db, "SELECT to_regprocedure('cf_private.collection_workflow_metadata(uuid)')::text AS r"), null);
+  assert.equal(await scalar(db, "SELECT to_regprocedure('public.preview_receivables_open_import_with_collectors(text,jsonb,jsonb,jsonb)')::text AS r"), null);
   assert.equal(await scalar(db, "SELECT count(*)::integer AS r FROM information_schema.columns WHERE table_schema='public' AND table_name='receivable_imports' AND column_name='import_mode'"), 0);
   assert.equal(await scalar(db, "SELECT count(*)::integer AS r FROM public.central_schema_migrations WHERE version>='022'"), 0);
 }
 
 try {
   const bundle = await buildReceivablesOperationsSql();
-  await test('generated CR activation contains all seven ordered, conditional migrations in one current artifact and transaction', async () => {
-    assert.equal(RECEIVABLES_OPERATION_MIGRATIONS.length, 7);
+  await test('generated CR activation contains all nine ordered, conditional migrations in one current artifact and transaction', async () => {
+    assert.equal(RECEIVABLES_OPERATION_MIGRATIONS.length, 9);
     await writeReceivablesOperationsBundle();
     assert.equal(await readFile(new URL('../supabase/dashboard/ativar-recebiveis-operacao.sql', import.meta.url), 'utf8'), bundle);
     assert.equal((bundle.match(/^BEGIN;$/gm) ?? []).length, 1);
@@ -259,7 +274,15 @@ try {
     await assertUpgradeAbsent(db); await close(db);
   });
 
-  await test('an existing 0.9 installation adds 026 through 028 while preserving original financial corrections, receipts, files and registry timestamps', async () => {
+  await test('failure in 029 rolls back functions, RPC grants, triggers, Storage and every earlier upgrade', async () => {
+    const {db}=await fixture(),before=await allTableState(db),schemaBefore=await schemaInventory(db);
+    const marker='-- END SOURCE BODY: 029_collection_workflow.sql';assert.equal(bundle.split(marker).length,2);
+    await assert.rejects(db.exec(bundle.replace(marker,`SELECT cf_private.synthetic_workflow_activation_failure();\n${marker}`)),e=>e.code==='42883');
+    await db.exec('ROLLBACK');assert.deepEqual(await allTableState(db),before);assert.deepEqual(await schemaInventory(db),schemaBefore);
+    await assertUpgradeAbsent(db);await close(db);
+  });
+
+  await test('an existing 0.9 installation adds 026 through 030 while preserving original financial corrections, receipts, files and registry timestamps', async () => {
     const { db, dates, rows } = await fixture();
     for (const migration of RECEIVABLES_OPERATION_MIGRATIONS.slice(0, 4)) await db.exec(await source(migration));
     await gateway(db, receivedSql, await importArgs(db, 'before-workbench-received', [{ ...rows[0], received_on: dates.today, received_amount_cents: 8500 }], true));
@@ -282,7 +305,7 @@ try {
     await close(db);
   });
 
-  await test('0.10 upgrades only 027 and 028, preserving a running timer, saved case, receipts, cash and every previous audit event', async () => {
+  await test('0.10 adds 027 through 030, preserving a running timer, saved case, receipts, cash and every previous audit event', async () => {
     const { db, dates } = await fixture();
     for (const migration of RECEIVABLES_OPERATION_MIGRATIONS.slice(0, 5)) await db.exec(await source(migration));
     await actor(db, 'cobradora_1');
@@ -306,6 +329,37 @@ try {
     assert.equal(await scalar(db, 'SELECT count(*)::integer AS r FROM public.collection_work_sessions WHERE ended_at IS NULL'), 1);
     const upgraded = await allTableState(db); await db.exec(bundle); assert.deepEqual(await allTableState(db), upgraded);
     await close(db);
+  });
+
+  await test('0.11 upgrades atomically without losing manual contacts, original Storage/CSV sources, corrected receipts or running, paused and finalized work', async () => {
+    const {db,dates}=await fixture();
+    for(const migration of RECEIVABLES_OPERATION_MIGRATIONS.slice(0,7))await db.exec(await source(migration));
+    const rows=['UPGRADE-RUNNING','UPGRADE-PAUSED','UPGRADE-FINISHED','UPGRADE-PAID'].map((document,i)=>({document,client_name:`Cliente sintético ${document}`,client_document:null,branch:'2',issued_on:dates.issued,due_date:dates.overdue,amount_cents:10000+i*1000}));
+    await gateway(db,openSql,await importArgs(db,'workflow-upgrade-titles',rows));
+    for(const row of rows){const item=await title(db,row.document);await scalar(db,'SELECT public.assign_receivable_collector($1,$2,$3) AS r',[item.customer_key,agents[0],'Vínculo sintético preservado']);}
+    await gateway(db,receivedSql,await importArgs(db,'workflow-upgrade-paid',[{...rows[3],received_on:dates.yesterday,received_amount_cents:12500}],true));
+    await gateway(db,receivedSql,await importArgs(db,'workflow-upgrade-correction',[{...rows[3],received_on:dates.today,received_amount_cents:12600}],true,true));
+    const contacts=await prepareReferenceJob(db,'CONTACTS','workflow-upgrade-contacts',{source_line:2,client_name:rows[0].client_name,client_document:null,emails:['source@example.invalid'],phones:['11999999999'],notes:null});
+    await publishReferenceJob(db,contacts);
+    const description=await prepareReferenceJob(db,'DESCRIPTIONS','workflow-upgrade-description',{source_line:2,client_name:rows[0].client_name,client_document:null,document:rows[0].document,branch:'2',description:'Contrato sintético preservado na atualização',contract:'SYNTHETIC-UPGRADE'});
+    await publishReferenceJob(db,description);
+    await actor(db,'cobradora_1');const running=await title(db,rows[0].document),context=await scalar(db,'SELECT public.collection_customer_context($1) AS r',[running.id]);
+    await scalar(db,'SELECT public.save_collection_customer_contacts($1,$2::jsonb,$3::jsonb,$4,$5,$6) AS r',[running.id,JSON.stringify(['manual@example.invalid']),JSON.stringify(['11988888888']),'Conferência sintética preservada',context.contact.revision,randomUUID()]);
+    await work(db,rows[1].document,'START');await work(db,rows[1].document,'PAUSE');await saveCase(db,rows[1].document,{nextDate:dates.future});
+    await work(db,rows[2].document,'START');await saveCase(db,rows[2].document,{nextDate:dates.future,finish:true});
+    await work(db,rows[0].document,'START');await saveCase(db,rows[0].document,{nextDate:dates.future});
+    const before=await allTableState(db),schemaBefore=await schemaInventory(db);
+    for(const version of ['029_collection_workflow.sql','030_receivable_import_collectors.sql']){
+      const marker=`-- END SOURCE BODY: ${version}`;await assert.rejects(db.exec(bundle.replace(marker,`SELECT cf_private.synthetic_latest_upgrade_failure();\n${marker}`)),e=>e.code==='42883');
+      await db.exec('ROLLBACK');assert.deepEqual(await allTableState(db),before);assert.deepEqual(await schemaInventory(db),schemaBefore);
+    }
+    await db.exec(bundle);await assertExistingTablesPreserved(db,before);
+    assert.deepEqual(await scalar(db,"SELECT jsonb_agg(to_jsonb(m) ORDER BY to_jsonb(m)::text) AS r FROM public.central_schema_migrations m WHERE version<'029'"),before['public.central_schema_migrations']);
+    assert.equal(await scalar(db,"SELECT count(*)::int AS r FROM public.collection_work_sessions WHERE ended_at IS NULL"),1);
+    assert.equal(await scalar(db,"SELECT count(*)::int AS r FROM public.collection_work_sessions WHERE end_reason='PAUSE'"),1);
+    assert.equal(await scalar(db,"SELECT count(*)::int AS r FROM public.collection_work_sessions WHERE end_reason='FINISH'"),1);
+    assert.equal(await scalar(db,"SELECT has_function_privilege('authenticated','public.record_collection_action(uuid,text,date,text,date,text,text,date,bigint)','EXECUTE') AS r"),false);
+    const after=await allTableState(db),schemaAfter=await schemaInventory(db);await db.exec(bundle);assert.deepEqual(await allTableState(db),after);assert.deepEqual(await schemaInventory(db),schemaAfter);await close(db);
   });
 
   const operational = await fixture();
@@ -480,6 +534,67 @@ try {
     assert.deepEqual(updated.descriptions.variants.find(variant => variant.id === initial.descriptions.variants[0].id), initial.descriptions.variants[0]);
     assert.deepEqual(new Set(updated.descriptions.variants.map(variant => variant.source_import_id)), new Set([first.job.job_id, second.job.job_id]));
     assert.deepEqual(await tableState(db, financialTables), financialBefore);
+  });
+
+  const flowRows=['FLOW-DRAFT','FLOW-RETURN','FLOW-NEW','FLOW-ERP'].map(document=>({document,client_name:`Cliente sintético ${document}`,client_document:null,branch:'2',issued_on:dates.issued,due_date:dates.overdue,amount_cents:10000}));
+  await test('030 exposes official customer choices and creates an assigned wallet directly from the open import',async()=>{
+    await actor(db);const sql='SELECT public.preview_receivables_open_import_with_collectors($1,$2::jsonb,$3::jsonb,$4::jsonb) AS r';
+    const p=await scalar(db,sql,['grupo-consolidado',JSON.stringify(flowRows),'{}','{}']);
+    assert.equal(p.collector_assignment_version,'030');assert.equal(p.missing_collector_count,4);assert.equal(p.can_commit,false);
+    const choices=Object.fromEntries(p.customer_collector_assignments.map(item=>[item.customer_key,agents[0]]));
+    const chosen=await scalar(db,sql,['grupo-consolidado',JSON.stringify(flowRows),'{}',JSON.stringify(choices)]);assert.equal(chosen.can_commit,true);
+    const a=[...await importArgs(db,'workflow-chosen-import',flowRows),JSON.stringify(choices)];
+    const result=await gateway(db,'SELECT public.commit_receivables_open_import_with_collectors_from_gateway($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11::jsonb) AS r',a);
+    assert.equal(result.assigned_title_count,4);for(const row of flowRows)assert.equal((await title(db,row.document)).collector_id,agents[0]);
+  });
+
+  await test('029 permits a normal pause but requires an unfinished START cycle before every finalized attendance',async()=>{
+    await actor(db,'cobradora_1');await saveCase(db,'FLOW-DRAFT',{nextDate:dates.future});
+    const before=await allTableState(db);await actor(db,'cobradora_1');
+    await assert.rejects(saveCase(db,'FLOW-DRAFT',{nextDate:dates.future,finish:true}),e=>e.code==='55000');assert.deepEqual(await allTableState(db),before);
+    await actor(db,'cobradora_1');await work(db,'FLOW-DRAFT','START');const paused=await work(db,'FLOW-DRAFT','PAUSE');assert.equal(paused.running,false);
+    const item=await title(db,'FLOW-DRAFT'),detail=await scalar(db,'SELECT public.collection_case_detail($1) AS r',[item.id]);
+    assert.equal(detail.workflow.version,'029');assert.equal(detail.workflow.normal_pause,true);assert.equal(detail.workflow.can_finish,true);
+    const finished=await saveCase(db,'FLOW-DRAFT',{nextDate:dates.future,finish:true});assert.equal(finished.finished,true);
+    assert.equal((await title(db,'FLOW-DRAFT')).next_action_date,dates.future);
+    await assert.rejects(saveCase(db,'FLOW-DRAFT',{nextDate:dates.future,finish:true}),e=>e.code==='55000');
+    await assert.rejects(work(db,'FLOW-DRAFT','FINISH'),e=>e.code==='23514');
+  });
+
+  await test('official due returns block new work; paid attendance waits for CR and refusal reopens the same owner and return',async()=>{
+    await actor(db,'cobradora_1');await work(db,'FLOW-RETURN','START');await saveCase(db,'FLOW-RETURN',{nextDate:dates.today,finish:true});
+    const item=await title(db,'FLOW-RETURN');let queue=await scalar(db,"SELECT public.collection_workbench(p_queue=>'returns',p_limit=>100) AS r");
+    assert(queue.rows.some(row=>row.id===item.id));assert.equal(queue.priority.due_count,1);
+    const before=await allTableState(db);await actor(db,'cobradora_1');await assert.rejects(work(db,'FLOW-NEW','START'),e=>e.code==='P0029');assert.deepEqual(await allTableState(db),before);
+    await actor(db,'cobradora_1');await work(db,'FLOW-RETURN','START');
+    const receiptCount=await scalar(db,'SELECT count(*)::int AS r FROM public.receivable_receipts');
+    await saveCase(db,'FLOW-RETURN',{status:'TÍTULO PAGO',paymentDate:dates.today,nextDate:dates.future,finish:true});
+    const pending=await title(db,'FLOW-RETURN');assert.equal(pending.status,'PENDING_VALIDATION');assert.equal(pending.payment_source,'COBRANCA');assert.equal(pending.next_action_date,null);
+    const detail=await scalar(db,'SELECT public.collection_case_detail($1) AS r',[item.id]);assert.equal(detail.case.next_action,'Aguardar validação de Contas a Receber');assert.equal(detail.case.next_date,null);assert.equal(detail.workflow.can_finish,false);
+    assert.equal(await scalar(db,'SELECT count(*)::int AS r FROM public.receivable_receipts'),receiptCount);
+    assert(!(await scalar(db,"SELECT public.collection_workbench(p_queue=>'active',p_limit=>100) AS r")).rows.some(row=>row.id===item.id));
+    assert(!(await scalar(db,"SELECT public.collection_workbench(p_queue=>'returns',p_limit=>100) AS r")).rows.some(row=>row.id===item.id));
+    await assert.rejects(work(db,'FLOW-RETURN','START'),e=>e.code==='23514');
+    await work(db,'FLOW-NEW','START');await work(db,'FLOW-NEW','PAUSE');
+    await actor(db);await scalar(db,"SELECT public.validate_receivable_payment($1,'NOT_LOCATED',NULL,$2,$3) AS r",[item.id,'Pagamento sintético não localizado',pending.revision]);
+    const reopened=await title(db,'FLOW-RETURN');assert.equal(reopened.status,'NOT_LOCATED');assert.equal(reopened.collector_id,agents[0]);assert.equal(reopened.next_action_date,dates.today);
+    await actor(db,'cobradora_1');const next=await scalar(db,'SELECT public.collection_case_detail($1) AS r',[item.id]);assert.equal(next.case.status,'NOVO TÍTULO - COBRAR');assert.equal(next.case.next_action,'Retomar cobrança');assert.equal(next.case.next_date,dates.today);
+    queue=await scalar(db,"SELECT public.collection_workbench(p_queue=>'returns',p_limit=>100) AS r");assert(queue.rows.some(row=>row.id===item.id));
+    assert.equal(await scalar(db,'SELECT count(*)::int AS r FROM public.receivable_receipts'),receiptCount);await assert.rejects(work(db,'FLOW-NEW','START'),e=>e.code==='P0029');
+  });
+
+  await test('CR confirmation records the receipt and an ERP receipt closes every running interval without changing prior finance history',async()=>{
+    await actor(db,'cobradora_1');await work(db,'FLOW-RETURN','START');await saveCase(db,'FLOW-RETURN',{status:'TÍTULO PAGO',paymentDate:dates.today,finish:true});
+    const pending=await title(db,'FLOW-RETURN');await actor(db);
+    const id=await scalar(db,"SELECT public.validate_receivable_payment($1,'CONFIRM',$2,$3,$4) AS r",[pending.id,dates.today,'Confirmação financeira sintética',pending.revision]);assert(id);assert.equal((await title(db,'FLOW-RETURN')).status,'VALIDATED');
+    const cash=await tableState(db,['public.bank_balance_positions','public.stock_positions']);
+    await actor(db,'cobradora_1');await work(db,'FLOW-ERP','START');await actor(db);await work(db,'FLOW-ERP','START');
+    const target=await title(db,'FLOW-ERP');await gateway(db,receivedSql,await importArgs(db,'workflow-erp-receipt',[{...flowRows[3],received_on:dates.today,received_amount_cents:9500}],true));
+    await db.exec('RESET ROLE');assert.equal(await scalar(db,"SELECT count(*)::int AS r FROM public.collection_work_sessions WHERE title_id=$1 AND end_reason='TITLE_SETTLED'",[target.id]),2);
+    assert.equal(await scalar(db,'SELECT count(*)::int AS r FROM public.collection_work_sessions WHERE title_id=$1 AND ended_at IS NULL',[target.id]),0);
+    assert.equal(await scalar(db,'SELECT amount_cents AS r FROM public.receivable_receipts WHERE title_id=$1',[target.id]),9500);
+    const previous=await scalar(db,'SELECT to_jsonb(r) AS r FROM public.effective_receivable_receipts r WHERE id=$1',[receipt.id]);assert.equal(previous.amount_cents,14000);assert.equal(previous.original_received_amount_cents,13700);assert.equal(previous.receipt_revision,1);
+    assert.deepEqual(await tableState(db,['public.bank_balance_positions','public.stock_positions']),cash);
   });
 
   await test('repeating complete activation preserves exact live receipts, correction history, file provenance, revision and registry timestamps', async () => {

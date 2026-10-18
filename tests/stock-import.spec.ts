@@ -47,7 +47,7 @@ async function setup(page: Page, options: Options = {}) {
       if (options.failSave) return reply({ code: 'XX000', message: 'private SQL query and secret' }, 503);
       const saved = { ...position(rows.length + 1, body.p_reference_date, body.p_value_cents), created_at: `2026-10-16T15:01:${String(rows.length).padStart(2, '0')}Z`, observation: body.p_observation }; rows.push(saved); return reply(saved.id);
     }
-    if (['payable_macros', 'payable_imports', 'payable_plan_mappings', 'receivable_imports'].includes(name)) return reply([]);
+    if (['payable_macros', 'payable_imports', 'payable_plan_mappings', 'receivable_imports', 'collection_agents'].includes(name)) return reply([]);
     throw new Error(`Unexpected offline fixture request ${name}`);
   });
   await page.goto('/'); await page.getByLabel('Usuário', { exact: true }).fill('GestoraTeste'); await page.getByLabel('Senha', { exact: true }).fill('synthetic-password'); await page.getByRole('button', { name: 'Entrar na Central' }).click();

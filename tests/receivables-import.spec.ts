@@ -12,7 +12,7 @@ test('abertos e vencidos exigem declaração do arquivo e preservam ausências s
   page.once('dialog', dialog => { expect(dialog.message()).toContain('Títulos ausentes neste arquivo continuarão como estão'); expect(dialog.message()).toContain('As carteiras e o histórico serão preservados'); return dialog.accept(); });
   await page.getByRole('button', { name: 'Concluir importação de abertos e vencidos' }).click();
   await expect(page.getByRole('status')).toContainText('Nenhum recebimento foi confirmado');
-  expect(seen.commits).toEqual([{ action: 'commit', mode: 'open', file_name: 'cr.csv', file_base64: Buffer.from(csv).toString('base64'), complete: true, title_mappings: {}, previous_import_id: null, previous_financial_revision: '17' }]);
+  expect(seen.commits).toEqual([{ action: 'commit', mode: 'open', file_name: 'cr.csv', file_base64: Buffer.from(csv).toString('base64'), complete: true, title_mappings: {}, collector_mappings: {}, previous_import_id: null, previous_financial_revision: '17' }]);
   expect(seen.financialWrites).toEqual([]); await expect(page.getByRole('cell', { name: 'cr.csv', exact: true })).toBeVisible();
 });
 test('CR bloqueia coluna ausente e data inválida antes de enviar a análise ao servidor', async ({ page }) => {
@@ -54,7 +54,7 @@ test('vencimento ambíguo exige vínculo explícito e nova análise antes de atu
   await expect(page.getByRole('heading', { name: 'Conferir parcelas do mesmo documento' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Concluir importação de abertos e vencidos' })).toBeDisabled();
   await expect(page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'Escolha o vínculo da parcela antes de importar.', exact: true }) }).getByRole('cell').first()).toHaveText('2');
   await page.getByLabel('Vínculo da linha 2', { exact: true }).selectOption(candidateId);
-  await expect(page.getByText('Vínculos alterados.', { exact: false })).toBeVisible(); await expect(page.getByRole('button', { name: 'Concluir importação de abertos e vencidos' })).toBeDisabled();
+  await expect(page.getByText(/^Vínculos alterados\./)).toBeVisible(); await expect(page.getByRole('button', { name: 'Concluir importação de abertos e vencidos' })).toBeDisabled();
   await page.getByRole('button', { name: 'Analisar arquivo', exact: true }).click(); await expect(page.getByRole('cell', { name: 'Atualizar título', exact: true })).toBeVisible();
   page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação de abertos e vencidos' }).click();
   await expect(page.getByRole('status')).toContainText('Importação concluída'); expect(seen.commits[0].title_mappings).toEqual({ '1': candidateId });

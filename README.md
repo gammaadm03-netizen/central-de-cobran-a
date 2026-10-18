@@ -1,6 +1,14 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.11.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+Versão de desenvolvimento **0.12.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+
+## Atendimento e responsáveis na importação — 0.12.0
+
+Iniciar, Pausar e Salvar andamento têm estados e motivos de bloqueio explícitos. Finalizar exige atendimento iniciado e registra a próxima ação oficial. Retornos de hoje ou atrasados têm prioridade na própria carteira. Pagamento informado segue à validação de Contas a Receber; não localizado retorna à mesma cobradora com retorno para hoje.
+
+Em Importar Bases, a responsável dos clientes sem carteira é escolhida durante a importação de abertos. Vínculos existentes são preservados nas atualizações diárias. O mesmo arquivo já importado pode completar responsáveis ausentes sem duplicar os títulos. Quitados e recebimentos históricos não são redistribuídos.
+
+Ativação: [guia do atendimento e retornos](docs/cobranca-atendimento-retornos.md). Executar o combinado **022..030**, atualizar a função existente **receivables-import** e conferir o site **0.12.0**. Publicar pelo Git não aplica alterações do Supabase.
 
 ## Contatos e descrições na Cobrança — 0.11.0
 
@@ -105,6 +113,8 @@ npm run test:collections-management-sql
 npm run test:collection-workbench-sql
 npm run test:collection-context-sql
 npm run test:collection-reference-imports-sql
+npm run test:collection-workflow-sql
+npm run test:receivable-import-collectors-sql
 npm run test:receivables-operations-sql
 npm run test:bank-import-sql
 npm run test:treasury-accounts-sql
