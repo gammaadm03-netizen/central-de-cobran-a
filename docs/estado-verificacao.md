@@ -1,8 +1,8 @@
 # Evidências de verificação
 
-16/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
+18/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.7.1 ao final; pendências antigas não substituem os relatos posteriores do usuário.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.8.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -185,3 +185,27 @@ O formulário descreve a correspondência das colunas e mostra uma prévia de at
 Build de produção, **106 testes Node** e **7 testes Chromium de CP** passaram. Foram acrescentados seis cenários de parser e dois de gateway, com CSV/XLSX reais sintéticos, nomes confirmados, centavos, horários, conta/plano separados, coluna obrigatória ausente, duplicidade e recusa integral. A suíte de CR passou sem mudança no parser compartilhado. O gateway também prova leitura de linha oculta do Excel e preservação dos bytes/hash originais. O cenário novo de navegador percorre seleção de XLSX, worker, análise do servidor e prévia; a conclusão fica bloqueada até classificar o plano.
 
 Não há migration nem dados reais novos. O gateway único foi regenerado para publicação na função existente `payables-import`; é necessário atualizar esse código além do frontend 0.7.1. Não é necessário republicar `auth-gateway` ou a função de CR. O arquivo operacional real e seus totais ainda não foram homologados; a função Supabase e o término do deploy não foram verificados remotamente. Guia: [modelo-importacao-contas-pagar.md](modelo-importacao-contas-pagar.md).
+
+
+## Atualização 0.8.0 — resumo gerencial e pagamentos pelo relatório do ERP
+
+A regra mais recente substitui a operação manual anterior: a equipe continua registrando no sistema de origem e importa o relatório na Central. Primeira base/novos títulos e revisões da previsão são incrementais; pagamentos são confirmados por arquivo explícito de títulos integralmente pagos. A rotina informada é segunda-feira para previsões, terça a sexta para pagos, permitindo reprocessar em outro dia. Ausências não baixam títulos. Após a 021, as APIs legadas também adotam essa regra.
+
+O usuário confirmou que no relatório de pagos **Vencimento: data é a data real de pagamento**, **Emissão: valor do lançamento é o valor integral pago**, e a conta efetiva vem do relatório. A importação preserva o vencimento previsto, atualiza o nominal pelo integral informado, mantém a identidade filial+número e audita o valor anterior. Histórico/plano informados atualizam; ausentes ou vazios preservam. Emissão ausente preserva e coluna vazia limpa. O número de cheque vem somente de **Cheque: número**, como texto com zeros à esquerda; coluna ausente preserva, vazia limpa.
+
+O Contas a Pagar abre no resumo: previsto/realizado por 14 Macros na semana sábado–sexta, total mensal independente da semana, saldo semanal, todo o saldo futuro sem limite de oito semanas, vencidos e cheques sem soma duplicada. A consulta por período e Macro usa a data efetiva dos pagamentos e permite abrir cada título. O previsto representa o valor atual dos títulos por vencimento, não uma previsão histórica congelada. Falta de fonte permanece desconhecida, separada de zero.
+
+Pagamentos válidos importados ficam CONCILIADOS automaticamente, com revisão auditada. Bancos e planos desconhecidos exigem vínculo oficial uma vez. Nova importação com dados já registrados reutiliza o pagamento; mesmo arquivo pago retorna idempotente, sem novas gravações. O hash é único por escopo e modo: bytes idênticos podem primeiro representar previsão e depois pagamento explicitamente declarado, sem duplicar o realizado. Correção de pagamento importado exige uma confirmação do arquivo, estorna o registro anterior e cria outro integral. Mudanças explícitas de cheque também participam dessa comparação. Conflitos com pagamentos manuais, identidade ambígua e títulos desconhecidos bloqueiam a operação inteira.
+
+A revisão financeira oficial é obrigatória para novo arquivo pago e detecta edição concorrente; após validar identidade/sessão/permissão, replay de hash já registrado retorna sem alterar dados. O gateway relê o arquivo e só aceita dados financeiros derivados no servidor. Capacidades 019/021 ausentes bloqueiam a operação correspondente sem recorrer ao modo antigo. Helpers privados e commits exclusivos do serviço continuam protegidos, com RLS e leitura da Diretoria sem escrita. Os saldos bancários manuais não são debitados automaticamente.
+
+Verificação local desta entrega:
+
+- **131 testes Node aprovados**, com parser CP/CR, gateways, configuração pública e Excel. Cobrem XLSX/CSV sintéticos do ERP, datas reais, zeros do cheque, dados opcionais, permissões, payloads adulterados, capacidades e revisão financeira obrigatória.
+- **107 casos distintos de navegador aprovados**, em Chromium: 12 do resumo, 12 da importação paga, 20 de pagamentos, 21 de fechamento e 42 regressões de CP, previsão, exportação e acesso. Algumas expectativas antigas de texto foram ajustadas e repetidas; não permaneceram falhas. Incluem filtro por Macro com total específico, mês independente, abertura individual, requisição de pagamento preservada ao alterar período, erros e resultado incerto.
+- **16 cenários SQL 019**, **19 cenários SQL 020**, **32 cenários SQL 021** e **15 regressões SQL 018** aprovados. Testam preservação de registros, centavos, datas reais, modos, reimportação, correções nominais 100→120→130 com quitação integral, bancos/planos, cheque, revisão, idempotência, concorrência, rollback, permissões e revogação.
+- **11 cenários do combinado SQL 012..021 aprovados**: aplicação parcial, repetição segura, preservação, rollback integral, previsão incremental, pagamento automático, hash idempotente e correção auditada. Artefato final SHA256 `8dac80b82be96a6fff7c04ba2a9cb1469f191b0b0f24fe1119022e34202313b1`.
+- Build TypeScript/Vite **0.8.0** aprovado. Captura sintética do resumo inspecionada: seletores, cinco cards, consulta por período/Macro e tabela dos 14 Macros sem sobreposição.
+- Migrations **001..018 inalteradas**; novas 019..021 incrementais. Lockfile mudou somente a versão. Nenhuma base real, senha, chave privada, dependência nova ou serviço pago foi adicionado.
+
+Ativação remota pendente: executar `supabase/dashboard/ativar-contas-pagar.sql` no SQL Editor; atualizar **Code** da função existente `payables-import` com o arquivo `.ts` gerado; aguardar o frontend 0.8.0 na Cloudflare. O endereço e os dados são preservados. SQL e TypeScript têm destinos diferentes; não colar a função no SQL Editor. Não é necessário criar outra função ou repetir a instalação inicial. O envio do código não comprova execução do SQL, publicação da função, término do deploy ou conferência com relatórios operacionais reais. Os demais módulos e critérios de produção pendentes permanecem no escopo documentado.

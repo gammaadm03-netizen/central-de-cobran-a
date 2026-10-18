@@ -4,10 +4,12 @@ import { createHash } from 'node:crypto';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { createPayablesGateway } from './handler.mjs';
+import { isChequeNumberHeader, readPayableChequeCell } from '../../../src/lib/payables-parser.mjs';
 
 const USER = '10000000-0000-4000-8000-000000000001';
 const SESSION = '20000000-0000-4000-8000-000000000001';
 const IMPORT = '30000000-0000-4000-8000-000000000001';
+const BANK = '40000000-0000-4000-8000-000000000001';
 const ORIGIN = 'https://central.example.invalid';
 const BASE = 'https://project.example.invalid';
 const ANON = 'synthetic-public-key';
@@ -15,8 +17,9 @@ const SERVICE = 'synthetic-server-only-key';
 const jwt = claims => `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ sub: USER, session_id: SESSION, ...claims })).toString('base64url')}.verified-only-by-auth`;
 const TOKEN = jwt({});
 const CSV = 'Lançamento;Histórico;Vencimento;Valor;Plano de Contas;Filial;Emissão;Banco;Situação\r\nABC-1;Fornecedor sintético;16/10/2026;1.234,56;INVESTIMENTOS;2 - TESTE;01/10/2026;Banco teste;Pendente\r\n';
+const PAID_CSV = 'Lançamento;Filial;Emissão: valor do lançamento;Plano cc - Conta: nome;Vencimento: data;Situação;Cheque: número;Histórico;Plano cp - Conta: nome;Emissão: data\r\nABC-1;2 - TESTE;1.234,56;Banco teste;17/10/2026 23:59;PAGO;000123;Histórico atualizado;INVESTIMENTOS;01/10/2026 15:03\r\n';
 const encode = value => Buffer.from(value).toString('base64');
-const body = (action = 'preview', extra = {}) => ({ action, file_name: 'grupo.csv', file_base64: encode(CSV), ...(action === 'commit' ? { complete: true, mappings: { INVESTIMENTOS: 'VARIÁVEL' }, previous_import_id: null } : {}), ...extra });
+const body = (action = 'preview', extra = {}) => ({ action, file_name: 'grupo.csv', file_base64: encode(CSV), ...(action === 'commit' ? { complete: true, mappings: { INVESTIMENTOS: 'VARIÁVEL' }, previous_import_id: null, ...(extra.mode === 'payments' ? { previous_financial_revision:'17' } : {}) } : {}), ...extra });
 const json = (payload, status = 200) => new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
 
 function setup(options = {}) {
@@ -29,7 +32,13 @@ function setup(options = {}) {
     const sheet = populated[0];
     if (sheet.rowCount > 5001 || sheet.columnCount > 100) throw new Error('Planilha excede 5.000 linhas ou 100 colunas.');
     const matrix = [];
-    for (let i = 1; i <= sheet.rowCount; i++) matrix.push(sheet.getRow(i).values.slice(1));
+    const chequeColumns = [];
+    sheet.getRow(1).eachCell((cell, column) => { if (isChequeNumberHeader(cell.value)) chequeColumns.push(column); });
+    for (let i = 1; i <= sheet.rowCount; i++) {
+      const row = sheet.getRow(i), values = row.values.slice(1);
+      if (i > 1) for (const column of chequeColumns) { const cell = row.getCell(column); values[column - 1] = readPayableChequeCell(cell.value, cell.numFmt); }
+      matrix.push(values);
+    }
     return { matrix, excel1904: Boolean(workbook.properties.date1904) };
   });
   const fetcher = async (url, init) => {
@@ -45,17 +54,24 @@ function setup(options = {}) {
     if (path === '/rest/v1/rpc/current_access') {
       assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization.startsWith('Bearer '), true);
       if (options.accessError) return json(options.accessError, 403);
-      return json({ profile: { id: USER, enabled: options.enabled ?? true, role_key: options.role ?? 'contas_pagar' }, permissions: options.permissions ?? [{ resource: 'contas_pagar', action: 'import' }] });
+      return json({ profile: { id: USER, enabled: options.enabled ?? true, role_key: options.role ?? 'contas_pagar' }, permissions: options.permissions ?? ['import', 'read', 'write'].map(action => ({ resource: 'contas_pagar', action })) });
     }
-    if (path === '/rest/v1/rpc/preview_payables_import') {
+    if (path === '/rest/v1/rpc/payables_import_capabilities') {
+      assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
+      if (options.capabilityError) return json(options.capabilityError, options.capabilityStatus ?? 404);
+      return json(options.capabilities ?? { cheque_number:true, forecast_incremental:true, paid_import:true });
+    }
+    if (['/rest/v1/rpc/preview_payables_import', '/rest/v1/rpc/preview_payables_forecast_import', '/rest/v1/rpc/preview_payables_paid_import'].includes(path)) {
       assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
       if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
-      return json({ previous_import_id: null, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, settled_count: 0 });
+      if (options.previewPayload) return json(options.previewPayload);
+      if (path.endsWith('/preview_payables_paid_import')) return json({ mode:'payments', previous_import_id:null, financial_revision:'17', row_count:data.p_rows.length, rows:data.p_rows.map((row, index) => ({ ...row, line:index+1, title_id:IMPORT, outcome:'NEW_PAYMENT', forecast_due_date:'2026-10-10', bank_mapping_key:JSON.stringify([row.branch.toUpperCase(), row.paid_bank.toUpperCase()]), bank_account_id:BANK, title_amount_cents:row.amount_paid_cents, problem:'' })), new_payment_count:data.p_rows.length, matched_payment_count:0, correction_count:0, conflict_count:0, errors:[], unmapped_banks:[], bank_options:[], unclassified_plans:[], can_commit:true });
+      return json({ previous_import_id: null, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, settled_count: 0, ...(path.endsWith('/preview_payables_forecast_import') ? { mode:'forecast', changed_count:0 } : {}) });
     }
-    if (path === '/rest/v1/rpc/commit_payables_import_from_gateway') {
+    if (['/rest/v1/rpc/commit_payables_import_from_gateway', '/rest/v1/rpc/commit_payables_forecast_import_from_gateway', '/rest/v1/rpc/commit_payables_paid_import_from_gateway'].includes(path)) {
       assert.equal(init.headers.apikey, SERVICE); assert.equal(init.headers.Authorization, `Bearer ${SERVICE}`);
       if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
-      return json({ import_id: IMPORT, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, settled_count: 0 });
+      return json(options.commitPayload ?? { import_id: IMPORT, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, settled_count: 0, ...(path.endsWith('/commit_payables_forecast_import_from_gateway') ? { mode:'forecast' } : path.endsWith('/commit_payables_paid_import_from_gateway') ? { mode:'payments' } : {}) });
     }
     throw new Error('Unexpected upstream path');
   };
@@ -178,7 +194,7 @@ test('untrusted library errors are replaced with a fixed file error', async () =
 });
 
 test('SQL duplicate, stale and permission errors expose only safe allowlisted codes and messages', async () => {
-  for (const [code, expected] of [['23505', 409], ['P0016', 409], ['40001', 409], ['42501', 403], ['22023', 400], ['23514', 400]]) {
+  for (const [code, expected] of [['23505', 409], ['P0016', 409], ['P0019', 409], ['P0021', 409], ['40001', 409], ['42501', 403], ['22023', 400], ['23514', 400]]) {
     const app = setup({ rpcError: { code, message: 'SQL query containing private details', details: SERVICE, hint: TOKEN } });
     const response = await app.send(body('commit')); assert.equal(response.status, expected);
     const payload = await response.json(); assert.equal(payload.code, code); assert(!JSON.stringify(payload).includes('private')); assert(!JSON.stringify(payload).includes(SERVICE)); assert(!JSON.stringify(payload).includes(TOKEN));
@@ -245,4 +261,154 @@ test('malformed ERP timestamps and missing branch reject all rows before a finan
   const app = setup(); const noBranch = headings.replace(';Filial', '') + '\r\n' + valid.replace(';FILIAL TESTE', '');
   const response = await app.send(body('commit', { file_base64: encode(noBranch) }));
   assert.equal(response.status, 422); assert.equal((await response.json()).errors.find(error => error.column === 'Filial').problem, 'Coluna obrigatória ausente.'); assert.equal(app.calls.length, 2);
+});
+
+test('explicit forecast mode requires its capability and routes preview and commit without absence settlement', async () => {
+  for (const action of ['preview', 'commit']) {
+    const app = setup(); const response = await app.send(body(action, { mode:'forecast' }));
+    assert.equal(response.status, 200); const payload = await response.json(); assert.equal(action === 'preview' ? payload.preview.mode : payload.mode, 'forecast');
+    assert.deepEqual(app.calls.map(call => call.path), ['/auth/v1/user', '/rest/v1/rpc/current_access', '/rest/v1/rpc/payables_import_capabilities', `/rest/v1/rpc/${action === 'preview' ? 'preview_payables_forecast_import' : 'commit_payables_forecast_import_from_gateway'}`]);
+    assert.equal(Object.hasOwn(app.calls.at(-1).data, 'p_complete'), false);
+    assert.equal(Object.hasOwn(app.calls.at(-1).data, 'p_bank_mappings'), false);
+  }
+});
+
+test('paid mode reparses actual value/date/bank and optional ERP metadata, forwarding only verified session and mappings', async () => {
+  const bankMappings = { '["2 - TESTE","BANCO TESTE"]':BANK };
+  for (const action of ['preview', 'commit']) {
+    const app = setup(); const response = await app.send(body(action, { mode:'payments', file_base64:encode(PAID_CSV), bank_mappings:bankMappings, mappings:{ INVESTIMENTOS:'VARIÁVEL' }, ...(action === 'commit' ? { confirm_corrections:true } : {}) }));
+    assert.equal(response.status, 200);
+    const call = app.calls.at(-1);
+    assert.equal(call.path, `/rest/v1/rpc/${action === 'preview' ? 'preview_payables_paid_import' : 'commit_payables_paid_import_from_gateway'}`);
+    assert.deepEqual(call.data.p_bank_mappings, bankMappings);
+    assert.deepEqual(call.data.p_mappings, { INVESTIMENTOS:'VARIÁVEL' });
+    assert.deepEqual(call.data.p_rows, [{ branch:'2 - TESTE', entry_number:'ABC-1', source_status:'PAGO', paid_on:'2026-10-17', amount_paid_cents:123456, paid_bank:'Banco teste', cheque_number:'000123', description:'Histórico atualizado', plan:'INVESTIMENTOS', issued_on:'2026-10-01' }]);
+    assert.equal(Object.hasOwn(call.data.p_rows[0], 'due_date'), false);
+    assert.equal(Object.hasOwn(call.data, 'p_complete'), false);
+    if (action === 'commit') {
+      assert.equal(call.data.p_user_id, USER); assert.equal(call.data.p_session_id, SESSION); assert.equal(call.data.p_confirm_corrections, true);
+      assert.equal(call.data.p_file_sha256, createHash('sha256').update(PAID_CSV).digest('hex'));
+    }
+  }
+});
+
+test('paid preview returns enriched official title matches to the interface and validates their identity and length', async () => {
+  const request = body('preview', { mode:'payments', file_base64:encode(PAID_CSV) });
+  const app = setup(); const response = await app.send(request);
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.deepEqual(payload.rows, payload.preview.rows);
+  assert.equal(payload.rows[0].line, 1);
+  assert.equal(payload.rows[0].outcome, 'NEW_PAYMENT');
+  assert.equal(payload.rows[0].title_id, IMPORT);
+  assert.equal(payload.rows[0].forecast_due_date, '2026-10-10');
+  assert.equal(payload.rows[0].paid_on, '2026-10-17');
+  assert.equal(payload.rows[0].bank_mapping_key, '["2 - TESTE","BANCO TESTE"]');
+  assert.equal(payload.rows[0].bank_account_id, BANK);
+  for (const rows of [[], [{ ...payload.rows[0], line:2 }], [{ ...payload.rows[0], title_id:'invalid' }], [{ ...payload.rows[0], outcome:'UNRECOGNIZED' }], [{ ...payload.rows[0], amount_paid_cents:1 }]]) {
+    const malformed = setup({ previewPayload:{ ...payload.preview, rows } });
+    const result = await malformed.send(request);
+    assert.equal(result.status, 503);
+    assert.equal(malformed.calls.at(-1).path, '/rest/v1/rpc/preview_payables_paid_import');
+  }
+});
+
+test('paid mode permits an explicitly declared paid report without optional fields and never assumes correction approval', async () => {
+  const minimal = 'Lançamento;Filial;Emissão: valor do lançamento;Plano cc - Conta: nome;Vencimento: data\nABC-1;2 - TESTE;1.234,56;Banco teste;17/10/2026 00:00';
+  const request = body('commit', { mode:'payments', file_base64:encode(minimal) }); delete request.mappings;
+  const app = setup(); const response = await app.send(request);
+  assert.equal(response.status, 200);
+  const call = app.calls.at(-1);
+  assert.deepEqual(call.data.p_mappings, {}); assert.deepEqual(call.data.p_bank_mappings, {}); assert.equal(call.data.p_confirm_corrections, false);
+  assert.equal(call.data.p_previous_financial_revision, '17');
+  assert.deepEqual(call.data.p_rows[0], { branch:'2 - TESTE', entry_number:'ABC-1', source_status:'PAGO', paid_on:'2026-10-17', amount_paid_cents:123456, paid_bank:'Banco teste' });
+});
+
+test('missing 021 or 019 capabilities block only affected formats and never fall back to legacy writes', async () => {
+  for (const mode of ['forecast', 'payments']) {
+    for (const options of [{ capabilityError:{ code:'PGRST202', message:'private schema' } }, { capabilityError:{ code:'42883', message:'private query' } }, { capabilities:{ cheque_number:true } }]) {
+      const app = setup(options); const response = await app.send(body('commit', { mode, ...(mode === 'payments' ? { file_base64:encode(PAID_CSV) } : {}) }));
+      assert.equal(response.status, 409); assert.equal((await response.json()).code, 'P0021');
+      assert.equal(app.calls.length, 3); assert.equal(app.calls.at(-1).path, '/rest/v1/rpc/payables_import_capabilities');
+    }
+  }
+  const withCheque = CSV.replace(';Situação\r\n', ';Situação;Cheque: número\r\n').replace(';Pendente\r\n', ';Pendente;000123\r\n');
+  for (const options of [{ capabilityError:{ code:'PGRST202' } }, { capabilities:{ cheque_number:false } }]) {
+    const app = setup(options); const response = await app.send(body('commit', { file_base64:encode(withCheque) }));
+    assert.equal(response.status, 409); assert.equal((await response.json()).code, 'P0019'); assert.equal(app.calls.length, 3);
+  }
+  const upgraded = setup({ capabilities:{ cheque_number:true } });
+  assert.equal((await upgraded.send(body('commit', { file_base64:encode(withCheque) }))).status, 200);
+  assert.equal(upgraded.calls.at(-1).path, '/rest/v1/rpc/commit_payables_import_from_gateway');
+  assert.equal(upgraded.calls.at(-1).data.p_rows[0].cheque_number, '000123');
+});
+
+test('paid mode validates official write permission before decoding and rejects forged roles in every mode', async () => {
+  for (const permissions of [[{ resource:'contas_pagar', action:'import' }], ['import', 'read'].map(action => ({ resource:'contas_pagar', action }))]) {
+    const app = setup({ permissions, role:'gerente_geral' });
+    const response = await app.send(body('commit', { mode:'payments', file_name:'invalid.xlsx', file_base64:'bad' }));
+    assert.equal(response.status, 403); assert.equal(app.calls.length, 2); assert.equal(app.workbookCalls(), 0);
+  }
+  for (const mode of ['forecast', 'payments']) {
+    const app = setup(); const response = await app.send(body('commit', { mode, role:'gerente_geral' }));
+    assert.equal(response.status, 400); assert.equal(app.calls.length, 2);
+  }
+});
+
+test('mode-specific bank and plan mappings and correction confirmations are bounded and typed', async () => {
+  for (const extra of [{ mode:null }, { mode:'paid' }, { mode:'forecast', bank_mappings:{} }, { mode:'forecast', confirm_corrections:false }, { mode:'payments', bank_mappings:[] }, { mode:'payments', bank_mappings:{ BANK:'not-a-uuid' } }, { mode:'payments', bank_mappings:{ '':BANK } }, { mode:'payments', confirm_corrections:'true' }, { mode:'payments', mappings:{ PLAN:{ macro:'FIXO' } } }]) {
+    const app = setup(); const response = await app.send(body('commit', extra));
+    assert.equal(response.status, 400, JSON.stringify(extra)); assert.equal(app.calls.length, 2);
+  }
+});
+
+test('paid report rejects unpaid/canceled rows and invalid proof before capabilities or financial writes', async () => {
+  for (const input of [PAID_CSV.replace(';PAGO;', ';ABERTO;'), PAID_CSV.replace(';PAGO;', ';CANCELADO;'), PAID_CSV.replace(';PAGO;', ';BAIXADO;'), PAID_CSV.replace('17/10/2026 23:59', '17/10/2026 24:00'), PAID_CSV.replace('1.234,56', '0,00'), PAID_CSV.replace('Banco teste;', ';')]) {
+    const app = setup(); const response = await app.send(body('commit', { mode:'payments', file_base64:encode(input) }));
+    assert.equal(response.status, 422); const payload = await response.json();
+    assert.ok(payload.errors.length > 0); assert.ok(!payload.errors.some(error => error.problem.includes('SQL'))); assert.equal(app.calls.length, 2);
+  }
+});
+
+test('server workbook adapter preserves numeric cheque display zeros and rejects unsupported numeric/date formats safely', async () => {
+  for (const [format, value, expected] of [['000000', 123, '000123'], ['General', '000123', '000123'], ['0.00', 123, null], ['dd/mm/yyyy', 123, null]]) {
+    const workbook = new ExcelJS.Workbook(); const sheet = workbook.addWorksheet('CP');
+    sheet.addRow(['Lançamento','Filial','Emissão: valor do lançamento','Plano cc - Conta: nome','Vencimento: data','Cheque: número']);
+    sheet.addRow(['ABC-1','2 - TESTE',123.45,'Banco teste',new Date('2026-10-17T23:59:00Z'),value]);
+    sheet.getCell('E2').numFmt = 'dd/mm/yyyy hh:mm'; sheet.getCell('F2').numFmt = format;
+    const app = setup(); const response = await app.send(body('commit', { mode:'payments', file_name:'cheques.xlsx', file_base64:encode(await workbook.xlsx.writeBuffer()) }));
+    assert.equal(response.status, expected ? 200 : 422);
+    if (expected) { assert.equal(app.calls.at(-1).data.p_rows[0].cheque_number, expected); assert.equal(app.calls.at(-1).data.p_rows[0].paid_on, '2026-10-17'); }
+    else { assert.match((await response.json()).errors[0].problem, /Formato da célula do cheque não suportado/); assert.equal(app.calls.length, 2); }
+  }
+});
+
+test('explicit forecast response cannot claim disappearance settlements and capability authorization errors remain denied', async () => {
+  const app = setup({ previewPayload:{ mode:'forecast', previous_import_id:null, row_count:1, new_count:1, open_count:0, settled_count:1 } });
+  const response = await app.send(body('preview', { mode:'forecast' }));
+  assert.equal(response.status, 503); assert(!JSON.stringify(await response.json()).includes('SQL'));
+  const denied = setup({ capabilityError:{ code:'42501', message:'private SQL' }, capabilityStatus:403 });
+  const forbidden = await denied.send(body('preview', { mode:'forecast' }));
+  assert.equal(forbidden.status, 403); assert.equal(denied.calls.length, 3); assert(!JSON.stringify(await forbidden.json()).includes('private SQL'));
+});
+
+test('paid commit carries the official preview financial revision and rejects invalid revision inputs or unrelated modes', async () => {
+  const app = setup(); const previewResponse = await app.send(body('preview', { mode:'payments', file_base64:encode(PAID_CSV) }));
+  assert.equal(previewResponse.status, 200); const preview = await previewResponse.json();
+  assert.equal(preview.preview.financial_revision, '17');
+  const committed = await app.send(body('commit', { mode:'payments', file_base64:encode(PAID_CSV), previous_financial_revision:preview.preview.financial_revision }));
+  assert.equal(committed.status, 200); assert.equal(app.calls.at(-1).data.p_previous_financial_revision, '17');
+  for (const previous_financial_revision of [undefined, null, '', ' 17 ', 17, false, {}, 'x'.repeat(257)]) {
+    const invalid = setup(); const response = await invalid.send(body('commit', { mode:'payments', file_base64:encode(PAID_CSV), previous_financial_revision }));
+    assert.equal(response.status, 400); assert.equal(invalid.calls.length, 2);
+  }
+  for (const financial_revision of [undefined, null, '', 'x'.repeat(257)]) {
+    const invalid = setup({ previewPayload:{ ...preview.preview, financial_revision } });
+    const response = await invalid.send(body('preview', { mode:'payments', file_base64:encode(PAID_CSV) }));
+    assert.equal(response.status, 503); assert.equal(invalid.calls.at(-1).path, '/rest/v1/rpc/preview_payables_paid_import');
+  }
+  for (const mode of [undefined, 'forecast']) {
+    const invalid = setup(); const response = await invalid.send(body('commit', { ...(mode ? { mode } : {}), previous_financial_revision:'17' }));
+    assert.equal(response.status, 400); assert.equal(invalid.calls.length, 2);
+  }
 });

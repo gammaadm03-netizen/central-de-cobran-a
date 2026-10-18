@@ -30,7 +30,10 @@ export interface PaymentExportRow {
   financial_status?: string;
   effective_macro?: string;
   review_status?: string;
+  cheque_number?: string | null;
 }
+
+interface ChequeFields { cheque_number?: string | null }
 
 interface FinancialFields {
   paid_cents?: number;
@@ -96,6 +99,12 @@ function validateFinancial(row: PayableTitle) {
   return financial;
 }
 
+function chequeText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') throw new Error('O número do cheque deve ser texto para preservar zeros iniciais. Atualize os dados e tente novamente.');
+  return value;
+}
+
 function excelCivilDate(value: string): Date {
   // monthBounds/addCivilDays/financialWeek reject impossible civil dates too.
   financialWeekLabel(value);
@@ -131,6 +140,7 @@ function aggregate(rows: PayableTitle[], month: string, selected: { start: strin
     if (row.settled_at !== null) excelSaoPauloTime(row.settled_at);
     if ((row.status === 'SETTLED_IMPORT') !== (row.settled_at !== null)) throw new Error('O histórico de baixa de um título está incompleto. Atualize a lista e tente novamente.');
     checkedCents(BigInt(row.amount_cents));
+    chequeText((row as PayableTitle & ChequeFields).cheque_number);
     validateFinancial(row);
     ids.add(row.id);
     const group = macros.get(row.macro) ?? emptyTotals();
@@ -150,6 +160,7 @@ function aggregatePayments(rows: PaymentExportRow[], selected: { start: string; 
       throw new Error('Os pagamentos estão incompletos, cancelados ou fora do período selecionado. Atualize a conciliação e tente novamente.');
     }
     excelCivilDate(row.paid_on); excelSaoPauloTime(row.created_at); checkedCents(BigInt(row.amount_cents));
+    chequeText(row.cheque_number);
     ids.add(row.id); total += BigInt(row.amount_cents);
     const classification = row.effective_macro ?? row.macro_snapshot;
     const macro = macros.get(classification) ?? { count: 0, total: 0n };
@@ -175,12 +186,15 @@ export async function buildPayablesWorkbook(currentRows: PayableTitle[], previou
   if (options.fullMonth && (selectedRange.start !== range.start || selectedRange.end !== range.end || [options.filters.search, options.filters.status, options.filters.macro, options.filters.branch, options.filters.financialStatus ?? '', options.filters.reviewStatus ?? ''].some(value => value.trim()))) throw new Error('A exportação do mês completo exige todos os lançamentos, sem filtros adicionais.');
   const current = aggregate(currentRows, options.month, selectedRange), prior = aggregate(previousRows, priorMonth, comparisonRange);
   const payments = options.payments === undefined ? null : aggregatePayments(options.payments, selectedRange);
+  const hasCheque = currentRows.some(row => Object.hasOwn(row, 'cheque_number'));
+  const hasPaymentCheque = hasCheque || (options.payments ?? []).some(row => Object.hasOwn(row, 'cheque_number'));
   const generated = excelSaoPauloTime(options.generatedAt);
   const { default: ExcelJS } = await import('exceljs');
   const book = new ExcelJS.Workbook();
   book.creator = 'Central Financeira · Grupo Ecoplast'; book.created = new Date(options.generatedAt);
   const lines = book.addWorksheet('TODOS OS LANÇAMENTOS');
-  lines.columns = [...PAYABLE_EXPORT_HEADERS, ...(payments ? PAYABLE_FINANCIAL_HEADERS : [])].map((header, index) => ({ header, width: [26, 19, 48, 36, 24, 28, 15, 15, 29, 22, 29, 22, 24, 24, 25, 23, 31, 22, 31, 34][index] }));
+  const detailHeaders = [...PAYABLE_EXPORT_HEADERS, ...(payments ? PAYABLE_FINANCIAL_HEADERS : []), ...(hasCheque ? ['Nº cheque'] : [])];
+  lines.columns = detailHeaders.map((header, index) => ({ header, width: index === detailHeaders.length - 1 && hasCheque ? 25 : [26, 19, 48, 36, 24, 28, 15, 15, 29, 22, 29, 22, 24, 24, 25, 23, 31, 22, 31, 34][index] }));
   const ordered = [...currentRows].sort((a, b) => a.due_date < b.due_date ? -1 : a.due_date > b.due_date ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const relatedEntries = new Map<string, number>();
   for (const item of ordered) {
@@ -197,6 +211,10 @@ export async function buildPayablesWorkbook(currentRows: PayableTitle[], previou
       for (const [index, value] of [amount(financial.paid_cents), amount(financial.outstanding_cents), financial.financial_status === undefined ? UNKNOWN_FINANCIAL : financialStatusLabels[financial.financial_status], financial.last_payment_date === undefined ? UNKNOWN_FINANCIAL : financial.last_payment_date === null ? null : excelCivilDate(financial.last_payment_date), financial.last_payment_bank === undefined ? UNKNOWN_FINANCIAL : financial.last_payment_bank, amount(financial.overpaid_cents)].entries()) row.getCell(15 + index).value = value;
       for (const column of [15, 16, 20]) row.getCell(column).numFmt = CURRENCY;
       row.getCell(18).numFmt = 'dd/mm/yyyy';
+    }
+    if (hasCheque) {
+      row.getCell(detailHeaders.length).value = chequeText((item as PayableTitle & ChequeFields).cheque_number);
+      row.getCell(detailHeaders.length).numFmt = '@';
     }
   }
 
@@ -261,6 +279,7 @@ export async function buildPayablesWorkbook(currentRows: PayableTitle[], previou
   info('Total do mês anterior', checkedCents(prior.total.total), CURRENCY);
   info('Origem dos lançamentos', 'IMPORTAÇÃO DIÁRIA — relatório completo; quitado por importação não comprova compensação bancária.');
   info('Significado da data de baixa automática', SETTLEMENT_NOTE);
+  if (hasCheque || hasPaymentCheque) info('Número do cheque', 'Texto preservado da base, com zeros iniciais. Campo vazio significa número não informado; não é deduzido do lançamento ou do banco e não identifica sozinho o título. No realizado, usa o número preservado no pagamento, sem copiar alterações posteriores do título.');
   if (payments) {
     info('Critério do valor em aberto', 'Saldo financeiro pendente de cada título quando informado pelo banco de dados. O status da importação permanece separado do status financeiro.');
     if (current.total.legacyOpenCount) info('Saldos sem conciliação disponível', `${current.total.legacyOpenCount} registro(s) sem saldo financeiro informado usam a classificação da importação no total em aberto; suas colunas financeiras permanecem indisponíveis, sem presumir pagamentos.`);
@@ -279,15 +298,17 @@ export async function buildPayablesWorkbook(currentRows: PayableTitle[], previou
 
   if (payments) {
     const actual = book.addWorksheet('Pagamentos realizados');
-    actual.columns = ['ID do pagamento', 'ID do título', 'Nº Lançamento', 'Histórico/Favorecido', 'Filial', 'Centro de Custo Macro na baixa', 'Data real do pagamento', 'Banco/Conta do pagamento', 'Valor pago', 'Registrado em', 'Autor — identificação', 'Macro efetivo — classificação auditada'].map((header, index) => ({ header, width: [39, 39, 20, 48, 25, 34, 25, 34, 23, 25, 39, 40][index] }));
+    actual.columns = ['ID do pagamento', 'ID do título', 'Nº Lançamento', 'Histórico/Favorecido', 'Filial', 'Centro de Custo Macro na baixa', 'Data real do pagamento', 'Banco/Conta do pagamento', 'Valor pago', 'Registrado em', 'Autor — identificação', 'Macro efetivo — classificação auditada', ...(hasPaymentCheque ? ['Nº cheque no pagamento'] : [])].map((header, index) => ({ header, width: [39, 39, 20, 48, 25, 34, 25, 34, 23, 25, 39, 40, 28][index] }));
     const orderedPayments = [...options.payments!].sort((a, b) => a.paid_on < b.paid_on ? -1 : a.paid_on > b.paid_on ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     for (const payment of orderedPayments) {
       const row = actual.addRow([payment.id, payment.title_id, payment.entry_number, payment.description, payment.branch, payment.macro_snapshot, excelCivilDate(payment.paid_on), payment.bank_label, checkedCents(BigInt(payment.amount_cents)), excelSaoPauloTime(payment.created_at), payment.created_by, payment.effective_macro ?? payment.macro_snapshot]);
       row.getCell(7).numFmt = 'dd/mm/yyyy'; row.getCell(9).numFmt = CURRENCY; row.getCell(10).numFmt = 'dd/mm/yyyy hh:mm';
+      if (hasPaymentCheque) { row.getCell(13).value = chequeText(payment.cheque_number); row.getCell(13).numFmt = '@'; }
     }
     actual.getCell('F1').note = 'Macro preservado no registro do pagamento; não substituído pela classificação atual do título.';
     actual.getCell('G1').note = 'Data real de pagamento; não é o vencimento nem a data de baixa por importação.';
     actual.getCell('L1').note = 'Classificação efetiva da correção auditada quando existe; sem correção, mantém o macro original da baixa.';
+    if (hasPaymentCheque) actual.getCell('M1').note = 'Número preservado no registro do pagamento. Não acompanha alterações posteriores no cheque do título; vazio permanece não informado.';
     const realized = book.addWorksheet('Realizado por Macro');
     realized.columns = [{ header: 'Centro de Custo Macro efetivo', width: 36 }, { header: 'Quantidade de pagamentos', width: 30 }, { header: 'Total pago no período', width: 26 }, { header: 'Participação no realizado', width: 30 }];
     for (const name of [...payments.macros.keys()].sort((a, b) => a.localeCompare(b, 'pt-BR'))) {

@@ -15,12 +15,13 @@ function fixtureRows(month: string, previous = false) {
     settled_at: index === 29 ? '2026-10-18T02:30:00Z' : null, bank_account: 'Conta sintética',
   }));
 }
-async function setup(page: Page, options: { changed?: boolean; noBase?: boolean; precision?: boolean; tooMany?: boolean; holdExport?: () => Promise<void> } = {}) {
+async function setup(page: Page, options: { changed?: boolean; noBase?: boolean; precision?: boolean; cheque?: boolean; tooMany?: boolean; holdExport?: () => Promise<void> } = {}) {
   await page.clock.setFixedTime(now);
   const id = '10000000-0000-4000-8000-000000000001';
   const access = { profile: { id, username: 'DiretorTeste', display_name: 'Pessoa Teste', role_key: 'diretor', enabled: true }, permissions: ['painel', 'contas_pagar'].map(resource => ({ resource, action: 'read' })), collector_id: null };
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify({ sub: id, session_id: '20000000-0000-4000-8000-000000000001', exp: Math.floor(now.getTime() / 1000) + 3600, role: 'authenticated' })).toString('base64url'), 'synthetic-test-only'].join('.');
   const current = fixtureRows('2026-10'), previous = fixtureRows('2026-09', true);
+  if (options.cheque) Object.assign(current[0], { cheque_number: '000719' });
   if (options.precision) current[0].amount_cents = Number.MAX_SAFE_INTEGER;
   let importReads = 0;
   const queries: string[] = [], financialWrites: string[] = [];
@@ -33,6 +34,7 @@ async function setup(page: Page, options: { changed?: boolean; noBase?: boolean;
     if (name === 'auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', expires_in: 3600, token_type: 'bearer' } });
     if (url.pathname === '/auth/v1/user') return reply({ id, aud: 'authenticated', role: 'authenticated', email: 'synthetic@test.invalid', email_confirmed_at: stamp, created_at: stamp, app_metadata: {}, user_metadata: {} });
     if (name === 'current_access') return reply(access);
+    if (name === 'payables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (['payable_review_titles', 'payable_financial_titles'].includes(name)) return reply({ code: 'PGRST205' }, 404);
     if (['get_payable_payment_accounts', 'payable_payment_summary', 'list_payable_payments', 'get_payables_revision', 'get_payable_month_status', 'payables_month_status', 'list_payable_month_closures'].includes(name)) return reply({ code: 'PGRST202' }, 404);
     if (name === 'cash_position') return reply({ accounts: [], total_cents: null, reported_accounts: 0, expected_accounts: 17, latest_position_date: null });
@@ -138,7 +140,7 @@ test('row limits and a missing official base never produce partial or invented r
   await setup(page, { tooMany: true }); await page.getByRole('button', { name: 'Baixar Excel dos filtros', exact: true }).click();
   await expect(page.locator('section[aria-labelledby="payables-title"]').getByRole('alert')).toContainText('20.000 lançamentos');
   await page.unrouteAll({ behavior: 'wait' }); await setup(page, { noBase: true }); await page.getByRole('button', { name: 'Baixar Excel dos filtros', exact: true }).click();
-  await expect(page.locator('section[aria-labelledby="payables-title"]').getByRole('alert')).toContainText('Importe o relatório completo');
+  await expect(page.locator('section[aria-labelledby="payables-title"]').getByRole('alert')).toContainText('Importe a primeira base de Contas a Pagar');
 });
 
 test('an unrelated month and date filter are rejected with a clear message', async ({ page }) => {
@@ -155,4 +157,13 @@ test('leaving CP cancels an in-progress export without downloading it', async ({
   await expect.poll(() => seen.queries.some(query => new URLSearchParams(query).get('limit') === '500')).toBe(true);
   await page.getByRole('navigation').getByRole('button', { name: 'Painel Gerencial', exact: true }).click(); release();
   await expect(page.getByRole('heading', { name: 'Painel Gerencial', exact: true })).toBeVisible(); expect(downloads).toEqual([]);
+});
+
+
+test('Excel exports cheque as a text column with leading zeros and leaves unknown cheque numbers blank', async ({ page }) => {
+  await setup(page, { cheque: true });
+  const { workbook } = await downloadWorkbook(page, true), detail = workbook.worksheets[0];
+  expect(detail.columnCount).toBe(15); expect(detail.getCell('O1').value).toBe('Nº cheque');
+  expect(detail.getCell('O2').value).toBe('000719'); expect(detail.getCell('O2').type).toBe(ExcelJS.ValueType.String); expect(detail.getCell('O2').numFmt).toBe('@');
+  expect(detail.getCell('B2').value).toBe('CP-1'); expect(detail.getCell('O3').value).toBeNull();
 });

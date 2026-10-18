@@ -11,6 +11,9 @@ export const PAYABLES_OPERATION_MIGRATIONS = [
   '016_payable_identity_updates.sql',
   '017_payable_month_closing.sql',
   '018_payable_full_payment.sql',
+  '019_payable_cheques.sql',
+  '020_payables_management.sql',
+  '021_payable_paid_import.sql',
 ];
 
 function stripTransaction(sql, source) {
@@ -41,7 +44,7 @@ export async function buildPayablesOperationsSql() {
     const wrapperTag = dollarTag(`cf_apply_${version.slice(0, 3)}`, statements);
     parts.push(`-- SOURCE: ${source}\nDO ${wrapperTag}\n${statements}\n${wrapperTag};`);
   }
-  return `-- CENTRAL FINANCEIRA — ativação incremental de Contas a Pagar (012 a 018).
+  return `-- CENTRAL FINANCEIRA — ativação incremental de Contas a Pagar (012 a 021).
 -- Copie o arquivo inteiro no SQL Editor. Uma transação: falha desfaz toda a ativação.
 -- Pode ser executado novamente: pula versões já registradas, sem refazer seeds.
 -- Preserva usuários, saldos, títulos, pagamentos, arquivos e históricos existentes.

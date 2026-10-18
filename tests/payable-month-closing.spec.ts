@@ -23,6 +23,7 @@ interface Options {
   historyCount?: number;
   snapshotFailure?: boolean;
   historical?: boolean;
+  chequeNumber?: string | null;
 }
 
 async function setup(page: Page, options: Options = {}) {
@@ -35,7 +36,7 @@ async function setup(page: Page, options: Options = {}) {
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify({ sub: userId, session_id: uuid(2), exp: Math.floor(now.getTime() / 1000) + 3600, role: 'authenticated' })).toString('base64url'), 'synthetic-test-only'].join('.');
   const title: any = {
     id: uuid(3), scope: 'grupo-consolidado', source_key: 'synthetic-month-title', entry_number: 'SINT-401',
-    description: 'Fornecedor sintético para fechamento', branch: '3 - FILIAL SINTÉTICA',
+    description: 'Fornecedor sintético para fechamento', cheque_number: options.chequeNumber ?? null, branch: '3 - FILIAL SINTÉTICA',
     due_date: '2026-09-14', issued_on: '2026-09-01', amount_cents: options.titleCents ?? 20000,
     source_status: 'ABERTO', plan: 'PLANO SINTÉTICO', bank_account: 'Banco indicado no relatório',
     macro: options.titleMacro ?? 'FIXO', status: 'SETTLED_IMPORT', settled_at: '2026-10-18T12:00:00Z',
@@ -49,7 +50,7 @@ async function setup(page: Page, options: Options = {}) {
   const payments: any[] = paid ? [{
     id: uuid(5), request_id: uuid(50), title_id: title.id, entry_number: title.entry_number,
     description: title.description, branch: title.branch, macro_snapshot: 'FIXO', effective_macro: 'FIXO',
-    plan_snapshot: title.plan, due_date: title.due_date, title_amount_cents: title.amount_cents,
+    cheque_number: options.chequeNumber ? '000214' : null, plan_snapshot: title.plan, due_date: title.due_date, title_amount_cents: title.amount_cents,
     amount_cents: paid, paid_on: '2026-09-17', bank_account_id: uuid(100), bank_label: 'BRADESCO ECOPLAST',
     created_at: stamp, created_by: userId, created_by_name: 'Pessoa Sintética', created_by_username: 'FinanceiroSintetico',
     observation: 'Comprovante sintético', cancelled_at: null, cancelled_by_name: null, cancellation_observation: null, status: 'ACTIVE',
@@ -69,12 +70,12 @@ async function setup(page: Page, options: Options = {}) {
     payment_revision: null, review_status: 'A_CONCILIAR', review_id: null, reviewed_at: null, reviewed_by: null,
     review_fingerprint: fingerprint(10), closing_eligible: false, closing_exclusion_reason: 'Versão atual identificada no relatório mais recente.',
   };
-  const frozenTitle = { ...financial(), macro: 'VARIÁVEL', amount_cents: 10123, paid_cents: 10123, outstanding_cents: 0, payment_remaining_cents: 0, financial_status: 'PAID', review_status: 'CONCILIADO', review_id: uuid(6), reviewed_at: stamp, reviewed_by: userId, review_fingerprint: fingerprint(80) };
+  const frozenTitle = { ...financial(), cheque_number: options.chequeNumber ? '000113' : null, macro: 'VARIÁVEL', amount_cents: 10123, paid_cents: 10123, outstanding_cents: 0, payment_remaining_cents: 0, financial_status: 'PAID', review_status: 'CONCILIADO', review_id: uuid(6), reviewed_at: stamp, reviewed_by: userId, review_fingerprint: fingerprint(80) };
   const frozenPayment = { ...payments[0], id: uuid(710), title_id: title.id, entry_number: title.entry_number, description: title.description,
     branch: title.branch, macro_snapshot: 'FIXO', effective_macro: 'VARIÁVEL', amount_cents: 10123, paid_on: '2026-08-31',
-    bank_label: 'BRADESCO ECOPLAST', created_at: stamp, created_by: userId, cancelled_at: null };
+    bank_label: 'BRADESCO ECOPLAST', cheque_number: options.chequeNumber ? '000214' : null, created_at: stamp, created_by: userId, cancelled_at: null };
   const realizedOtherTitlePayment = { ...frozenPayment, id: uuid(711), title_id: uuid(712), entry_number: 'OUTRO-MÊS',
-    description: 'Pagamento sintético de título com vencimento em outro mês', amount_cents: 2345, paid_on: '2026-09-05' };
+    description: 'Pagamento sintético de título com vencimento em outro mês', cheque_number: options.chequeNumber ? '000315' : null, amount_cents: 2345, paid_on: '2026-09-05' };
   const snapshot = { month, schema_version: '1', titles: [frozenTitle], historical_titles: options.historical ? [historicalTitle] : [], payments: [frozenPayment],
     realized: { rows: [realizedOtherTitlePayment], by_macro: [{ macro: 'VARIÁVEL', amount_cents: 2345, count: 1 }], total_paid_cents: 2345, payment_count: 1 } };
   const closures: any[] = Array.from({ length: options.historyCount ?? (options.closed ? 1 : 0) }, (_, index) => ({
@@ -109,7 +110,7 @@ async function setup(page: Page, options: Options = {}) {
     if (name === 'auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', token_type: 'bearer', expires_in: 3600 } });
     if (url.pathname === '/auth/v1/user') return reply({ id: userId, aud: 'authenticated', role: 'authenticated', email: 'fixture@test.invalid', email_confirmed_at: stamp, created_at: stamp, app_metadata: {}, user_metadata: {} });
     if (name === 'current_access') return reply(access);
-    if (['director_report', 'payables_forecast'].includes(name)) return reply({ code: 'PGRST202' }, 404);
+    if (['director_report', 'payables_forecast', 'payables_management_summary'].includes(name)) return reply({ code: 'PGRST202' }, 404);
     if (name === 'cash_position') return reply({ accounts: [], total_cents: null, expected_accounts: 17, reported_accounts: 0, latest_position_date: null });
     if (name === 'current_stock') return reply({ value_cents: null, reference_date: null, source: null });
     if (name === 'payables_summary') return reply({ open_cents: financial().outstanding_cents, overdue_cents: 0, period_cents: 0, active_count: 1, latest_import_at: stamp });
@@ -145,6 +146,8 @@ async function setup(page: Page, options: Options = {}) {
       Object.assign(title, { due_date: body.p_due_date, amount_cents: body.p_amount_cents, bank_account: body.p_bank_account,
         description: body.p_description, issued_on: body.p_issued_on, macro: body.p_macro,
         review_status: 'A_CONCILIAR', review_id: null, reviewed_at: null, reviewed_by: null });
+      if (body.p_change_cheque === true) title.cheque_number = body.p_cheque_number;
+      closed = false;
       if (body.p_reclassify_payments) payments.forEach(payment => { payment.effective_macro = body.p_macro; });
       title.review_fingerprint = fingerprint(++event); return reply(uuid(850 + event));
     }
@@ -424,4 +427,71 @@ test('Excel refuses an aggregate with more than fifteen digits even when each ti
   await closing(page).getByRole('button', { name: 'Baixar fechamento em Excel', exact: true }).click();
   await expect(closing(page).getByRole('alert')).toContainText(/precisão|Excel/i);
   expect(downloads).toEqual([]);
+});
+
+
+test('cheque is separate from entry number and an audited correction preserves leading zeroes and previous payment metadata', async ({ page }) => {
+  const { title, payments, calls } = await setup(page, { reviewed: true, closed: true, chequeNumber: '000719' });
+  await openReview(page);
+  await expect(review(page).getByRole('heading', { name: 'Conferência do título SINT-401', exact: true })).toBeVisible();
+  await expect(review(page).locator('.payable-title-cheque')).toContainText('Número do cheque: 000719');
+  await review(page).getByText('Corrigir título', { exact: true }).click();
+  const input = review(page).getByRole('textbox', { name: 'Número do cheque do título', exact: true });
+  await expect(input).toHaveValue('000719'); await expect(input).toHaveAttribute('type', 'text');
+  const originalFingerprint = title.review_fingerprint;
+  await input.fill('000720');
+  await review(page).getByRole('textbox', { name: 'Motivo da correção', exact: true }).fill('Número conferido com o cheque original.');
+  page.once('dialog', dialog => { expect(dialog.message()).toContain('Número do cheque: 000720'); return dialog.accept(); });
+  await review(page).getByRole('button', { name: 'Salvar correção do título', exact: true }).click();
+  await expect(review(page).getByRole('status').filter({ hasText: /correç|corrigid/i })).toBeVisible();
+  const changed = calls.filter(call => call.name === 'correct_payable_title'); expect(changed).toHaveLength(1);
+  expect(changed[0].body).toMatchObject({ p_title_id: title.id, p_cheque_number: '000720', p_change_cheque: true,
+    p_observation: 'Número conferido com o cheque original.', p_expected_fingerprint: originalFingerprint });
+  expect(title.entry_number).toBe('SINT-401'); expect(title.cheque_number).toBe('000720');
+  expect(payments[0].cheque_number).toBe('000214');
+  await expect(review(page).locator('.payable-title-cheque')).toContainText('000720');
+  await expect(review(page)).toContainText('A CONCILIAR'); await expect(closing(page)).toContainText('MÊS ABERTO');
+});
+
+test('clearing a cheque is an explicit nullable patch while untouched cheque fields preserve the original API payload', async ({ page }) => {
+  const { title, calls } = await setup(page, { chequeNumber: '000719' }); await openReview(page);
+  await review(page).getByText('Corrigir título', { exact: true }).click();
+  await review(page).getByRole('textbox', { name: 'Número do cheque do título', exact: true }).fill('');
+  await review(page).getByRole('textbox', { name: 'Motivo da correção', exact: true }).fill('Retirar número indevido após conferência.');
+  page.once('dialog', dialog => dialog.accept());
+  await review(page).getByRole('button', { name: 'Salvar correção do título', exact: true }).click();
+  await expect(review(page).getByRole('status').filter({ hasText: /correç|corrigid/i })).toBeVisible();
+  const changed = calls.filter(call => call.name === 'correct_payable_title'); expect(changed).toHaveLength(1);
+  expect(changed[0].body.p_change_cheque).toBe(true); expect(changed[0].body.p_cheque_number).toBeNull();
+  expect(title.cheque_number).toBeNull(); expect(title.entry_number).toBe('SINT-401');
+});
+
+test('closed Excel exports frozen cheque text from each snapshot and never substitutes the current title or entry number', async ({ page }) => {
+  const { title, historicalTitle } = await setup(page, { director: true, reviewed: true, closed: true, historical: true, chequeNumber: '000719' });
+  historicalTitle.cheque_number = '000015'; await selectMonth(page);
+  title.cheque_number = '999910';
+  const pending = page.waitForEvent('download');
+  await closing(page).getByRole('button', { name: 'Baixar fechamento em Excel', exact: true }).click();
+  const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile((await (await pending).path())!);
+  for (const [name, cell, expected] of [['Títulos do mês', 'O2', '000113'], ['Versões anteriores', 'O2', '000015'],
+    ['Pagamentos dos títulos', 'M2', '000214'], ['Realizados no mês', 'M2', '000315']] as const) {
+    const sheet = workbook.getWorksheet(name)!;
+    expect(sheet.getRow(1).getCell(sheet.columnCount).value).toBe('Número do cheque');
+    expect(sheet.getCell(cell).value).toBe(expected); expect(typeof sheet.getCell(cell).value).toBe('string');
+    expect(sheet.getCell(cell).numFmt).toBe('@');
+  }
+  expect(workbook.getWorksheet('Títulos do mês')?.getCell('B2').value).toBe('SINT-401');
+});
+
+test('older closed snapshots without cheque numbers keep blank cheque columns even after the current source is updated', async ({ page }) => {
+  const { snapshot, title } = await setup(page, { director: true, reviewed: true, closed: true, chequeNumber: '000719' });
+  for (const item of [...snapshot.titles, ...snapshot.payments, ...snapshot.realized.rows]) delete (item as Record<string, unknown>).cheque_number;
+  await selectMonth(page); title.cheque_number = '999910';
+  const pending = page.waitForEvent('download');
+  await closing(page).getByRole('button', { name: 'Baixar fechamento em Excel', exact: true }).click();
+  const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile((await (await pending).path())!);
+  expect(workbook.getWorksheet('Títulos do mês')?.getCell('O2').value || '').toBe('');
+  expect(workbook.getWorksheet('Pagamentos dos títulos')?.getCell('M2').value || '').toBe('');
+  expect(workbook.getWorksheet('Realizados no mês')?.getCell('M2').value || '').toBe('');
+  expect(workbook.getWorksheet('Títulos do mês')?.getCell('B2').value).toBe('SINT-401');
 });

@@ -2,15 +2,13 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
-## Formato do relatório CP — 0.7.1
+## Contas a Pagar — 0.8.0
 
-O parser aceita o modelo ERP confirmado, incluindo `Plano cp - Conta: nome`, `Plano cc - Conta: nome`, `Emissão: valor do lançamento` e datas ERP com horário válido. Atualizar somente o código da função existente `payables-import` com `dashboard/payables-import.ts`, além do frontend 0.7.1. Nenhuma nova migration. Procedimento e mapeamento: [modelo do relatório CP](../docs/modelo-importacao-contas-pagar.md).
+No projeto existente, executar `dashboard/ativar-contas-pagar.sql`: aplica somente migrations faltantes **012..021** numa transação. A 019 acrescenta número de cheque sem reescrever snapshots antigos; a 020 agrega previsto/realizado semanal por Macro e total mensal pela data real; a 021 oferece previsões incrementais e importação explícita de pagamentos integrais com revisão automática, idempotência e correções auditadas.
 
-## Contas a Pagar — 0.7.0
+Atualizar também a função existente **payables-import** com `dashboard/payables-import.ts`, mantendo nome, origens e verificação própria de sessão/permissões. Os modos novos exigem a capacidade correspondente do banco; a ausência da migration bloqueia a gravação com mensagem de atualização. O modo antigo sem contexto permanece para compatibilidade, mas a interface atual usa explicitamente `forecast` ou `payments`. Não alterar `auth-gateway` ou o serviço CR.
 
-No projeto existente, usar `dashboard/ativar-contas-pagar.sql`. O script exige a base já instalada e aplica somente as migrations faltantes de 012 a 018 numa transação, sem recriar dados. Inclui previsões, ledger imutável de pagamentos/estornos, identificação estável por filial+número, revisão exclusiva de títulos totalmente pagos, correções auditadas e fechamento mensal com snapshots imutáveis. Valores realizados seguem data efetiva; reclassificações preservam o macro original e registram a alocação corrigida.
-
-Atualizar também a função existente **payables-import** com `dashboard/payables-import.ts` para o erro amigável de identidade ambígua. Nenhuma alteração no gateway de login ou na função CR. RLS e validação de sessão/perfil permanecem obrigatórias. Guia: [ativação CP](../docs/ativacao-contas-pagar.md).
+As cópias originais permanecem privadas. Escrita nas novas tabelas é restrita às funções autorizadas; Diretoria consulta sem escrita, inclusive pela API. Não expor chaves administrativas no navegador ou desativar RLS. Guia: [ativação CP](../docs/ativacao-contas-pagar.md); [modelo confirmado](../docs/modelo-importacao-contas-pagar.md).
 
 ## Resumo da Diretoria — 0.6.0
 
@@ -44,7 +42,7 @@ Os passos abaixo são referência da instalação inicial. **Não repeti-los no 
 7. Após 008/009/010/011, executar `migrations/012_treasury_accounts.sql` uma vez, acrescentando as seis posições da lista atual. As contas novas aguardam saldo explícito; nenhuma posição financeira é inventada.
 
 8. Após 012, executar `migrations/013_director_report.sql` uma vez. Não repetir a instalação inicial em projetos já existentes.
-9. Após 013, aplicar 014, 015, 016, 017 e 018 em ordem, ou usar o combinado condicional `dashboard/ativar-contas-pagar.sql`, que ignora versões já registradas. Publicar `payables-import` atualizado.
+9. Após 013, aplicar 014 a 021 em ordem, ou usar o combinado condicional `dashboard/ativar-contas-pagar.sql`, que ignora versões já registradas. Publicar `payables-import` atualizado.
 
 Em projetos já configurados manualmente, registrar as migrations aplicadas antes de usar `supabase db push`. Não rodar o histórico inteiro contra um banco existente sem conferir o histórico. Não executar `db reset` em um projeto com dados.
 

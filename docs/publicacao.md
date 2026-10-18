@@ -1,8 +1,8 @@
-# Publicação e ativação — 0.7.1
+# Publicação e ativação — 0.8.0
 
-Para a correção atual **0.7.1**, seguir [modelo-importacao-contas-pagar.md](modelo-importacao-contas-pagar.md): atualizar a função existente `payables-import` e aguardar o site 0.7.1. Reconhece os cabeçalhos confirmados do relatório e datas com horário; não exige novo SQL. A ativação 0.7.0 abaixo continua necessária apenas se ainda não foi concluída.
+Para a versão atual **0.8.0**, seguir [ativacao-contas-pagar.md](ativacao-contas-pagar.md): executar o SQL combinado condicional **012..021**, atualizar o código da função existente **payables-import** e aguardar o frontend no mesmo endereço. Inclui resumo semanal por Macro, total pago mensal, consulta por período, importação incremental de previsões e conciliação automática pelo relatório dos pagos. Nenhum serviço pago é habilitado. Não repetir a instalação inicial.
 
-Para a atualização **0.7.0**, seguir [ativacao-contas-pagar.md](ativacao-contas-pagar.md). Executar o novo combinado condicional de CP (aplica somente 012..018 que faltarem), atualizar a função existente `payables-import` e aguardar a publicação da branch `main`. Conferir a versão 0.7.0 no mesmo endereço. Não repetir a instalação inicial ou publicar outra Central. Os procedimentos de versões anteriores abaixo permanecem como histórico.
+Os procedimentos abaixo preservam o histórico das versões anteriores.
 
 Para a atualização anterior 0.6.0, seguir [ativacao-resumo-diretoria.md](ativacao-resumo-diretoria.md): confirmar 012 e executar somente a nova migration 013. Ela acrescenta os complementos oficiais e o cálculo sem M49, preservando o banco. Nenhuma Edge Function precisa ser criada ou republicada para o Resumo da Diretoria. O site deve exibir **Versão 0.6.0**.
 

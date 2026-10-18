@@ -1,18 +1,16 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.7.1**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque é informado manualmente em Importar Bases, conforme a orientação mais recente do usuário. A operação financeira completa ainda depende dos módulos pendentes e de homologação remota.
+Versão de desenvolvimento **0.8.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
 
-## Modelo do relatório CP — 0.7.1
+## Contas a Pagar por importação — 0.8.0
 
-Importação reconhece o modelo confirmado com `Plano cp - Conta: nome`, `Plano cc - Conta: nome`, `Emissão: valor do lançamento`, `Emissão: data`, `Vencimento: data`, `Filial` e `Situação`. As datas ERP aceitam horário válido sem alterar o dia civil. A análise mostra prévia dos títulos antes da classificação e conclusão. Atualizar a função existente `payables-import` e o site; esta correção não exige nova migration. Detalhes: [modelo de importação](docs/modelo-importacao-contas-pagar.md).
+A equipe continua lançando no sistema de origem. **Importar Bases → Contas a Pagar** possui duas opções: **Previsões / novos títulos** para a primeira base e atualizações da previsão; **Pagamentos realizados** para o relatório dos títulos efetivamente pagos. O segundo modo registra os dados reais, concilia automaticamente os títulos válidos e evita duplicar pagamentos em reimportações. Títulos ausentes permanecem na base. A rotina informada é segunda-feira para previsões e terça a sexta para pagos; reprocessamento em outros dias é permitido.
 
-## Contas a Pagar — 0.7.0
+O **Contas a Pagar** abre pelo resumo: previsto versus realizado por Macro na semana sábado–sexta, total pago no mês, compromissos a vencer e vencidos. Uma consulta por período e Macro abre os pagamentos pela data efetiva, com acesso individual a cada título. A Diretoria consulta sem permissão de escrita; fechamento, correções excepcionais e previsões de oito semanas ficam disponíveis nas ferramentas de detalhe.
 
-Consulta por mês de vencimento e macro, registro de pagamentos integrais com data/conta efetivas, revisão **A CONCILIAR / CONCILIADO**, correções auditadas e fechamento mensal com versões históricas. Um título só pode ser marcado **CONCILIADO** quando estiver integralmente pago. Alterações posteriores exigem nova conferência e fechamento; relatórios já salvos permanecem imutáveis. Reimportações atualizam o mesmo título por filial+número, sem apagar pagamentos; identificação ambígua bloqueia a operação.
+A identidade é **filial + número do lançamento**. Dados fornecidos pelo relatório atualizam o mesmo título com auditoria. No relatório de pagos, conforme confirmação do usuário, `Vencimento: data` representa a data real de pagamento e `Emissão: valor do lançamento` o valor integral pago; o vencimento previsto original é preservado. O campo separado **Cheque: número** mantém zeros à esquerda. Planos e bancos desconhecidos precisam de vínculo oficial uma vez; os vínculos são reutilizados nas importações seguintes.
 
-A previsão cobre oito semanas de sábado a sexta, com provisões configuráveis por vigência, vínculo explícito de planos e cheques sem duplicidade. Excel inclui lançamentos, macros, comparação, pagamentos reais e realizados por macro. Falta de fonte fica pendente; ausência na importação não inventa pagamento.
-
-Para atualizar o projeto existente, seguir [docs/ativacao-contas-pagar.md](docs/ativacao-contas-pagar.md): executar o novo combinado condicional `supabase/dashboard/ativar-contas-pagar.sql`, atualizar a função existente `payables-import` e aguardar o deploy do site. O combinado aplica somente as migrations faltantes de 012 a 018; mantém banco, usuários, saldos e históricos. Não repetir a instalação inicial.
+Ativação: [guia CP](docs/ativacao-contas-pagar.md). O combinado condicional instala somente migrations faltantes **012..021**, preservando dados. Atualizar também a função existente `payables-import` e o site. Publicar código pelo Git não aplica SQL nem publica funções no Supabase. Formato: [modelo do relatório](docs/modelo-importacao-contas-pagar.md).
 
 ## O que está implementado
 
@@ -22,7 +20,7 @@ O Painel preserva a organização e a marca da V75: Hoje/Semana/Mês, semana fin
 
 **Importar Bases** centraliza as áreas autorizadas. Em **Caixa / Bancos**, a Gerência informa data, saldos das **17 posições: 12 contas bancárias e 5 caixas das empresas**, e observação, confere o consolidado e salva a posição inteira em uma transação. O cadastro segue a lista atualizada do usuário, incluindo Cora Ecoplast e os caixas de Ecoplast, Limpe Fácil, Gamma, Fast Clean e Easy Clean. Zero exige preenchimento explícito; valores de datas anteriores não são copiados automaticamente para um novo dia. Extratos de até 2 MiB são guardados como apoio privado, com hash e auditoria, sem alterar saldos ou conciliar títulos. A consulta de Caixa/Bancos e o estoque de contingência permanecem disponíveis conforme as permissões.
 
-CP possui importação completa atômica, classificação obrigatória, baixas preservadas, filtros, paginação e CSV. CR possui importação completa com arquivo novamente analisado pelo servidor; novas ausências aguardam validação financeira, sem serem consideradas recebimentos. A carteira é herdada da dívida ativa do cliente quando existe uma atribuição oficial. Mudanças na identificação nome/CNPJ exigem conferência para evitar duplicidade; não há união automática. Cobrança oferece carteira individual, contatos, retornos e pagamento informado; CR confirma a data real ou devolve à mesma cobradora como não localizado. Registros de recebimentos validados preservam origem, cobradora e atraso, preparando a futura apuração de comissões.
+CP possui importação atômica de previsões e pagamentos, classificação obrigatória, histórico preservado, filtros, paginação, CSV e Excel. CR possui importação completa com arquivo novamente analisado pelo servidor; novas ausências aguardam validação financeira, sem serem consideradas recebimentos. A carteira é herdada da dívida ativa do cliente quando existe uma atribuição oficial. Mudanças na identificação nome/CNPJ exigem conferência para evitar duplicidade; não há união automática. Cobrança oferece carteira individual, contatos, retornos e pagamento informado; CR confirma a data real ou devolve à mesma cobradora como não localizado. Registros de recebimentos validados preservam origem, cobradora e atraso, preparando a futura apuração de comissões.
 
 Faturamento, Margens, Comissões, RH/DP, conciliação automática de extratos bancários, migração do estado operacional anterior e backups ainda estão pendentes. Também faltam criação completa de contas Auth, redefinição administrativa e troca obrigatória de senha. Não há valores fictícios nem bases V75 embutidas nos arquivos públicos.
 
@@ -70,6 +68,9 @@ npm run test:payable-payments-sql
 npm run test:payable-identity-sql
 npm run test:payable-closing-sql
 npm run test:payable-full-payment-sql
+npm run test:payable-cheques-sql
+npm run test:payables-management-sql
+npm run test:payable-paid-import-sql
 npm run test:payables-operations-sql
 npm run test:treasury-sql
 npm run test:director-sql

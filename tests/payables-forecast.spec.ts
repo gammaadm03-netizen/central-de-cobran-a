@@ -43,6 +43,7 @@ async function setup(page: Page, options: Options = {}) {
     if (url.pathname === '/auth/v1/user') return reply({ id, aud: 'authenticated', role: 'authenticated', email: 'synthetic@test.invalid', created_at: now.toISOString(), app_metadata: {}, user_metadata: {} });
     calls.push({ name, body });
     if (name === 'current_access') return reply(access);
+    if (name === 'payables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (['payable_review_titles', 'payable_financial_titles'].includes(name)) return reply({ code: 'PGRST205' }, 404);
     if (['get_payable_payment_accounts', 'payable_payment_summary', 'list_payable_payments', 'get_payables_revision', 'get_payable_month_status', 'payables_month_status', 'list_payable_month_closures'].includes(name)) return reply({ code: 'PGRST202' }, 404);
     if (name === 'director_report') return reply({ code: 'PGRST202' }, 404);

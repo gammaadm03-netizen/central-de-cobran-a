@@ -285,3 +285,56 @@ test('financial and review filters remain visible in report metadata and cannot 
   await assert.rejects(buildPayablesWorkbook([], [], { ...options, filters: { ...filters, financialStatus: 'PAID' } }), /mês completo/);
   await assert.rejects(buildPayablesWorkbook([], [], { ...options, filters: { ...filters, reviewStatus: 'CONCILIADO' } }), /mês completo/);
 });
+
+test('XLSX preserves leading-zero cheques and separate payment snapshots without deduplicating titles paid by the same cheque', async () => {
+  const rows = [title('one-cheque', { amount_cents: 100, cheque_number: '000123' }), title('two-cheque', { amount_cents: 200, cheque_number: '000123' })];
+  const payments = [payment('first-cheque-payment', { title_id: rows[0].id, amount_cents: 100, cheque_number: '000099' }), payment('second-cheque-payment', { title_id: rows[1].id, amount_cents: 200, cheque_number: '000099' })];
+  const original = await buildPayablesWorkbook(rows, [], { ...options, payments });
+  const book = new ExcelJS.Workbook(); await book.xlsx.load(await original.xlsx.writeBuffer());
+  const launches = book.worksheets[0], actual = book.getWorksheet('Pagamentos realizados');
+  assert.deepEqual(launches.getRow(1).values.slice(1, 15), [...PAYABLE_EXPORT_HEADERS]);
+  assert.equal(launches.getCell('U1').value, 'Nº cheque');
+  assert.equal(launches.columnCount, 21);
+  assert.equal(launches.rowCount, 3);
+  for (const address of ['U2', 'U3']) {
+    assert.equal(launches.getCell(address).value, '000123');
+    assert.equal(launches.getCell(address).type, ExcelJS.ValueType.String);
+    assert.equal(launches.getCell(address).numFmt, '@');
+  }
+  assert.equal(actual.getCell('L1').value, 'Macro efetivo — classificação auditada');
+  assert.equal(actual.getCell('M1').value, 'Nº cheque no pagamento');
+  assert.equal(actual.getCell('M2').value, '000099');
+  assert.equal(actual.getCell('M3').value, '000099');
+  assert.equal(actual.getCell('M2').type, ExcelJS.ValueType.String);
+  assert.equal(actual.getCell('M2').numFmt, '@');
+  assert.equal(summaryValue(book, 'Quantidade de lançamentos'), 2);
+  assert.equal(summaryValue(book, 'Total dos lançamentos'), 3);
+  assert.equal(summaryValue(book, 'Realizado: quantidade de pagamentos'), 2);
+  assert.equal(summaryValue(book, 'Realizado: total pago no período'), 3);
+  assert.match(summaryValue(book, 'Número do cheque'), /não identifica sozinho o título/);
+});
+
+test('unknown cheque numbers stay blank and old payment snapshots never inherit a newer title cheque', async () => {
+  const original = await buildPayablesWorkbook([title('known-title', { cheque_number: '000456' }), title('unknown-title', { cheque_number: null })], [], { ...options, payments: [payment('old-unreported-cheque')] });
+  const book = new ExcelJS.Workbook(); await book.xlsx.load(await original.xlsx.writeBuffer());
+  assert.equal(book.worksheets[0].getCell('U2').value, '000456');
+  assert.equal(book.worksheets[0].getCell('U3').value, null);
+  assert.equal(book.getWorksheet('Pagamentos realizados').getCell('M2').value, null);
+  const noFinance = await buildPayablesWorkbook([title('unreported', { cheque_number: null, entry_number: '000123', bank_account: 'CHEQUE 000999' })], [], options);
+  assert.equal(noFinance.worksheets[0].columnCount, 15);
+  assert.equal(noFinance.worksheets[0].getCell('O1').value, 'Nº cheque');
+  assert.equal(noFinance.worksheets[0].getCell('O2').value, null);
+  const oldFormat = await buildPayablesWorkbook([title('old-format')], [], options);
+  assert.equal(oldFormat.worksheets[0].columnCount, 14);
+});
+
+test('formula-like cheque text stays literal, while numeric cheque payloads fail instead of silently dropping leading zeroes', async () => {
+  const original = await buildPayablesWorkbook([title('formula-cheque', { cheque_number: '=SUM(A1:A9)' })], [], { ...options, payments: [payment('formula-payment', { cheque_number: '+000123' })] });
+  const book = new ExcelJS.Workbook(); await book.xlsx.load(await original.xlsx.writeBuffer());
+  assert.equal(book.worksheets[0].getCell('U2').value, '=SUM(A1:A9)');
+  assert.equal(book.worksheets[0].getCell('U2').type, ExcelJS.ValueType.String);
+  assert.equal(book.getWorksheet('Pagamentos realizados').getCell('M2').value, '+000123');
+  assert.equal(book.getWorksheet('Pagamentos realizados').getCell('M2').type, ExcelJS.ValueType.String);
+  await assert.rejects(buildPayablesWorkbook([title('numeric-cheque', { cheque_number: 123 })], [], options), /cheque deve ser texto/);
+  await assert.rejects(buildPayablesWorkbook([], [], { ...options, payments: [payment('numeric-payment-cheque', { cheque_number: 123 })] }), /cheque deve ser texto/);
+});

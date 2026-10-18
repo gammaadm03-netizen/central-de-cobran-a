@@ -1,7 +1,7 @@
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const MAX_ROWS = 5000;
 const REQUIRED = ['entry_number', 'description', 'due_date', 'amount_cents', 'plan', 'branch'];
-export const COLUMN_LABELS = { entry_number: 'Nº lançamento', description: 'Histórico / Favorecido', due_date: 'Vencimento', amount_cents: 'Valor', plan: 'Plano de Contas', branch: 'Filial', bank_account: 'Banco / Conta', issued_on: 'Emissão', source_status: 'Status / Situação' };
+export const COLUMN_LABELS = { entry_number: 'Nº lançamento', description: 'Histórico / Favorecido', due_date: 'Vencimento', amount_cents: 'Valor', plan: 'Plano de Contas', branch: 'Filial', bank_account: 'Banco / Conta', issued_on: 'Emissão', source_status: 'Status / Situação', cheque_number: 'Cheque: número' };
 const normalize = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const ALIASES = {
   entry_number: ['LANCAMENTO', 'NLANCAMENTO', 'NOLANCAMENTO', 'NUMEROLANCAMENTO', 'NUMERODOLANCAMENTO', 'NUMEROLANC', 'NROLANCAMENTO'],
@@ -13,6 +13,7 @@ const ALIASES = {
   bank_account: ['BANCO', 'CONTA', 'BANCOCONTA', 'PLANOCCCONTANOME'],
   issued_on: ['EMISSAO', 'DATAEMISSAO', 'DTEMISSAO', 'EMISSAODATA'],
   source_status: ['STATUS', 'SITUACAO'],
+  cheque_number: ['CHEQUENUMERO'],
 };
 const headerMap = new Map(Object.entries(ALIASES).flatMap(([key, aliases]) => aliases.map(alias => [alias, key])));
 // This ERP exports civil dates with a clock component. Only these explicit CP
@@ -176,6 +177,37 @@ function scalar(value) {
   if (typeof value === 'string' && /^\s*[=+@]/.test(value)) throw new Error('Conteúdo interpretável como fórmula. Salve somente valores.');
   return value;
 }
+const INVALID_CHEQUE = 'Número de cheque inválido. Use texto ou número inteiro não negativo, sem notação científica.';
+const UNSUPPORTED_CHEQUE_FORMAT = 'Formato da célula do cheque não suportado. No Excel, formate o número do cheque como Texto ou use somente zeros, como 000000.';
+function parseChequeNumber(value) {
+  const primitive = scalar(value);
+  if (typeof primitive === 'number') {
+    if (!Number.isSafeInteger(primitive) || primitive < 0) throw new Error(INVALID_CHEQUE);
+    return String(primitive);
+  }
+  if (typeof primitive !== 'string') throw new Error(INVALID_CHEQUE);
+  const text = primitive.trim();
+  if (text.length > 150) throw new Error('Limite de 150 caracteres excedido.');
+  // Identifiers remain text, including leading zeros and punctuation. Do not
+  // silently interpret decimal/scientific notation or accept control characters.
+  if (/^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)[eE][+-]?\d+$/.test(text) || /^-\d+(?:[.,]\d+)?$/.test(text) || /^\d+[.,]\d+$/.test(text) || /[\u0000-\u001f\u007f]/.test(text)) throw new Error(INVALID_CHEQUE);
+  return text;
+}
+export function isChequeNumberHeader(value) {
+  return headerMap.get(normalize(scalar(value))) === 'cheque_number';
+}
+// ExcelJS cell.text does not apply custom numeric formats. Both workbook
+// adapters use this function so 123 with format 000000 imports as "000123".
+export function readPayableChequeCell(value, numFmt) {
+  if (value instanceof Date) throw new Error(UNSUPPORTED_CHEQUE_FORMAT);
+  const text = parseChequeNumber(value);
+  if (typeof value !== 'number') return text;
+  const format = String(numFmt ?? '').trim();
+  if (!format || format.toUpperCase() === 'GENERAL' || format === '@') return text;
+  if (!/^0+$/.test(format)) throw new Error(UNSUPPORTED_CHEQUE_FORMAT);
+  if (format.length > 150) throw new Error('Limite de 150 caracteres excedido.');
+  return text.padStart(format.length, '0');
+}
 export function validatePayableRows(matrix, { excel1904 = false } = {}) {
   const errors = [], rows = [];
   if (!matrix.length) return { rows, errors: [{ line: 1, column: 'Arquivo', problem: 'Arquivo vazio.', correction: 'Exporte o relatório completo com os cabeçalhos.' }] };
@@ -206,6 +238,7 @@ export function validatePayableRows(matrix, { excel1904 = false } = {}) {
       try {
         const value = scalar(source[column]);
         if (key === 'amount_cents') row[key] = parseMoneyCents(value);
+        else if (key === 'cheque_number') row[key] = parseChequeNumber(value);
         else if (key === 'due_date') row[key] = timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904);
         else if (key === 'issued_on') row[key] = String(value).trim() ? (timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904)) : null;
         else {
@@ -227,5 +260,83 @@ export function validatePayableRows(matrix, { excel1904 = false } = {}) {
     if (errors.length >= 100) break;
   }
   if (!rows.length && !errors.length) errors.push({ line: 2, column: 'Arquivo', problem: 'Não há títulos no relatório.', correction: 'Selecione um relatório completo com lançamentos; base vazia não pode baixar títulos.' });
+  return { rows: errors.length ? [] : rows, errors };
+}
+
+// This validator is selected only after the operator explicitly declares a
+// paid-only report. In that report the ERP's Vencimento column is the actual
+// payment date and Plano CC is the actual paying bank, as confirmed by the user.
+// It never creates financial titles or derives payment facts from disappearance.
+export function validatePayablePaidRows(matrix, { excel1904 = false } = {}) {
+  const errors = [], rows = [];
+  if (!matrix.length) return { rows, errors: [{ line: 1, column: 'Arquivo', problem: 'Arquivo vazio.', correction: 'Exporte o relatório de pagamentos com os cabeçalhos.' }] };
+  const columns = new Map(), timestampColumns = new Set();
+  matrix[0].forEach((value, index) => {
+    let key;
+    try {
+      const normalizedHeader = normalize(scalar(value));
+      key = headerMap.get(normalizedHeader);
+      if (ERP_TIMESTAMP_HEADERS.has(normalizedHeader)) timestampColumns.add(index);
+    } catch { errors.push({ line: 1, column: 'Cabeçalho', problem: 'Cabeçalho inválido.', correction: 'Use nomes de colunas sem fórmulas.' }); return; }
+    if (key && columns.has(key)) errors.push({ line: 1, column: COLUMN_LABELS[key], problem: 'Coluna duplicada ou ambígua.', correction: 'Mantenha uma única coluna para este campo.' });
+    else if (key) columns.set(key, index);
+  });
+  const required = ['entry_number', 'branch', 'due_date', 'amount_cents', 'bank_account'];
+  for (const key of required) if (!columns.has(key)) errors.push({ line: 1, column: COLUMN_LABELS[key], problem: 'Coluna obrigatória ausente.', correction: `Inclua a coluna ${COLUMN_LABELS[key]}; não é possível deduzir dados do pagamento.` });
+  if (errors.length) return { rows, errors };
+  const used = new Set([...required, 'source_status', 'cheque_number', 'description', 'plan', 'issued_on']);
+  const usedColumns = new Set([...columns].filter(([key]) => used.has(key)).map(([, column]) => column));
+  const identities = new Set(); let total = 0, nonempty = 0;
+  for (let index = 1; index < matrix.length; index++) {
+    const source = matrix[index];
+    if (source.every(value => value === null || value === undefined || String(value).trim() === '')) continue;
+    nonempty++;
+    if (nonempty > MAX_ROWS) { errors.push({ line: index + 1, column: 'Arquivo', problem: 'Mais de 5.000 linhas.', correction: 'Exporte uma origem completa dentro do limite.' }); break; }
+    const row = { branch: '', entry_number: '', source_status: 'PAGO', paid_on: '', amount_paid_cents: 0, paid_bank: '' };
+    const before = errors.length;
+    if (source.length > matrix[0].length && source.slice(matrix[0].length).some(value => value !== null && value !== undefined && String(value).trim())) errors.push({ line: index + 1, column: 'Arquivo', problem: 'Há valores fora das colunas do cabeçalho.', correction: 'Confira delimitadores e cabeçalhos; valores com vírgula em CSV devem estar entre aspas.' });
+    source.forEach((value, column) => { if (!usedColumns.has(column)) { try { scalar(value); } catch (error) { errors.push({ line: index + 1, column: `Coluna ${column + 1}`, problem: error.message, correction: 'Salve uma cópia somente com valores, sem fórmulas.' }); } } });
+    for (const [key, column] of columns) {
+      if (!used.has(key)) continue;
+      try {
+        const value = scalar(source[column]);
+        if (key === 'amount_cents') {
+          row.amount_paid_cents = parseMoneyCents(value);
+          if (row.amount_paid_cents <= 0) throw new Error('O valor pago deve ser maior que zero.');
+        } else if (key === 'due_date') row.paid_on = timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904);
+        else if (key === 'cheque_number') row.cheque_number = parseChequeNumber(value);
+        else if (key === 'issued_on') row.issued_on = String(value).trim() ? (timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904)) : null;
+        else {
+          const text = String(value ?? '').trim().replace(/\s+/g, ' ');
+          if (key === 'source_status') {
+            if (!['', 'PAGO', 'CHEQUE', 'QUITADO', 'LIQUIDADO', 'COMPENSADO'].includes(text.toUpperCase())) throw new Error('O relatório de pagamentos contém situação incompatível com pagamento confirmado.');
+          } else if (key === 'description' || key === 'plan') {
+            const maximum = key === 'description' ? 1500 : 300;
+            if (text.length > maximum) throw new Error(`Limite de ${maximum} caracteres excedido.`);
+            // Paid reports can carry current ERP metadata. Empty optional text
+            // does not erase a known title description or accounting plan.
+            if (text) row[key] = text;
+          } else {
+            if (!text) throw new Error('Campo obrigatório vazio.');
+            const maximum = key === 'bank_account' ? 300 : 150;
+            if (text.length > maximum) throw new Error(`Limite de ${maximum} caracteres excedido.`);
+            if (key === 'bank_account') row.paid_bank = text;
+            else row[key] = text;
+          }
+        }
+      } catch (error) { errors.push({ line: index + 1, column: COLUMN_LABELS[key], problem: error.message, correction: 'Confira o comprovante e corrija o relatório de pagamentos; não use datas ou bancos previstos.' }); }
+    }
+    // One integral payment per stable title identity. Sorting, payment date,
+    // amount and bank never create a second title identity in this report.
+    const identity = JSON.stringify([row.branch.toUpperCase(), row.entry_number.toUpperCase()]);
+    if (errors.length === before && identities.has(identity)) errors.push({ line: index + 1, column: 'Nº lançamento', problem: 'Lançamento repetido no relatório de pagamentos.', correction: 'Mantenha um único pagamento integral por filial e número de lançamento.' });
+    if (errors.length === before) {
+      total += row.amount_paid_cents;
+      if (!Number.isSafeInteger(total)) errors.push({ line: index + 1, column: 'Valor', problem: 'Total do relatório excede o limite de precisão.', correction: 'Confira valores e origem da base antes de importar.' });
+      else { identities.add(identity); rows.push(row); }
+    }
+    if (errors.length >= 100) break;
+  }
+  if (!rows.length && !errors.length) errors.push({ line: 2, column: 'Arquivo', problem: 'Não há títulos no relatório.', correction: 'Selecione o relatório de pagamentos com lançamentos; nenhum pagamento será deduzido de uma base vazia.' });
   return { rows: errors.length ? [] : rows, errors };
 }

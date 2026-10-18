@@ -1,10 +1,13 @@
-import type { PayableImportRow, ImportProblem } from './payables';
+import type { PayableImportRow, PayablePaidRow, ImportProblem } from './payables';
 export const MAX_FILE_BYTES: number;
 export const MAX_ROWS: number;
 export const COLUMN_LABELS: Record<string, string>;
 export function parseCivilDate(value: unknown, excel1904?: boolean): string;
 export function parseMoneyCents(value: unknown): number;
 export function parseCsv(text: string): unknown[][];
+export function isChequeNumberHeader(value: unknown): boolean;
+export function readPayableChequeCell(value: unknown, numFmt?: string): string;
 export function inspectWorkbookZip(buffer: ArrayBuffer): { start: number; compressed: number; uncompressed: number; method: number }[];
 export function validateWorkbookExpandedSize(buffer: ArrayBuffer): Promise<void>;
 export function validatePayableRows(matrix: unknown[][], options?: { excel1904?: boolean }): { rows: PayableImportRow[]; errors: ImportProblem[] };
+export function validatePayablePaidRows(matrix: unknown[][], options?: { excel1904?: boolean }): { rows: PayablePaidRow[]; errors: ImportProblem[] };
