@@ -1,13 +1,21 @@
 import { publishableKey, supabase, supabaseUrl } from './supabase';
+import { financialWeekLabel } from './financial-dates';
 
 export const PAYABLE_SCOPE = 'grupo-consolidado';
 export interface PayableImportRow { entry_number: string; description: string; due_date: string; amount_cents: number; source_status: string; plan: string; bank_account: string; branch: string; issued_on: string | null }
-export interface PayableTitle extends PayableImportRow { id: string; scope: string; source_key: string; macro: string; status: 'NEW' | 'OPEN' | 'SETTLED_IMPORT'; settled_at: string | null }
+export interface PayableTitle extends PayableImportRow {
+  id: string; scope: string; source_key: string; macro: string; status: 'NEW' | 'OPEN' | 'SETTLED_IMPORT'; settled_at: string | null;
+  last_import_id?: string; paid_cents?: number; outstanding_cents?: number; payment_remaining_cents?: number;
+  overpaid_cents?: number; financial_status?: 'OPEN' | 'PARTIAL' | 'PAID' | 'OVERPAID' | 'PENDING_RECONCILIATION';
+  last_payment_date?: string | null; last_payment_bank?: string | null; payment_revision?: string | null;
+  review_status?: 'A_CONCILIAR' | 'CONCILIADO'; review_id?: string | null; reviewed_by?: string | null; reviewed_at?: string | null; review_fingerprint?: string; closing_eligible?: boolean; closing_exclusion_reason?: string | null;
+}
 export interface ImportProblem { line: number; column: string; problem: string; correction: string }
-export interface ImportPreview { previous_import_id: string | null; row_count: number; new_count: number; open_count: number; settled_count: number }
-export interface PayableFilters { scope: string; search: string; start: string; end: string; status: string; macro: string; branch: string }
+export interface ImportPreview { previous_import_id: string | null; row_count: number; new_count: number; open_count: number; settled_count: number; changed_count?: number }
+export interface PayableFilters { scope: string; search: string; start: string; end: string; status: string; macro: string; branch: string; financialStatus?: string; reviewStatus?: string }
 export interface PayableServerPreview { rows: PayableImportRow[]; preview: ImportPreview; file_sha256: string }
 export const payableStatus: Record<string, string> = { NEW: 'Novo', OPEN: 'Em aberto', SETTLED_IMPORT: 'Quitado por importação' };
+export const payableFinancialStatus: Record<string, string> = { OPEN: 'Em aberto', PARTIAL: 'Pendência de pagamento anterior', PAID: 'Totalmente pago', OVERPAID: 'Pagamento acima do valor atualizado', PENDING_RECONCILIATION: 'Baixado por importação — a conciliar' };
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 export function formatCents(value: number) {
   if (!Number.isSafeInteger(value)) return 'Valor indisponível';
@@ -23,6 +31,7 @@ export function payableError(error: unknown, fallback: string) {
   if (code === 'PGRST301' || code === 'PGRST303') return 'Sua sessão expirou. Entre novamente.';
   if (code === '40001') return 'A base mudou desde a análise. Analise o arquivo novamente antes de concluir.';
   if (code === '23505') return 'Este arquivo já foi importado para esta origem. Nenhum dado foi alterado.';
+  if (code === 'P0016') return 'Há lançamentos repetidos ou versões históricas ambíguas para a mesma filial e número. Confira parcelas e o histórico. Nenhum dado foi alterado.';
   if (code === '23514' || code === '22023') return 'A importação foi recusada. Confira as linhas, a origem completa e a classificação de todos os planos.';
   if (code === 'PGRST202' || code === '42P01') return 'Este módulo precisa da atualização do banco de dados. Solicite a aplicação da migration de Contas a Pagar à administração.';
   return fallback;
@@ -52,17 +61,52 @@ export async function payableImportRequest<T>(body: { action: 'preview' | 'commi
 
 export async function readPayables(filters: PayableFilters, offset: number, size: number, signal?: AbortSignal) {
   if (!supabase) throw new Error('Conexão indisponível.');
-  let query = supabase.from('payable_titles').select('id,scope,source_key,entry_number,description,due_date,amount_cents,source_status,plan,bank_account,branch,issued_on,macro,status,settled_at', { count: 'exact' }).eq('scope', filters.scope).order('due_date').order('id').range(offset, offset + size - 1);
+  const client = supabase;
+  function queryFor(table: 'payable_review_titles' | 'payable_financial_titles' | 'payable_titles') {
+  const financial = table !== 'payable_titles';
+  let query = client.from(table).select(financial ? '*' : 'id,scope,source_key,entry_number,description,due_date,amount_cents,source_status,plan,bank_account,branch,issued_on,macro,status,settled_at,last_import_id', { count: 'exact' }).eq('scope', filters.scope).order('due_date').order('id').range(offset, offset + size - 1);
   if (filters.search.trim()) query = query.ilike('description', `%${filters.search.trim().replace(/[\\%_]/g, '\\$&')}%`);
   if (filters.start) query = query.gte('due_date', filters.start);
   if (filters.end) query = query.lte('due_date', filters.end);
   if (filters.status) query = query.eq('status', filters.status);
   if (filters.macro) query = query.eq('macro', filters.macro);
   if (filters.branch.trim()) query = query.eq('branch', filters.branch.trim());
+  if (financial && filters.financialStatus) query = query.eq('financial_status', filters.financialStatus);
+  if (table === 'payable_review_titles' && filters.reviewStatus) query = query.eq('review_status', filters.reviewStatus);
   if (signal) query = query.abortSignal(signal);
-  const result = await query;
+  return query;
+  }
+  let result = await queryFor('payable_review_titles');
+  let reviewAvailable = true;
+  if (result.error && ['PGRST205', '42P01'].includes(result.error.code)) {
+    reviewAvailable = false;
+    if (filters.reviewStatus) throw new Error('Ative o fechamento mensal no banco para filtrar pela revisão dos títulos.');
+    result = await queryFor('payable_financial_titles');
+  }
+  let financialAvailable = true;
+  if (result.error && ['PGRST205', '42P01'].includes(result.error.code)) {
+    financialAvailable = false;
+    if (filters.financialStatus) throw new Error('Ative a conciliação de pagamentos no banco para filtrar pela situação financeira.');
+    result = await queryFor('payable_titles');
+  }
   if (result.error) throw result.error;
-  return { rows: (result.data ?? []) as PayableTitle[], count: result.count ?? 0 };
+  return { rows: (result.data ?? []) as unknown as PayableTitle[], count: result.count ?? 0, financialAvailable, reviewAvailable };
+}
+
+export interface PayablesRevision { import_id: string | null; financial_revision: string | null }
+export async function readPayablesRevision(signal?: AbortSignal): Promise<PayablesRevision> {
+  if (!supabase) throw new Error('Conexão indisponível.');
+  let request = supabase.rpc('get_payables_revision'); if (signal) request = request.abortSignal(signal);
+  const result = await request;
+  if (result.error && ['PGRST202', '42883'].includes(result.error.code)) {
+    let query = supabase.from('payable_imports').select('id').eq('scope', PAYABLE_SCOPE).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(1);
+    if (signal) query = query.abortSignal(signal);
+    const fallback = await query; if (fallback.error) throw fallback.error;
+    return { import_id: fallback.data?.[0]?.id ?? null, financial_revision: null };
+  }
+  if (result.error) throw result.error;
+  if (!result.data || !(result.data.import_id === null || typeof result.data.import_id === 'string') || typeof result.data.financial_revision !== 'string') throw new Error('Não foi possível confirmar a versão dos dados financeiros.');
+  return result.data as PayablesRevision;
 }
 
 export async function analyzePayableFile(file: File, signal?: AbortSignal): Promise<{ rows: PayableImportRow[]; errors: ImportProblem[]; hash: string; base64: string }> {
@@ -90,10 +134,14 @@ export async function analyzePayableFile(file: File, signal?: AbortSignal): Prom
 }
 
 export function downloadCsv(rows: PayableTitle[], name: string) {
-  const headers = ['Centro de Custo Macro','Nº Lançamento','Histórico/Favorecido','Plano de Contas','Filial','Banco/Conta','Emissão','Vencimento','Valor','Status','Situação','Origem','Data baixa automática'];
+  const headers = ['Centro de Custo Macro','Nº Lançamento','Histórico/Favorecido','Plano de Contas','Filial','Banco/Conta','Emissão','Vencimento','Semana Financeira','Valor','Status','Situação','Origem','Data baixa automática'];
+  const financial = rows.length > 0 && rows.every(row => row.financial_status !== undefined);
+  if (financial) headers.push('Valor pago histórico', 'Saldo em aberto', 'Situação financeira', 'Último pagamento', 'Banco do último pagamento', 'Crédito por pagamento excedente');
+  const reviewed = financial && rows.every(row => row.review_status !== undefined);
+  if (reviewed) headers.push('Revisão do título', 'Data da conferência', 'Responsável pela conferência');
   const safe = (value: unknown) => { let text = String(value ?? ''); if (/^[\s]*[=+\-@\t\r]/.test(text)) text = `'${text}`; return `"${text.replaceAll('"','""')}"`; };
   const decimal = (value:number) => { const cents=BigInt(value); return `${cents/100n},${String(cents%100n).padStart(2,'0')}`; };
-  const lines = rows.map(row => [row.macro,row.entry_number,row.description,row.plan,row.branch,row.bank_account,dateLabel(row.issued_on),dateLabel(row.due_date),decimal(row.amount_cents),payableStatus[row.status],row.source_status,'IMPORTAÇÃO DIÁRIA',dateLabel(row.settled_at)].map(safe).join(';'));
+  const lines = rows.map(row => [row.macro,row.entry_number,row.description,row.plan,row.branch,row.bank_account,dateLabel(row.issued_on),dateLabel(row.due_date),financialWeekLabel(row.due_date),decimal(row.amount_cents),payableStatus[row.status],row.source_status,'IMPORTAÇÃO DIÁRIA',dateLabel(row.settled_at), ...(financial ? [Number.isSafeInteger(row.paid_cents) ? decimal(row.paid_cents!) : 'Indisponível', Number.isSafeInteger(row.outstanding_cents) ? decimal(row.outstanding_cents!) : 'Indisponível', payableFinancialStatus[row.financial_status!] ?? 'Indisponível', dateLabel(row.last_payment_date ?? null), row.last_payment_bank ?? '', Number.isSafeInteger(row.overpaid_cents) ? decimal(row.overpaid_cents!) : 'Indisponível'] : []), ...(reviewed ? [row.closing_eligible === false ? 'VERSÃO ANTERIOR — HISTÓRICO FORA DO FECHAMENTO' : row.review_status === 'CONCILIADO' ? 'CONCILIADO' : 'A CONCILIAR', dateLabel(row.reviewed_at ?? null), row.reviewed_by ?? ''] : [])].map(safe).join(';'));
   const url = URL.createObjectURL(new Blob(['\uFEFF' + headers.map(safe).join(';') + '\r\n' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
   const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

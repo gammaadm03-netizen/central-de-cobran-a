@@ -2,6 +2,12 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
+## Contas a Pagar — 0.7.0
+
+No projeto existente, usar `dashboard/ativar-contas-pagar.sql`. O script exige a base já instalada e aplica somente as migrations faltantes de 012 a 018 numa transação, sem recriar dados. Inclui previsões, ledger imutável de pagamentos/estornos, identificação estável por filial+número, revisão exclusiva de títulos totalmente pagos, correções auditadas e fechamento mensal com snapshots imutáveis. Valores realizados seguem data efetiva; reclassificações preservam o macro original e registram a alocação corrigida.
+
+Atualizar também a função existente **payables-import** com `dashboard/payables-import.ts` para o erro amigável de identidade ambígua. Nenhuma alteração no gateway de login ou na função CR. RLS e validação de sessão/perfil permanecem obrigatórias. Guia: [ativação CP](../docs/ativacao-contas-pagar.md).
+
 ## Resumo da Diretoria — 0.6.0
 
 Após confirmar a 012, executar somente `migrations/013_director_report.sql`. Adiciona complementos diários auditados, fórmula oficial sem M49 com impostos do mês passado, leitura consistente e novas posições com os componentes preservados. Exige permissão oficial e sessão aprovada; Diretor consulta e Gerência escreve. Não altera dados anteriores ou exige nova Edge Function. Guia: [ativação do resumo](../docs/ativacao-resumo-diretoria.md).
@@ -34,6 +40,7 @@ Os passos abaixo são referência da instalação inicial. **Não repeti-los no 
 7. Após 008/009/010/011, executar `migrations/012_treasury_accounts.sql` uma vez, acrescentando as seis posições da lista atual. As contas novas aguardam saldo explícito; nenhuma posição financeira é inventada.
 
 8. Após 012, executar `migrations/013_director_report.sql` uma vez. Não repetir a instalação inicial em projetos já existentes.
+9. Após 013, aplicar 014, 015, 016, 017 e 018 em ordem, ou usar o combinado condicional `dashboard/ativar-contas-pagar.sql`, que ignora versões já registradas. Publicar `payables-import` atualizado.
 
 Em projetos já configurados manualmente, registrar as migrations aplicadas antes de usar `supabase db push`. Não rodar o histórico inteiro contra um banco existente sem conferir o histórico. Não executar `db reset` em um projeto com dados.
 

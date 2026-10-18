@@ -1,6 +1,14 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.6.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque é informado manualmente em Importar Bases, conforme a orientação mais recente do usuário. A operação financeira completa ainda depende dos módulos pendentes e de homologação remota.
+Versão de desenvolvimento **0.7.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque é informado manualmente em Importar Bases, conforme a orientação mais recente do usuário. A operação financeira completa ainda depende dos módulos pendentes e de homologação remota.
+
+## Contas a Pagar — 0.7.0
+
+Consulta por mês de vencimento e macro, registro de pagamentos integrais com data/conta efetivas, revisão **A CONCILIAR / CONCILIADO**, correções auditadas e fechamento mensal com versões históricas. Um título só pode ser marcado **CONCILIADO** quando estiver integralmente pago. Alterações posteriores exigem nova conferência e fechamento; relatórios já salvos permanecem imutáveis. Reimportações atualizam o mesmo título por filial+número, sem apagar pagamentos; identificação ambígua bloqueia a operação.
+
+A previsão cobre oito semanas de sábado a sexta, com provisões configuráveis por vigência, vínculo explícito de planos e cheques sem duplicidade. Excel inclui lançamentos, macros, comparação, pagamentos reais e realizados por macro. Falta de fonte fica pendente; ausência na importação não inventa pagamento.
+
+Para atualizar o projeto existente, seguir [docs/ativacao-contas-pagar.md](docs/ativacao-contas-pagar.md): executar o novo combinado condicional `supabase/dashboard/ativar-contas-pagar.sql`, atualizar a função existente `payables-import` e aguardar o deploy do site. O combinado aplica somente as migrations faltantes de 012 a 018; mantém banco, usuários, saldos e históricos. Não repetir a instalação inicial.
 
 ## O que está implementado
 
@@ -12,7 +20,7 @@ O Painel preserva a organização e a marca da V75: Hoje/Semana/Mês, semana fin
 
 CP possui importação completa atômica, classificação obrigatória, baixas preservadas, filtros, paginação e CSV. CR possui importação completa com arquivo novamente analisado pelo servidor; novas ausências aguardam validação financeira, sem serem consideradas recebimentos. A carteira é herdada da dívida ativa do cliente quando existe uma atribuição oficial. Mudanças na identificação nome/CNPJ exigem conferência para evitar duplicidade; não há união automática. Cobrança oferece carteira individual, contatos, retornos e pagamento informado; CR confirma a data real ou devolve à mesma cobradora como não localizado. Registros de recebimentos validados preservam origem, cobradora e atraso, preparando a futura apuração de comissões.
 
-Faturamento, Margens, Comissões, RH/DP, previsões completas de CP, Excel detalhado de CP, conciliação bancária, migração do estado operacional anterior e backups ainda estão pendentes. Também faltam criação completa de contas Auth, redefinição administrativa e troca obrigatória de senha. Não há valores fictícios nem bases V75 embutidas nos arquivos públicos.
+Faturamento, Margens, Comissões, RH/DP, conciliação automática de extratos bancários, migração do estado operacional anterior e backups ainda estão pendentes. Também faltam criação completa de contas Auth, redefinição administrativa e troca obrigatória de senha. Não há valores fictícios nem bases V75 embutidas nos arquivos públicos.
 
 ## Atualizar o projeto existente
 
@@ -53,6 +61,12 @@ npm test
 npm run test:sql
 npm run test:auth-sql
 npm run test:payables-sql
+npm run test:payables-forecast-sql
+npm run test:payable-payments-sql
+npm run test:payable-identity-sql
+npm run test:payable-closing-sql
+npm run test:payable-full-payment-sql
+npm run test:payables-operations-sql
 npm run test:treasury-sql
 npm run test:director-sql
 npm run test:receivables-sql
@@ -66,7 +80,7 @@ npm run build
 npm run test:browser
 ```
 
-Os testes SQL usam PostgreSQL local via PGlite e Auth simulado. Gateway e navegador utilizam serviços sintéticos; não acessam dados financeiros reais. Chromium deste ambiente: `/usr/bin/chromium`, substituível por `CHROMIUM_PATH`. Resultados e limites de verificação estão em [docs/estado-verificacao.md](docs/estado-verificacao.md). Testes locais aprovados não comprovam publicação, entrega de email ou homologação remota.
+Os testes SQL usam PostgreSQL local via PGlite e Auth simulado. A suíte 015 preserva a evidência do ledger incremental; a regra operacional mais recente está na 018, que exige pagamento integral e testa a recusa de pagamento parcial na API. Gateway e navegador utilizam serviços sintéticos; não acessam dados financeiros reais. Chromium deste ambiente: `/usr/bin/chromium`, substituível por `CHROMIUM_PATH`. Resultados e limites de verificação estão em [docs/estado-verificacao.md](docs/estado-verificacao.md). Testes locais aprovados não comprovam publicação, entrega de email ou homologação remota.
 
 ## Hospedagem e dados anteriores
 

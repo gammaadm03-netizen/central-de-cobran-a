@@ -24,6 +24,9 @@ async function setup(page:Page, options:{ director?:boolean; stale?:boolean; pre
     if(url.pathname==='/functions/v1/auth-gateway')return reply({session:{access_token:token,refresh_token:'synthetic-refresh',expires_in:3600,token_type:'bearer'},access});
     if(url.pathname==='/auth/v1/user')return reply(user);
     if(url.pathname==='/rest/v1/rpc/current_access')return reply(access);
+    if(['/rest/v1/payable_review_titles','/rest/v1/payable_financial_titles'].includes(url.pathname))return reply({code:'PGRST205'},404);
+    if(['/rest/v1/rpc/get_payable_payment_accounts','/rest/v1/rpc/payable_payment_summary','/rest/v1/rpc/list_payable_payments','/rest/v1/rpc/get_payables_revision','/rest/v1/rpc/get_payable_month_status','/rest/v1/rpc/payables_month_status','/rest/v1/rpc/list_payable_month_closures'].includes(url.pathname))return reply({code:'PGRST202'},404);
+    if(url.pathname==='/rest/v1/rpc/payables_forecast')return reply({code:'PGRST202'},404);
     if(url.pathname==='/rest/v1/rpc/cash_position')return reply({accounts:[],total_cents:null,reported_accounts:0,expected_accounts:11,latest_position_date:null});
     if(url.pathname==='/rest/v1/rpc/current_stock')return reply({value_cents:null,reference_date:null,source:null});
     if(url.pathname==='/rest/v1/rpc/payables_summary')return reply({open_cents:123456,overdue_cents:0,period_cents:123456,active_count:1,latest_import_at:imported?new Date().toISOString():null});

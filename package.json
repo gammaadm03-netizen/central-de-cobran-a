@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -27,7 +27,14 @@
     "bundle:receivables": "node scripts/bundle-receivables.mjs",
     "bundle:receivables-gateway": "node scripts/bundle-receivables-gateway.mjs",
     "bundle:gateway": "node scripts/bundle-gateway.mjs",
-    "test:director-report-sql": "node scripts/test-director-report-sql.mjs"
+    "test:director-report-sql": "node scripts/test-director-report-sql.mjs",
+    "test:payables-forecast-sql": "node scripts/test-payables-forecast-sql.mjs",
+    "test:payable-payments-sql": "node scripts/test-payable-payments-sql.mjs",
+    "test:payable-identity-sql": "node scripts/test-payable-identity-sql.mjs",
+    "test:payable-closing-sql": "node scripts/test-payable-closing-sql.mjs",
+    "test:payable-full-payment-sql": "node scripts/test-payable-full-payment-sql.mjs",
+    "bundle:payables-operations": "node scripts/bundle-payables-operations.mjs",
+    "test:payables-operations-sql": "node scripts/bundle-payables-operations.mjs && node scripts/test-payables-operations-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

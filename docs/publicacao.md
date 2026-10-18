@@ -1,6 +1,8 @@
-# Publicação e ativação — 0.6.0
+# Publicação e ativação — 0.7.0
 
-Para a atualização atual, seguir [ativacao-resumo-diretoria.md](ativacao-resumo-diretoria.md): confirmar 012 e executar somente a nova migration 013. Ela acrescenta os complementos oficiais e o cálculo sem M49, preservando o banco. Nenhuma Edge Function precisa ser criada ou republicada para o Resumo da Diretoria. O site deve exibir **Versão 0.6.0**.
+Para a atualização **0.7.0**, seguir [ativacao-contas-pagar.md](ativacao-contas-pagar.md). Executar o novo combinado condicional de CP (aplica somente 012..018 que faltarem), atualizar a função existente `payables-import` e aguardar a publicação da branch `main`. Conferir a versão 0.7.0 no mesmo endereço. Não repetir a instalação inicial ou publicar outra Central. Os procedimentos de versões anteriores abaixo permanecem como histórico.
+
+Para a atualização anterior 0.6.0, seguir [ativacao-resumo-diretoria.md](ativacao-resumo-diretoria.md): confirmar 012 e executar somente a nova migration 013. Ela acrescenta os complementos oficiais e o cálculo sem M49, preservando o banco. Nenhuma Edge Function precisa ser criada ou republicada para o Resumo da Diretoria. O site deve exibir **Versão 0.6.0**.
 
 Os passos abaixo preservam o histórico de publicação das versões anteriores.
 
@@ -65,6 +67,6 @@ Somente uma solicitação em **Esqueci minha senha** pede o email ao Supabase. D
 
 ## Limites e recuperação de falhas
 
-Faturamento, Margens, Comissões, RH/DP, previsões completas e Excel detalhado de CP, conciliação bancária, backups operacionais e migração conferida do estado atual da Central antiga permanecem pendentes. Não considerar concluída a primeira versão de produção enquanto esses itens e os critérios de aceite não forem homologados. Fontes ausentes continuam pendentes, sem números fictícios.
+Faturamento, Margens, Comissões, RH/DP, conciliação automática de extratos bancários, backups operacionais e migração conferida do estado atual da Central antiga permanecem pendentes. Não considerar concluída a primeira versão de produção enquanto esses itens e os critérios de aceite não forem homologados. Fontes ausentes continuam pendentes, sem números fictícios.
 
 Preservar banco, ZIP original e estado operacional anterior. Publicar código não substitui backup. Se houver falha, preservar a mensagem administrativa e investigar; não apagar dados, desativar permissões ou liberar acesso para contornar um erro. A restauração de produção ainda precisa ser implantada e testada. Não ativar billing para resolver cotas ou configuração sem autorização.

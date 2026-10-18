@@ -143,6 +143,7 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
       if (code === '42501') return respond(403, { code, error: 'Seu perfil não tem permissão para esta operação.' });
       if (code === '40001') return respond(409, { code, error: 'A base mudou desde a análise. Analise o arquivo novamente antes de concluir.' });
       if (code === '23505') return respond(409, { code, error: 'Este arquivo já foi importado para esta origem. Nenhum dado foi alterado.' });
+      if (code === 'P0016') return respond(409, { code, error: 'Há lançamentos repetidos ou versões históricas ambíguas para a mesma filial e número. Confira parcelas e o histórico. Nenhum dado foi alterado.' });
       if (code === '22023' || code === '23514') return respond(400, { code, error: 'A importação foi recusada. Confira as linhas, a origem completa e a classificação de todos os planos.' });
       if (result.status === 401) return respond(401, { error: 'Sua sessão expirou. Entre novamente.' });
       log('upstream_unavailable');

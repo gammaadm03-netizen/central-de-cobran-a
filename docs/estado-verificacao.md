@@ -2,7 +2,7 @@
 
 16/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.6.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.7.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -144,3 +144,33 @@ Verificações locais concluídas:
 - Migrations anteriores e arquivos combinados de ativação preservados. Lockfile mudou apenas a versão, sem alteração de dependências. Nenhum serviço pago, chave privada, dado legado ou senha foi adicionado.
 
 A aplicação remota da 013, o término do deploy Cloudflare e a conferência com os valores operacionais reais não foram executados pelo agente. O usuário ainda deve confirmar a 012 e aplicar somente a 013 conforme `ativacao-resumo-diretoria.md`. O frontend mantém as consultas financeiras anteriores enquanto o relatório novo aguarda ativação. Não é necessário criar ou republicar Edge Functions nesta entrega. Permanecem os módulos completos e demais critérios de produção já listados; esta atualização não declara toda a Central concluída.
+
+
+## Atualização 0.7.0 — operação, conferência e fechamento mensal de Contas a Pagar
+
+O usuário confirmou que o relatório diário contém somente títulos em aberto e cheques, pediu atualização do mesmo título quando mudar valor, vencimento ou banco, pagamentos com valor/data/conta efetivos, consulta mensal por macro e conferência individual antes de fechar o mês. Confirmou que **CONCILIADO exige pagamento integral**. A orientação final substituiu expressamente a autorização anterior para pagamento parcial: **a operação atual aceita somente quitação integral**. Não são carregados valores das imagens, planilhas legadas ou números demonstrativos no banco operacional.
+
+Implementados na versão: consulta **Mês dos títulos + Centro de Custo Macro → Exibir títulos**, paginação, filtros financeiros e de revisão; ações de pagamentos e conferência nas primeiras colunas; ledger auditado de valores realizados pela data efetiva, banco oficial e macro; estorno com motivo e histórico imutável; correções otimistas por título; revisão explícita A CONCILIAR/CONCILIADO e fechamento mensal com versões, reabertura e Excel histórico. O valor do pagamento é preenchido com o total pendente, sem edição para reduzir parcialmente. A migration018 impede pagamento parcial também na API/banco; preserva registros históricos anteriores e aceita apenas a quitação exata de seu eventual saldo. Diferenças exigem corrigir o título antes de confirmar.
+
+A identificação por filial+número mantém o UUID, pagamentos e primeira importação quando a fonte atualiza valor, vencimento, descrição ou banco. Filial+número repetidos sem parcela identificável, versões antigas sem correspondência inequívoca e pagamentos ativos ligados a outra versão bloqueiam a operação. Revisão independente encontrou e corrigiu antes de publicar um caso em que a versão ativa seria escolhida mesmo havendo pagamentos noutra versão histórica. Nenhum pagamento é transferido nem versão financeira mesclada por inferência.
+
+Baixa por importação continua separada de pagamento comprovado. Título só pode ser conferido depois de quitado exatamente, com sessão e permissão oficiais. Alterações comerciais ou financeiras invalidam a conferência e reabrem os meses de vencimento antigo/novo e de pagamentos afetados, com auditoria. A revisão não volta a valer se o usuário desfizer uma correção para o valor anterior. Importação idêntica, novo lote ou mudança técnica NEW→OPEN preservam a conferência. Versões antigas comprovadamente substituídas, baixadas e sem pagamentos ativos permanecem no histórico e no snapshot, sem exigir pagamento duplicado. Sem versão canônica comprovada, o sistema não faz exclusão automática.
+
+Correções individuais de macro preservam o macro original dos pagamentos, acrescentam alocação efetiva auditada e exigem confirmação. O macro específico permanece nas importações do mesmo plano; mudança do plano encerra esse vínculo, sem ressuscitá-lo se o plano anterior retornar. Dados de valor, data e banco da fonte continuam sujeitos à atualização oficial. O fechamento guarda títulos pelo vencimento e realizados pela data real, incluindo títulos de outros meses; relatórios salvos não usam valores vivos para recalcular o passado. Nenhuma gravação de pagamento debita automaticamente o saldo manual de Caixa/Bancos.
+
+A previsão mostra oito semanas sábado–sexta, cheques sem dupla soma, provisões dos dias 5/20 recuperadas do legado e regras com vigência, grupos vinculados explicitamente e conclusão mensal auditada. Ausência de base ou vínculo não definido fica pendente. O saldo real usa os pagamentos; abatimento de provisões considera títulos nominais conhecidos. Excel operacional contém detalhe, macros, comparação equivalente e realizados por pagamento; filtros são respeitados, arquivo de mês completo identifica sua abrangência e valores/datas mantêm tipos nativos. Exportações conferem revisões de importação e de alterações financeiras, recusando arquivos misturados ou perda de centavos no limite do Excel.
+
+Ativação: `supabase/dashboard/ativar-contas-pagar.sql`, aplicando somente versões faltantes de 012 a 018 numa transação; atualizar a função existente `payables-import` para a mensagem segura P0016; publicar o frontend 0.7.0 no endereço atual. O arquivo pode ser repetido sem reaplicar migrations registradas. As migrations 001..013 permanecem inalteradas. A ativação não importa dados antigos, redefine usuários/senhas ou preenche saldos. Procedimento: [ativacao-contas-pagar.md](ativacao-contas-pagar.md).
+
+A inspeção visual no Chromium confirmou os quadros de fechamento, histórico, consulta mensal e tabela paginada. A captura usa somente dados sintéticos; o aviso014 aparece porque o fixture dessa tela simula previsão ainda não instalada. As ações por título foram posicionadas antes das colunas extensas para acesso sem rolar a tabela horizontalmente.
+
+Verificações locais da entrega:
+
+- **98 testes Node aprovados**, incluindo configuração pública, parsing, gateways, recuperação e Excel. Os 18 cenários do helper Excel foram repetidos após o ajuste final dos textos de quitação integral.
+- **138 cenários/grupos SQL aprovados** em PostgreSQL local PGlite:16 CP original,22 previsão,27 ledger incremental,22 identificação,29 conferência/fechamento,15 quitação integral e7 ativação combinada. As suites antigas preservam evidências do schema incremental; a 018 é a regra atual e impede novos pagamentos parciais.
+- **72 cenários distintos de navegador verificados** com serviços sintéticos:39 de acesso/CP/previsão/Excel,16 de pagamentos na regra integral atual e17 de conferência/fechamento. A rodada final dos 33 cenários de pagamentos+fechamento passou; o caso de revisão do valor integral após atualização concorrente foi repetido e também passou, preservando data e observação.
+- Build TypeScript/Vite 0.7.0 aprovado. Dependências não mudaram; lockfile alterou somente a versão. O aviso de chunks grandes do Excel permanece e as planilhas são carregadas separadamente. Tabelas e históricos têm paginação.
+- O combinado real 012..018 foi testado na instalação faltante, com 012/013 já instaladas e em repetição. Falha no fim 018 reverte toda a ativação; registros antigos, auditoria, configurações e pagamentos permanecem inalterados. SHA256 do combinado congelado: `94388c4b270a099ca5ce07d7b4672c1ceba839ea3047903305032946a2278e79`.
+- Uma consulta HTTP pública ao endereço do site voltou a receber `CONNECT tunnel failed, response 403` do proxy deste ambiente. Git continua sendo o meio de entrega autorizado; esse resultado não diagnostica a disponibilidade do site no navegador do usuário.
+
+A execução remota do SQL, a atualização da função, os totais operacionais reais e o término do deploy da Cloudflare ainda precisam ser confirmados no provedor. O Git publica código, não executa SQL ou funções. A integração Deno hospedada não foi homologada neste ambiente. Nenhum serviço pago ou credencial privada foi solicitado. Faturamento, Margens, Comissões, RH/DP completos, administração Auth completa, backups/restauração e migração conferida do estado operacional antigo permanecem pendentes; esta entrega não declara toda a Central pronta para produção.

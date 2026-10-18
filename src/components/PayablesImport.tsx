@@ -68,7 +68,7 @@ export default function PayablesImport({ canImport }: { canImport: boolean }) {
         groups.set(key, group);
       }
       const preview = canonical.preview;
-      if (!preview || !Number.isSafeInteger(preview.row_count) || preview.row_count !== canonical.rows.length || ['new_count','open_count','settled_count'].some(key => !Number.isSafeInteger(preview[key as keyof ImportPreview]))) throw new Error('Não foi possível confirmar o resumo da análise. Nenhum dado foi alterado.');
+      if (!preview || !Number.isSafeInteger(preview.row_count) || preview.row_count !== canonical.rows.length || ['new_count','open_count','settled_count'].some(key => !Number.isSafeInteger(preview[key as keyof ImportPreview])) || (preview.changed_count !== undefined && (!Number.isSafeInteger(preview.changed_count) || preview.changed_count < 0 || preview.changed_count > preview.open_count))) throw new Error('Não foi possível confirmar o resumo da análise. Nenhum dado foi alterado.');
       setAnalysis({ file, hash: canonical.file_sha256, base64: parsed.base64, rows: canonical.rows, preview, groups: Array.from(groups.values()).sort((a,b) => a.plan.localeCompare(b.plan,'pt-BR')) });
     } catch (analyzeError) { if (current === generation.current && !abort.signal.aborted) {
       if (analyzeError && typeof analyzeError === 'object' && 'errors' in analyzeError && Array.isArray(analyzeError.errors) && analyzeError.errors.length) setProblems(analyzeError.errors as ImportProblem[]);
@@ -79,7 +79,7 @@ export default function PayablesImport({ canImport }: { canImport: boolean }) {
 
   async function commit() {
     if (!supabase || !analysis || !complete || !canImport || busy || analysis.groups.some(group => !macros.includes(group.macro))) return;
-    const question = `Confirma a importação do RELATÓRIO COMPLETO do Grupo consolidado?\n\n${analysis.preview.new_count} novos; ${analysis.preview.open_count} permanecem em aberto; ${analysis.preview.settled_count} ausentes serão QUITADOS POR IMPORTAÇÃO.\n\nBases filtradas não devem ser concluídas. Os títulos anteriores serão preservados no histórico.`;
+    const question = `Confirma a importação do RELATÓRIO COMPLETO do Grupo consolidado?\n\n${analysis.preview.new_count} novos; ${analysis.preview.open_count} permanecem em aberto${analysis.preview.changed_count === undefined ? '' : ` (${analysis.preview.changed_count} com dados atualizados)`}; ${analysis.preview.settled_count} ausentes serão QUITADOS POR IMPORTAÇÃO.\n\nBases filtradas não devem ser concluídas. Os títulos anteriores serão preservados no histórico.`;
     if (!window.confirm(question)) return;
     setBusy('saving'); setError(''); setSuccess('');
     const current = generation.current;
@@ -91,7 +91,7 @@ export default function PayablesImport({ canImport }: { canImport: boolean }) {
       });
       if (current !== generation.current) return;
       if (!summary || !Number.isSafeInteger(summary.row_count)) throw new Error('Resposta não confirmada.');
-      setSuccess(`Importação concluída: ${summary.row_count} títulos, ${summary.new_count} novos, ${summary.open_count} em aberto e ${summary.settled_count} quitados por importação. Histórico preservado.`);
+      setSuccess(`Importação concluída: ${summary.row_count} títulos, ${summary.new_count} novos, ${summary.open_count} em aberto${summary.changed_count === undefined ? '' : ` (${summary.changed_count} com valor, data, banco ou outros dados atualizados)`} e ${summary.settled_count} quitados por importação. Histórico preservado.`);
       setAnalysis(null); setComplete(false); setFile(null); setRefresh(value => value + 1);
       const input = document.getElementById('payable-file') as HTMLInputElement | null; if (input) input.value = '';
     } catch (writeError) {
@@ -109,7 +109,7 @@ export default function PayablesImport({ canImport }: { canImport: boolean }) {
     <section className="panel" aria-labelledby="payable-import-title">
       <div className="panel-header"><div><h2 id="payable-import-title">Importar Contas a Pagar</h2><p className="muted">Origem: Grupo consolidado · análise da cópia e conclusão atômica no banco central.</p></div></div>
       <p className="notice error"><strong>IMPORTAR SOMENTE RELATÓRIO COMPLETO.</strong> Relatórios filtrados podem fazer títulos serem interpretados incorretamente como quitados.</p>
-      <p className="help-text">Use sempre o relatório da mesma origem, abrangendo todas as filiais do Grupo consolidado. Não importe arquivos filtrados por mês, filial, banco, macro ou situação. O arquivo original é preservado; ausências após a comparação geram baixa, sem apagar títulos.</p>
+      <p className="help-text">Use o relatório completo de obrigações em aberto e cheques da mesma origem, abrangendo todas as filiais do Grupo consolidado. Não restrinja esse conjunto por mês, filial, banco ou macro, nem exclua cheques ou parte das obrigações em aberto. O arquivo original é preservado; ausências após a comparação geram baixa, sem apagar títulos.</p>
       {error && <p className="notice error" role="alert">{error}</p>}
       {success && <p className="notice success" role="status">{success}</p>}
       <form className="stack" onSubmit={event => void analyze(event)}>
@@ -120,7 +120,7 @@ export default function PayablesImport({ canImport }: { canImport: boolean }) {
       </form>
       {problems.length > 0 && <div><p className="notice error" role="alert">Importação bloqueada. Nenhum dado foi alterado. Corrija todos os problemas abaixo e analise novamente.</p><div className="table-wrap"><table><caption>Problemas encontrados · até 100 erros por análise</caption><thead><tr><th>Linha</th><th>Coluna</th><th>Problema</th><th>Como corrigir</th></tr></thead><tbody>{problems.map((problem,index) => <tr key={index}><td>{problem.line || '—'}</td><td>{problem.column}</td><td>{problem.problem}</td><td>{problem.correction}</td></tr>)}</tbody></table></div></div>}
       {analysis && <div className="stack">
-        <h3>Conferência antes da importação</h3><p>{analysis.preview.row_count} títulos · {analysis.preview.new_count} novos · {analysis.preview.open_count} em aberto · <strong>{analysis.preview.settled_count} ausentes serão quitados por importação</strong>.</p>
+        <h3>Conferência antes da importação</h3><p>{analysis.preview.row_count} títulos · {analysis.preview.new_count} novos · {analysis.preview.open_count} em aberto{analysis.preview.changed_count === undefined ? '' : ` (${analysis.preview.changed_count} com dados atualizados)`} · <strong>{analysis.preview.settled_count} ausentes serão quitados por importação</strong>.</p>
         <p className="help-text">Classifique cada Plano de Contas. Planos conhecidos mantêm o mapeamento anterior; planos novos exigem sua escolha.</p>
         <div className="table-wrap"><table><caption>Classificação dos Planos de Contas</caption><thead><tr><th>Plano</th><th>Quantidade</th><th>Valor total</th><th>Centro de Custo Macro</th></tr></thead><tbody>{analysis.groups.map((group,index) => <tr key={normalizePlan(group.plan)}><td>{group.plan}</td><td>{group.count}</td><td>{formatCents(group.cents)}</td><td><label className="sr-only" htmlFor={`payable-macro-${index}`}>Macro para {group.plan}</label><select id={`payable-macro-${index}`} value={macros.includes(group.macro) ? group.macro : ''} disabled={busy !== null} onChange={event => { const macro = event.target.value; setAnalysis(previous => previous ? { ...previous, groups: previous.groups.map((item,itemIndex) => itemIndex === index ? { ...item, macro } : item) } : null); }}><option value="">NÃO CLASSIFICADO</option>{macros.map(macro => <option key={macro}>{macro}</option>)}</select></td></tr>)}</tbody></table></div>
         {unclassified > 0 && <p className="notice" role="status">{unclassified} plano(s) sem classificação. A conclusão está bloqueada.</p>}

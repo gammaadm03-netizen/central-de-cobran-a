@@ -1,0 +1,6 @@
+.payables-report-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; padding: 17px; margin: 18px 0; border: 1px solid #dce9df; border-radius: 12px; background: #f8fbf9; }
+.payables-report-controls > .field { min-width: 180px; flex: 0 0 210px; }
+.payables-report-controls > .help-text { flex: 1 0 100%; margin: 0; line-height: 1.6; }
+.payables-report-controls .inline-actions { flex-wrap: wrap; }
+@media (max-width: 650px) { .payables-report-controls > .field { flex-basis: 100%; } .payables-report-controls .inline-actions { width: 100%; } .payables-report-controls button { white-space: normal; text-align: left; } }
+@media print { .payables-report-controls { display: none; } }

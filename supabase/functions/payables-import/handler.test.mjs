@@ -178,7 +178,7 @@ test('untrusted library errors are replaced with a fixed file error', async () =
 });
 
 test('SQL duplicate, stale and permission errors expose only safe allowlisted codes and messages', async () => {
-  for (const [code, expected] of [['23505', 409], ['40001', 409], ['42501', 403], ['22023', 400], ['23514', 400]]) {
+  for (const [code, expected] of [['23505', 409], ['P0016', 409], ['40001', 409], ['42501', 403], ['22023', 400], ['23514', 400]]) {
     const app = setup({ rpcError: { code, message: 'SQL query containing private details', details: SERVICE, hint: TOKEN } });
     const response = await app.send(body('commit')); assert.equal(response.status, expected);
     const payload = await response.json(); assert.equal(payload.code, code); assert(!JSON.stringify(payload).includes('private')); assert(!JSON.stringify(payload).includes(SERVICE)); assert(!JSON.stringify(payload).includes(TOKEN));
