@@ -1,6 +1,6 @@
 # Cobrança somente de vencidos — referência da migration022
 
-**Para a entrega completa0.9.0, seguir [ativacao-operacao-recebiveis.md](ativacao-operacao-recebiveis.md).** O combinado aplica a022 quando faltar e também as importações, os recebimentos e o resumo de cobrança. Os passos abaixo são referência da022 isolada e não habilitam o fluxo completo.
+**Para a entrega atual 0.10.0, seguir [central-cobranca-operacao.md](central-cobranca-operacao.md).** O combinado aplica a022 quando faltar e também as importações, os recebimentos, o resumo e o atendimento da cobrança. Os passos abaixo são referência da022 isolada e não habilitam o fluxo completo.
 
 O Contas a Receber mantém todos os títulos. A cobrança ativa reúne somente os títulos atribuídos e ainda em aberto cujo vencimento é anterior à data atual de São Paulo. Vencimentos de hoje e futuros não aparecem nessa carteira. Diretoria e Financeiro consultam o mesmo recorte na aba Cobrança; Contas a Receber continua com a visão completa.
 

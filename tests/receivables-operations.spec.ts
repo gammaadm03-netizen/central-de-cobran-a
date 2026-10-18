@@ -23,9 +23,23 @@ async function setup(page: Page, options: Options = {}) {
     collector_id: options.unassigned ? null : ownAgent, status: options.pending ? 'PENDING_VALIDATION' : 'OPEN', validation_status: options.pending ? 'PENDING' : 'NONE', payment_source: options.pending ? 'IMPORTACAO_DIARIA' : null, payment_reported_date: null as string | null, payment_date: null as string | null,
     reported_in_collection: false, collector_locked: false, in_latest_report: !options.pending, revision: 7, updated_at: '2026-10-15T10:00:00Z', last_action: null as string | null, next_action: null as string | null, next_action_date: null,
   };
-  const seen = { titleQueries: [] as string[], titlePaths: [] as string[], receiptPaths: [] as string[], writes: [] as { name: string; body: any }[], events: [] as any[], receipts: [] as any[], exportSnapshots: 0 };
+  const seen = { titleQueries: [] as string[], titlePaths: [] as string[], receiptPaths: [] as string[], workbenchQueries: [] as any[], caseQueries: [] as string[], writes: [] as { name: string; body: any }[], events: [] as any[], receipts: [] as any[], exportSnapshots: 0 };
   const serverToday = options.serverToday ?? '2026-10-18';
   const shiftedDate = (days: number) => { const date = new Date(`${serverToday}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10); };
+  const fixtureId = (number: number) => `30000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
+  const candidates = () => options.dates ? [
+    { ...title, id: fixtureId(10), document: 'NF-VENCIDO', due_date: shiftedDate(-1) },
+    { ...title, id: fixtureId(11), document: 'NF-HOJE', due_date: serverToday },
+    { ...title, id: fixtureId(12), document: 'NF-FUTURO', due_date: shiftedDate(1) },
+    { ...title, id: fixtureId(13), document: 'NF-PAGO', due_date: shiftedDate(-2), status: 'VALIDATED', validation_status: 'VALIDATED', payment_date: shiftedDate(-1) },
+  ] : options.pages ? Array.from({ length: 26 }, (_, i) => ({ ...title, id: fixtureId(i + 1), document: `NF-${i + 1}` })) : [{ ...title }];
+  const caseState = new Map<string, { status: string; observation: string; next_action: string; next_date: string | null; revision: number }>();
+  const timer = (id: string) => ({ title_id: id, running: false, session_id: null, started_at: null, elapsed_seconds: 0, total_seconds: 0, actor_total_seconds: 0, server_now: `${serverToday}T15:00:00Z` });
+  const stateOf = (row: typeof title) => caseState.get(row.id) ?? { status: row.status === 'PENDING_VALIDATION' ? 'TÍTULO PAGO' : 'NOVO TÍTULO - COBRAR', observation: '', next_action: '', next_date: row.next_action_date, revision: 0 };
+  const enrich = (row: typeof title) => ({ ...row, collection_as_of_date: serverToday, operational_status: stateOf(row).status, case_revision: stateOf(row).revision,
+    observation: stateOf(row).observation, next_action_text: stateOf(row).next_action, next_date: stateOf(row).next_date,
+    delay_days: Math.max(0, Math.round((Date.parse(`${serverToday}T12:00:00Z`) - Date.parse(`${row.due_date}T12:00:00Z`)) / 86400000)),
+    collector_name: row.collector_id === ownAgent ? 'Responsável A' : row.collector_id === otherAgent ? 'Responsável B' : null, total_work_seconds: 0, current_timer: timer(row.id) });
   await page.route(`${project}/**`, async route => {
     const request = route.request(), url = new URL(request.url()), body = request.postDataJSON();
     const headers = { 'access-control-allow-origin': 'http://127.0.0.1:4173', 'access-control-allow-headers': 'apikey,content-type,authorization,x-client-info,prefer,range,range-unit', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-expose-headers': 'content-range' };
@@ -36,6 +50,33 @@ async function setup(page: Page, options: Options = {}) {
     if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (url.pathname === '/rest/v1/rpc/collections_overdue_summary') return reply({ code: 'PGRST202' }, 404);
     if (url.pathname === '/rest/v1/rpc/current_access') return reply(access);
+    if (url.pathname === '/rest/v1/rpc/get_receivables_sync_revision') {
+      seen.exportSnapshots++; return reply({ import_id: null, financial_revision: options.exportChange && seen.exportSnapshots > 1 ? 'revision-8' : 'revision-7' });
+    }
+    if (url.pathname === '/rest/v1/rpc/collection_workbench') {
+      seen.workbenchQueries.push(body);
+      if (body.p_limit === 1) seen.exportSnapshots++;
+      if (options.missingCollection) return reply({ code: options.missingCollection, message: 'private relation name and SQL details' }, 404);
+      let rows = candidates().filter(row => !collector || row.collector_id === ownAgent);
+      if (!options.malformedCollection) rows = rows.filter(row => row.due_date < serverToday);
+      if ((body.p_queue ?? 'active') === 'active') rows = rows.filter(row => row.status !== 'VALIDATED');
+      if (body.p_financial_status && body.p_financial_status !== 'ACTIVE') rows = rows.filter(row => row.status === body.p_financial_status);
+      if (body.p_due_start) rows = rows.filter(row => row.due_date >= body.p_due_start);
+      if (body.p_due_end) rows = rows.filter(row => row.due_date <= body.p_due_end);
+      if (body.p_collector_id) rows = rows.filter(row => row.collector_id === body.p_collector_id);
+      if (body.p_unassigned) rows = rows.filter(row => row.collector_id === null);
+      if (body.p_status) rows = rows.filter(row => stateOf(row).status === body.p_status);
+      const count = rows.length, offset = body.p_offset ?? 0, limit = body.p_limit ?? 25;
+      return reply({ as_of_date: serverToday, server_now: `${serverToday}T15:00:00Z`, count,
+        snapshot_revision: options.exportChange && seen.exportSnapshots > 1 ? 'revision-8' : 'revision-7',
+        active_timer: null,
+        total_cents: rows.reduce((sum, row) => sum + row.amount_cents, 0), rows: rows.slice(offset, offset + limit).map(enrich) });
+    }
+    if (url.pathname === '/rest/v1/rpc/collection_case_detail') {
+      seen.caseQueries.push(body.p_title_id); const row = candidates().find(item => item.id === body.p_title_id)!;
+      return reply({ title: enrich(row), case: { ...stateOf(row), payment_date: row.payment_reported_date, finalized_at: null, updated_at: null, updated_by: null },
+        timer: timer(row.id), history: seen.events, work_sessions: [] });
+    }
     if (url.pathname === '/rest/v1/collection_agents') return reply([{ id: ownAgent, display_name: 'Responsável A', enabled: true }, ...(collector ? [] : [{ id: otherAgent, display_name: 'Responsável B', enabled: true }])], 200, collector ? 1 : 2);
     if (url.pathname === '/rest/v1/receivable_titles' || url.pathname === '/rest/v1/collection_overdue_titles') {
       const collection = url.pathname === '/rest/v1/collection_overdue_titles';
@@ -79,6 +120,15 @@ async function setup(page: Page, options: Options = {}) {
         seen.events.unshift({ id: 'synthetic-event', action: body.p_action, contact_date: body.p_contact_date, next_action: body.p_next_action, next_date: body.p_next_date, observation: body.p_observation, return_note: body.p_return_note, payment_date: body.p_payment_date, created_at: '2026-10-15T14:00:00Z' });
         return reply('50000000-0000-4000-8000-000000000001');
       }
+      if (name === 'save_collection_case') {
+        const previous = stateOf(title), next = { status: body.p_status, observation: body.p_observation, next_action: body.p_next_action, next_date: body.p_next_date, revision: previous.revision + 1 };
+        caseState.set(title.id, next); title.last_action = body.p_status === 'TÍTULO PAGO' ? 'PAID' : 'CONTACT';
+        if (body.p_status === 'TÍTULO PAGO') { title.status = 'PENDING_VALIDATION'; title.validation_status = 'PENDING'; title.payment_source = 'COBRANCA'; title.payment_reported_date = body.p_payment_date; title.reported_in_collection = true; }
+        seen.events.unshift({ id: '50000000-0000-4000-8000-000000000001', title_id: title.id, action: title.last_action,
+          contact_date: serverToday, observation: body.p_observation, return_note: null, next_action: body.p_next_action ? 'OTHER' : null,
+          next_date: body.p_next_date, payment_date: body.p_payment_date, created_at: `${serverToday}T15:00:00Z` });
+        return reply({ title_id: title.id, revision: title.revision, case_revision: next.revision, event_id: seen.events[0].id, finished: body.p_finish, timer: timer(title.id) });
+      }
       if (name === 'validate_receivable_payment') {
         title.status = body.p_decision === 'CONFIRM' ? 'VALIDATED' : 'NOT_LOCATED'; title.validation_status = body.p_decision === 'CONFIRM' ? 'VALIDATED' : 'NONE';
         title.payment_date = body.p_payment_date;
@@ -96,6 +146,11 @@ async function setup(page: Page, options: Options = {}) {
 }
 
 async function openDetail(page: Page) { await page.getByRole('button', { name: 'Detalhar título NF-120 de Cliente sintético da carteira', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Título NF-120 · Cliente sintético da carteira' })).toBeVisible(); }
+async function openCollectionTitles(page: Page) {
+  await page.getByRole('tab', { name: 'Títulos', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Central operacional da cobrança', exact: true })).toBeVisible();
+}
+const collectionPanel = (page: Page) => page.getByRole('tabpanel', { name: 'Títulos', exact: true });
 
 test('CR atribui explicitamente todos os títulos não atribuídos do cliente sem presumir vínculo de login', async ({ page }) => {
   const seen = await setup(page, { role: 'contas_receber', unassigned: true }); await openDetail(page);
@@ -107,18 +162,23 @@ test('CR atribui explicitamente todos os títulos não atribuídos do cliente se
 });
 
 test('cobradora consulta somente sua carteira e pagamento exige data e confirmação sem validação financeira', async ({ page }) => {
-  const seen = await setup(page, { role: 'cobradora_1' }); await expect(page.getByRole('heading', { name: 'Minha carteira de cobrança' })).toBeVisible();
-  expect(seen.titleQueries.every(query => new URLSearchParams(query).get('collector_id') === `eq.${ownAgent}`)).toBe(true);
-  await expect(page.getByRole('combobox', { name: 'Cobradora', exact: true })).toHaveCount(0); await openDetail(page);
+  const seen = await setup(page, { role: 'cobradora_1' }); await openCollectionTitles(page);
+  expect(seen.workbenchQueries.length).toBeGreaterThan(0); expect(seen.workbenchQueries.every(query => query.p_collector_id === ownAgent)).toBe(true);
+  await expect(page.getByRole('combobox', { name: 'Cobradora', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Abrir título NF-120', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Histórico do título', exact: true })).toBeVisible();
   await expect(page.getByText('Validar pagamento no financeiro', { exact: true })).toHaveCount(0); await expect(page.getByRole('combobox', { name: 'Cobradora responsável', exact: true })).toHaveCount(0);
-  await page.getByRole('combobox', { name: 'Ação de cobrança', exact: true }).selectOption('PAID'); await page.getByRole('button', { name: 'Informar pagamento para validação' }).click(); expect(seen.writes).toHaveLength(0);
-  await page.getByLabel('Data do pagamento informado', { exact: true }).fill('2026-10-14');
-  page.once('dialog', dialog => { expect(dialog.message()).toContain('não confirma o recebimento'); return dialog.accept(); });
-  await page.getByRole('button', { name: 'Informar pagamento para validação' }).click();
-  await expect(page.getByRole('status')).toContainText('Pagamento informado. O título permanece na carteira');
-  expect(seen.writes[0].name).toBe('record_collection_action'); expect(seen.writes[0].body).toMatchObject({ p_title_id: titleId, p_action: 'PAID', p_payment_date: '2026-10-14', p_expected_revision: 7 });
+  await page.getByRole('combobox', { name: 'Status do atendimento', exact: true }).selectOption('TÍTULO PAGO');
+  await page.getByRole('button', { name: 'Finalizar atendimento', exact: true }).click(); expect(seen.writes).toHaveLength(0);
+  await page.getByLabel(/Data .*pagamento/).fill('2026-10-14'); await page.getByLabel('Observações', { exact: true }).fill('Pagamento informado pelo cliente; aguardando conferência financeira.');
+  page.once('dialog', dialog => { expect(dialog.message()).toContain('validação'); return dialog.accept(); });
+  await page.getByRole('button', { name: 'Finalizar atendimento', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'Validação financeira', exact: true })).toHaveAttribute('aria-selected', 'true');
+  expect(seen.writes[0].name).toBe('save_collection_case'); expect(seen.writes[0].body).toMatchObject({ p_title_id: titleId, p_status: 'TÍTULO PAGO', p_payment_date: '2026-10-14', p_expected_revision: 7, p_expected_case_revision: 0, p_finish: true });
   expect(seen.writes.some(write => write.name === 'validate_receivable_payment')).toBe(false);
-  await expect(page.getByRole('table').getByText('Pago — aguardando validação', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true })).toHaveCount(0); expect(seen.receipts).toHaveLength(0);
+  await expect(page.getByRole('tabpanel', { name: 'Validação financeira', exact: true }).getByText('Consulta em leitura.', { exact: false })).toBeVisible();
+  await openCollectionTitles(page); await expect(collectionPanel(page).getByRole('table').getByText('Aguardando validação financeira', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => ({ local: Object.keys(localStorage), session: Object.keys(sessionStorage) }))).toEqual({ local: [], session: [] });
 });
 
@@ -159,7 +219,11 @@ test('título alterado concorrentemente exige atualização sem expor erro técn
 test('diretor consulta CR, carteiras e histórico sem ações de escrita', async ({ page }) => {
   const seen = await setup(page, { role: 'diretor', pending: true }); await openDetail(page);
   await expect(page.getByText('Validar pagamento no financeiro', { exact: true })).toHaveCount(0); await expect(page.getByRole('button', { name: 'Ir para Importar Bases' })).toHaveCount(0); await expect(page.getByRole('combobox', { name: 'Cobradora responsável', exact: true })).toHaveCount(0);
-  await page.getByRole('navigation').getByRole('button', { name: 'Cobrança', exact: true }).click(); await openDetail(page); await expect(page.getByText('Registrar ação de cobrança', { exact: true })).toHaveCount(0); expect(seen.writes).toHaveLength(0);
+  await page.getByRole('navigation').getByRole('button', { name: 'Cobrança', exact: true }).click(); await openCollectionTitles(page);
+  await page.getByRole('button', { name: 'Abrir título NF-120', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Histórico do título', exact: true })).toBeVisible();
+  for (const name of ['Iniciar', 'Pausar', 'Salvar andamento', 'Finalizar atendimento']) await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+  await expect(page.getByText('Registrar ação de cobrança', { exact: true })).toHaveCount(0); expect(seen.writes).toHaveLength(0);
 });
 
 test('busca escapa curingas, envia filtros ao banco e pagina sem carregar todos os títulos', async ({ page }) => {
@@ -195,23 +259,26 @@ for (const role of ['gerente_geral', 'diretor', 'cobradora_1'] as const) {
       await expect(page.getByRole('table').getByText('Documento / NF: NF-FUTURO', { exact: true })).toBeVisible();
       await page.getByRole('navigation').getByRole('button', { name: 'Cobrança', exact: true }).click();
     }
-    await expect(page.getByRole('table').getByText('Documento / NF: NF-VENCIDO', { exact: true })).toBeVisible();
-    await expect(page.getByRole('table').getByText('Documento / NF: NF-HOJE', { exact: true })).toHaveCount(0);
-    await expect(page.getByRole('table').getByText('Documento / NF: NF-FUTURO', { exact: true })).toHaveCount(0);
-    await expect(page.getByRole('table').getByText('Documento / NF: NF-PAGO', { exact: true })).toHaveCount(0);
-    await expect(page.getByText('Somente títulos com vencimento anterior a hoje', { exact: false })).toBeVisible();
-    await expect(page.getByLabel('Situação do título')).toHaveValue('ACTIVE');
+    await openCollectionTitles(page);
+    await expect(collectionPanel(page).getByRole('table').getByText('NF-VENCIDO', { exact: true })).toBeVisible();
+    await expect(collectionPanel(page).getByRole('table').getByText('NF-HOJE', { exact: true })).toHaveCount(0);
+    await expect(collectionPanel(page).getByRole('table').getByText('NF-FUTURO', { exact: true })).toHaveCount(0);
+    await expect(collectionPanel(page).getByRole('table').getByText('NF-PAGO', { exact: true })).toHaveCount(0);
+    await collectionPanel(page).locator('summary').filter({ hasText: 'Vencimentos e situação financeira' }).click();
+    await expect(page.getByRole('combobox', { name: 'Situação financeira', exact: true })).toHaveValue('ACTIVE');
     await expect(page.getByRole('option', { name: 'Vencidos em aberto', exact: true })).toHaveCount(1);
     await expect(page.getByLabel('Vencimento final', { exact: true })).toHaveAttribute('max', '2026-10-16');
-    const collectionStart = seen.titlePaths.length;
-    await page.getByLabel('Situação do título').selectOption('');
-    await expect(page.getByRole('table').getByText('Documento / NF: NF-PAGO', { exact: true })).toBeVisible();
-    await expect(page.getByRole('table').getByText('Documento / NF: NF-HOJE', { exact: true })).toHaveCount(0);
+    const collectionStart = seen.titlePaths.length, workbenchStart = seen.workbenchQueries.length;
+    await page.getByRole('combobox', { name: 'Situação financeira', exact: true }).selectOption('');
+    await expect(collectionPanel(page).getByRole('table').getByText('NF-PAGO', { exact: true })).toBeVisible();
+    await expect(collectionPanel(page).getByRole('table').getByText('NF-HOJE', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Limpar filtros' }).click();
-    await expect(page.getByLabel('Situação do título')).toHaveValue('ACTIVE');
-    await expect(page.getByRole('table').getByText('Documento / NF: NF-PAGO', { exact: true })).toHaveCount(0);
-    await expect(page.getByRole('table').getByText('Pago — aguardando validação', { exact: true })).toBeVisible();
-    expect(seen.titlePaths.slice(collectionStart).every(path => path === '/rest/v1/collection_overdue_titles')).toBe(true);
+    await expect(page.getByRole('combobox', { name: 'Situação financeira', exact: true, includeHidden: true })).toHaveValue('ACTIVE');
+    await expect(collectionPanel(page).getByRole('table').getByText('NF-PAGO', { exact: true })).toHaveCount(0);
+    await expect(collectionPanel(page).getByRole('table').getByText('Aguardando validação financeira', { exact: true })).toBeVisible();
+    expect(seen.workbenchQueries.length).toBeGreaterThan(workbenchStart);
+    expect(seen.titlePaths.slice(collectionStart)).toHaveLength(0);
+    expect(seen.workbenchQueries.every(query => role !== 'cobradora_1' || query.p_collector_id === ownAgent)).toBe(true);
     expect(seen.writes).toHaveLength(0);
   });
 }
@@ -219,8 +286,9 @@ for (const role of ['gerente_geral', 'diretor', 'cobradora_1'] as const) {
 test('a carteira usa a nova data oficial após a meia-noite de São Paulo', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-10-18T03:30:00Z') });
   await setup(page, { role: 'cobradora_1', dates: true, serverToday: '2026-10-18' });
-  await expect(page.getByRole('table').getByText('Documento / NF: NF-VENCIDO', { exact: true })).toBeVisible();
-  await expect(page.getByRole('table').getByText('Documento / NF: NF-HOJE', { exact: true })).toHaveCount(0);
+  await openCollectionTitles(page);
+  await expect(collectionPanel(page).getByRole('table').getByText('NF-VENCIDO', { exact: true })).toBeVisible();
+  await expect(collectionPanel(page).getByRole('table').getByText('NF-HOJE', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Vencimento final', { exact: true })).toHaveAttribute('max', '2026-10-17');
 });
 
@@ -230,41 +298,40 @@ for (const code of ['PGRST205', '42P01'] as const) {
     await expect(page.getByRole('button', { name: 'Detalhar título NF-120 de Cliente sintético da carteira', exact: true })).toBeVisible();
     const previous = seen.titlePaths.length;
     await page.getByRole('navigation').getByRole('button', { name: 'Cobrança', exact: true }).click();
-    const error = page.locator('.receivables-workspace').getByRole('alert');
-    await expect(error).toContainText('A Cobrança precisa da atualização do banco para exibir somente títulos vencidos');
+    await openCollectionTitles(page); const error = collectionPanel(page).getByRole('alert');
+    await expect(error).toContainText('A central operacional da Cobrança precisa da atualização do banco');
     await expect(error).not.toContainText('private relation');
     await expect(page.getByRole('button', { name: 'Baixar CSV dos filtros' })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Detalhar', exact: false })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(0);
     await page.getByRole('button', { name: 'Atualizar títulos' }).click();
     await expect(error).toBeVisible();
-    expect(seen.titlePaths.slice(previous)).not.toHaveLength(0);
-    expect(seen.titlePaths.slice(previous).every(path => path === '/rest/v1/collection_overdue_titles')).toBe(true);
+    expect(seen.workbenchQueries.length).toBeGreaterThan(0);
+    expect(seen.titlePaths.slice(previous)).toHaveLength(0);
     expect(seen.writes).toHaveLength(0);
   });
 }
 
 test('ações ficam indisponíveis se um retorno desatualizado contiver vencimento de hoje ou futuro', async ({ page }) => {
-  await setup(page, { role: 'cobradora_1', dates: true, malformedCollection: true });
-  for (const document of ['NF-HOJE', 'NF-FUTURO']) {
-    await page.getByRole('button', { name: `Detalhar título ${document} de Cliente sintético da carteira`, exact: true }).click();
-    await expect(page.getByRole('heading', { name: `Título ${document} · Cliente sintético da carteira`, exact: true })).toBeVisible();
-    await expect(page.getByText('Registrar ação de cobrança', { exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Fechar detalhes' }).click();
-  }
+  const seen = await setup(page, { role: 'cobradora_1', dates: true, malformedCollection: true }); await openCollectionTitles(page);
+  await expect(collectionPanel(page).getByRole('alert')).toBeVisible();
+  for (const document of ['NF-HOJE', 'NF-FUTURO']) await expect(page.getByRole('button', { name: `Abrir título ${document}`, exact: true })).toHaveCount(0);
+  for (const name of ['Iniciar', 'Pausar', 'Salvar andamento', 'Finalizar atendimento']) await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+  await expect(page.getByText('Registrar ação de cobrança', { exact: true })).toHaveCount(0); expect(seen.writes).toHaveLength(0);
 });
 
 test('CSV da Cobrança usa a visão de vencidos em todas as páginas e nas duas verificações da base', async ({ page }) => {
   const seen = await setup(page, { role: 'diretor', pages: true });
   await page.getByRole('navigation').getByRole('button', { name: 'Cobrança', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Detalhar', exact: false })).toHaveCount(25);
-  const before = seen.titlePaths.length;
+  await openCollectionTitles(page); await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(25);
+  const before = seen.titlePaths.length, queriesBefore = seen.workbenchQueries.length;
   const pending = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Baixar CSV dos filtros' }).click();
   const download = await pending, path = await download.path(); expect(path).not.toBeNull();
   expect(await readFile(path!, 'utf8')).toContain('"NF-26"');
   expect(seen.exportSnapshots).toBe(2);
-  expect(seen.titlePaths.slice(before).every(path => path === '/rest/v1/collection_overdue_titles')).toBe(true);
-  expect(seen.titleQueries.some(query => new URLSearchParams(query).get('select') === 'id,revision,updated_at,collection_as_of_date')).toBe(true);
+  expect(seen.titlePaths.slice(before)).toHaveLength(0);
+  expect(seen.workbenchQueries.slice(queriesBefore).filter(query => query.p_limit === 1)).toHaveLength(2);
+  expect(seen.workbenchQueries.slice(queriesBefore).some(query => query.p_limit === 500 && query.p_queue === 'active')).toBe(true);
 });
 
 test('detalhe mostra recebimento efetivo corrigido e não consulta o valor antigo', async ({ page }) => {

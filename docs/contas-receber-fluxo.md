@@ -1,5 +1,7 @@
 # Contas a Receber, Cobrança e base de comissões — 0.9.0
 
+As regras de importação e recebimento desta página permanecem vigentes. A interface operacional de cobrança foi ampliada na **0.10.0**, com quatro abas, atendimento lateral e tempo persistente; consultar [Central de Cobrança](central-cobranca-operacao.md).
+
 A operação utiliza os dois modelos Excel enviados pelo usuário, sem renomear colunas. A equipe registra no sistema de origem e importa na Central; o arquivo de quitados confirma os recebimentos, sem exigir que a cobradora informe manualmente o mesmo pagamento.
 
 | Relatório | Finalidade |

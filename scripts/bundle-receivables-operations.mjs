@@ -8,6 +8,7 @@ export const RECEIVABLES_OPERATION_MIGRATIONS = [
   '023_receivable_sync.sql',
   '024_receivable_received_import.sql',
   '025_collections_management.sql',
+  '026_collection_workbench.sql',
 ];
 
 function stripTransaction(sql, source) {
@@ -38,7 +39,7 @@ export async function buildReceivablesOperationsSql() {
     const wrapperTag = dollarTag(`cf_cr_apply_${version.slice(0, 3)}`, statements);
     parts.push(`-- SOURCE: ${source}\nDO ${wrapperTag}\n${statements}\n${wrapperTag};`);
   }
-  return `-- CENTRAL FINANCEIRA — ativação da operação de Contas a Receber e Cobrança (022 a 025).
+  return `-- CENTRAL FINANCEIRA — ativação da operação de Contas a Receber e Cobrança (022 a 026).
 -- Copie o arquivo inteiro no SQL Editor. Uma transação: falha desfaz toda a ativação.
 -- Pode ser executado novamente: pula versões já registradas, sem refazer dados.
 -- Preserva usuários, títulos, responsáveis, recebimentos, saldos, arquivos e históricos.

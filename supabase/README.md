@@ -2,9 +2,13 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
+## Central de Cobrança operacional — 0.10.0
+
+O combinado `dashboard/ativar-recebiveis-operacao.sql` foi ampliado para **022..026**, aplicando somente versões faltantes. A nova **026** mantém estado operacional separado do financeiro, intervalos de trabalho com horários do servidor, comandos auditados e consultas autorizadas para as quatro abas da central. Não reescreve as migrations 001..025, recibos ou bases existentes. Não exige outra Edge Function; `receivables-import` continua sendo a versão da 0.9.0. [Guia atual](../docs/central-cobranca-operacao.md).
+
 ## Contas a Receber e Cobrança — 0.9.0
 
-Aplicar `dashboard/ativar-recebiveis-operacao.sql`: somente versões faltantes022..025, numa transação, com pré-requisito009 e sem dependência de CP021. A022 restringe carteira/ações aos vencidos;023 resolve parcelas e sincroniza abertos incrementalmente;024 confirma recebimentos reais e mantém versões imutáveis, resumo diário e base de comissões;025 agrega gestão da cobrança sob RLS. Atualizar também a função existente `receivables-import` com o arquivo único gerado.
+Na entrega 0.9.0, o combinado incluía 022..025; o arquivo atual aplica somente versões faltantes **022..026**, numa transação, com pré-requisito009 e sem dependência de CP021. A022 restringe carteira/ações aos vencidos;023 resolve parcelas e sincroniza abertos incrementalmente;024 confirma recebimentos reais e mantém versões imutáveis, resumo diário e base de comissões;025 agrega gestão da cobrança sob RLS;026 recupera atendimento e tempo. Quem ainda não atualizou a função de importação deve publicar `receivables-import` com o arquivo único gerado.
 
 Valores nominal e recebido permanecem separados. Revisão financeira obrigatória evita concluir uma análise desatualizada; repetição de arquivo retorna sem duplicidade. Vencimento ambíguo exige vínculo explícito. Dados e atribuições existentes são preservados. Comissões usa o efetivamente recebido e ainda não calcula taxa/pagamento. Não alterar gateways Auth/CP para esta entrega. [Guia](../docs/ativacao-operacao-recebiveis.md); [modelos/regras](../docs/contas-receber-fluxo.md).
 
@@ -49,7 +53,7 @@ Os passos abaixo são referência da instalação inicial. **Não repeti-los no 
 
 8. Após 012, executar `migrations/013_director_report.sql` uma vez. Não repetir a instalação inicial em projetos já existentes.
 9. Após 013, aplicar 014 a 021 em ordem, ou usar o combinado condicional `dashboard/ativar-contas-pagar.sql`, que ignora versões já registradas. Publicar `payables-import` atualizado.
-10. Aplicar022..025 ou o novo combinado `dashboard/ativar-recebiveis-operacao.sql`, que ignora versões registradas. Publicar `receivables-import` atualizado.
+10. Aplicar022..026 ou o combinado `dashboard/ativar-recebiveis-operacao.sql`, que ignora versões registradas. Publicar `receivables-import` atualizado.
 
 Em projetos já configurados manualmente, registrar as migrations aplicadas antes de usar `supabase db push`. Não rodar o histórico inteiro contra um banco existente sem conferir o histórico. Não executar `db reset` em um projeto com dados.
 

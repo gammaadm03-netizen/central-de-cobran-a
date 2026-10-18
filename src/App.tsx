@@ -23,7 +23,7 @@ const modules = [
   { id: 'caixa', label: 'Caixa / Bancos', icon: '▤', description: 'Posição das contas bancárias do grupo.' },
   { id: 'contas_pagar', label: 'Contas a Pagar', icon: '↗', description: 'Obrigações e planejamento financeiro.' },
   { id: 'contas_receber', label: 'Contas a Receber', icon: '↙', description: 'Títulos e validação de recebimentos.' },
-  { id: 'cobranca', label: 'Cobrança', icon: '◉', description: 'Acompanhamento de contatos e carteira individual.' },
+  { id: 'cobranca', label: 'Cobrança', icon: '◉', description: 'Central de cobrança, atendimentos e acompanhamento das carteiras.' },
   { id: 'comissoes', label: 'Comissões', icon: '%', description: 'Regras e apuração com histórico de vigência.' },
   { id: 'faturamento', label: 'Faturamento', icon: '▥', description: 'Receita e acompanhamento de metas.' },
   { id: 'margens', label: 'Margens', icon: '◷', description: 'Custos e resultado líquido das vendas.' },
@@ -180,7 +180,7 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
   else if (safeSelected === 'caixa') content = <Treasury canWrite={permits(access, 'caixa', 'write')} onStockImport={access.profile.role_key === 'gerente_geral' && permits(access, 'caixa', 'write') && permits(access, 'importar_bases') ? () => { setImportArea('estoque'); navigate('importar_bases'); } : undefined} />;
   else if (safeSelected === 'importar_bases') content = <ImportsHub access={access} initialArea={importArea} onDashboard={permits(access, 'painel') ? () => navigate('painel') : undefined} />;
   else if (safeSelected === 'contas_receber') content = <Receivables canWrite={permits(access, 'contas_receber', 'write')} canValidate={permits(access, 'contas_receber', 'validate')} onImport={permits(access, 'contas_receber', 'import') ? () => { setImportArea('contas_receber'); navigate('importar_bases'); } : undefined} />;
-  else if (safeSelected === 'cobranca') content = <Collections canWrite={permits(access, 'cobranca', 'write')} canManage={permits(access, 'contas_receber', 'write')} collectorId={access.collector_id} isCollector={['cobradora_1', 'cobradora_2'].includes(access.profile.role_key)} />;
+  else if (safeSelected === 'cobranca') content = <Collections canWrite={permits(access, 'cobranca', 'write')} canManage={permits(access, 'contas_receber', 'write')} canReadFinance={permits(access, 'contas_receber', 'read')} canValidate={permits(access, 'contas_receber', 'validate')} collectorId={access.collector_id} isCollector={['cobradora_1', 'cobradora_2'].includes(access.profile.role_key)} />;
   else if (safeSelected === 'comissoes') content = <ReceivableCommissions />;
   else if (safeSelected === 'contas_pagar') content = <><Payables canWrite={permits(access, 'contas_pagar', 'write')} canConfigure={isManager && permits(access, 'contas_pagar', 'write')} onImport={permits(access, 'contas_pagar', 'import') ? () => { setImportArea('contas_pagar'); navigate('importar_bases'); } : undefined} />{permits(access, 'mensagens_cp') && <ManagementMessages canWrite={permits(access, 'mensagens_cp', 'write')} />}</>;
   else if (safeSelected) content = <PendingModule id={safeSelected} collectorId={access.collector_id} />;

@@ -1,6 +1,12 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.9.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+Versão de desenvolvimento **0.10.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+
+## Central de Cobrança operacional — 0.10.0
+
+A central recupera as quatro abas da versão final da V75: **Visão geral**, **Títulos**, **Validação financeira** e **Tempo de trabalho**. Títulos apresenta lista à esquerda e atendimento ao lado, com busca, filtros, ordenação, status operacional, observação, próxima ação/data e cronômetro. Iniciar/pausar/finalizar persistem no servidor; conclusão, histórico e encerramento do intervalo são atômicos. Rascunhos não confirmam pagamentos. A Diretoria consulta sem escrita; cobradoras acessam a própria carteira e seu tempo. O recebimento continua sendo confirmado pelo financeiro ou pela importação dos quitados.
+
+Ativar com o [guia da Central de Cobrança](docs/central-cobranca-operacao.md): o combinado condicional agora inclui **022..026**; em uma base 0.9.0, instala somente a nova 026. Não exige nova função ou alteração das credenciais. Não há valores/tempos legados presumidos.
 
 ## Contas a Receber e Cobrança — 0.9.0
 
@@ -8,7 +14,7 @@ Importação dos dois modelos reais do ERP: **Abertos e vencidos** atualiza a ca
 
 Cobrança recupera indicadores, carteira por responsável, faixas, contatos, retornos e próximas ações, limitada aos vencidos pela data oficial de São Paulo. Diretoria vê atraso, total a receber e recebido no dia. Comissões consulta o valor efetivamente recebido por período/responsável, sem taxas ou pagamentos presumidos. Percentuais e vigências ainda precisam de definição. Responsáveis existentes e histórico são preservados; vínculos desconhecidos ficam pendentes.
 
-Ativação: [guia 0.9.0](docs/ativacao-operacao-recebiveis.md): combinado condicional **022..025**, função existente **receivables-import** e site. Não repetir a instalação inicial; sem dependência de CP021. [Fluxo confirmado e colunas dos relatórios](docs/contas-receber-fluxo.md).
+Ativação dos recebíveis: [guia 0.9.0](docs/ativacao-operacao-recebiveis.md), função existente **receivables-import** e site. O combinado foi ampliado para **022..026** na 0.10.0, preservando versões já aplicadas. Não repetir a instalação inicial; sem dependência de CP021. [Fluxo confirmado e colunas dos relatórios](docs/contas-receber-fluxo.md).
 
 ## Contas a Pagar por importação — 0.8.0
 
@@ -88,6 +94,7 @@ npm run test:collections-overdue-sql
 npm run test:receivable-sync-sql
 npm run test:receivable-received-import-sql
 npm run test:collections-management-sql
+npm run test:collection-workbench-sql
 npm run test:receivables-operations-sql
 npm run test:bank-import-sql
 npm run test:treasury-accounts-sql

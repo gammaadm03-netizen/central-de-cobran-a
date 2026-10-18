@@ -43,6 +43,29 @@ async function setup(page: Page, options: Options = {}) {
     };
   }
   const calls: { name: string; query: string; body: any }[] = [], events: any[] = [];
+  const caseState = new Map<string, { status: string; observation: string; next_action: string; next_date: string | null; revision: number }>();
+  const timer = (title_id: string) => ({ title_id, running: false, session_id: null, started_at: null, elapsed_seconds: 0, total_seconds: 0, actor_total_seconds: 0, server_now: `${serverDate}T15:00:00Z` });
+  const stateOf = (row: typeof records[number]) => caseState.get(row.id) ?? { status: row.status === 'PENDING_VALIDATION' ? 'TÍTULO PAGO' : 'NOVO TÍTULO - COBRAR', observation: '', next_action: '', next_date: row.next_action_date, revision: 0 };
+  const enrich = (row: typeof records[number]) => ({ ...row, collection_as_of_date: serverDate, operational_status: stateOf(row).status,
+    case_revision: stateOf(row).revision, observation: stateOf(row).observation, next_action_text: stateOf(row).next_action,
+    next_date: stateOf(row).next_date, delay_days: Math.max(0, Math.round((Date.parse(`${serverDate}T12:00:00Z`) - Date.parse(`${row.due_date}T12:00:00Z`)) / 86400000)),
+    collector_name: row.collector_id === own ? 'Responsável A' : row.collector_id === other ? 'Responsável B' : null,
+    total_work_seconds: 0, current_timer: timer(row.id) });
+  function workbench(body: any) {
+    let rows = visible();
+    if ((body.p_queue ?? 'active') === 'active') rows = rows.filter(row => row.status !== 'VALIDATED');
+    if (body.p_collector_id) rows = rows.filter(row => row.collector_id === body.p_collector_id);
+    if (body.p_unassigned) rows = rows.filter(row => row.collector_id === null);
+    if (body.p_financial_status && body.p_financial_status !== 'ACTIVE') rows = rows.filter(row => row.status === body.p_financial_status);
+    if (body.p_due_start) rows = rows.filter(row => row.due_date >= body.p_due_start);
+    if (body.p_due_end) rows = rows.filter(row => row.due_date <= body.p_due_end);
+    if (body.p_next_action === 'NONE') rows = rows.filter(row => !row.next_action);
+    else if (body.p_next_action) rows = rows.filter(row => row.next_action === body.p_next_action);
+    if (body.p_status) rows = rows.filter(row => stateOf(row).status === body.p_status);
+    if (body.p_search) rows = rows.filter(row => [row.client_name, row.document, stateOf(row).observation].join(' ').toLowerCase().includes(body.p_search.toLowerCase()));
+    const count = rows.length, total_cents = rows.reduce((sum, row) => sum + row.amount_cents, 0), offset = body.p_offset ?? 0;
+    return { as_of_date: serverDate, server_now: `${serverDate}T15:00:00Z`, snapshot_revision: 'management-fixture-stable', active_timer: null, count, total_cents, rows: rows.slice(offset, offset + (body.p_limit ?? 25)).map(enrich) };
+  }
   await page.route(`${project}/**`, async route => {
     const request = route.request(), url = new URL(request.url()), name = url.pathname.split('/').at(-1)!;
     const headers = { 'access-control-allow-origin': 'http://127.0.0.1:4173', 'access-control-allow-headers': 'apikey,content-type,authorization,x-client-info,prefer,range,range-unit', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-expose-headers': 'content-range' };
@@ -53,6 +76,20 @@ async function setup(page: Page, options: Options = {}) {
     if (url.pathname === '/auth/v1/user') return reply({ id: id(1), aud: 'authenticated', role: 'authenticated', email: 'fixture@example.invalid', created_at: fixed.toISOString(), app_metadata: {}, user_metadata: {} });
     if (name === 'current_access') return reply(access);
     if (name === 'collections_overdue_summary') return options.missing ? reply({ code: 'PGRST202', message: 'private SQL sensitive details' }, 404) : reply(summary());
+    if (name === 'collection_workbench') return reply(workbench(body));
+    if (name === 'collection_case_detail') {
+      const row = visible().find(item => item.id === body.p_title_id)!;
+      return reply({ title: enrich(row), case: { ...stateOf(row), payment_date: row.payment_reported_date, finalized_at: null, updated_at: null, updated_by: null },
+        timer: timer(row.id), history: events.filter(event => event.title_id === row.id), work_sessions: [] });
+    }
+    if (name === 'save_collection_case') {
+      const row = records.find(item => item.id === body.p_title_id)!, previous = stateOf(row);
+      const next = { status: body.p_status, observation: body.p_observation, next_action: body.p_next_action, next_date: body.p_next_date, revision: previous.revision + 1 };
+      caseState.set(row.id, next); row.revision++; row.last_action = 'CONTACT'; row.next_action = 'OTHER'; row.next_action_date = body.p_next_date;
+      events.push({ id: id(900 + events.length), title_id: row.id, action: 'CONTACT', contact_date: serverDate,
+        next_action: 'OTHER', next_date: body.p_next_date, observation: body.p_observation, return_note: null, payment_date: null, created_at: fixed.toISOString() });
+      return reply({ title_id: row.id, revision: row.revision, case_revision: next.revision, event_id: events.at(-1)!.id, finished: body.p_finish, timer: timer(row.id) });
+    }
     if (name === 'collection_agents') return reply([{ id: own, display_name: 'Responsável A', enabled: true }, ...(!options.collector ? [{ id: other, display_name: 'Responsável B', enabled: true }] : [])]);
     if (name === 'collection_overdue_titles') {
       let rows = visible(); const p = url.searchParams;
@@ -81,63 +118,72 @@ async function setup(page: Page, options: Options = {}) {
 }
 const overview = (page: Page) => page.locator('.collections-management');
 const card = (page: Page, name: string) => overview(page).locator('article').filter({ has: page.getByRole('heading', { name, exact: true }) });
+const titles = async (page: Page) => page.getByRole('tab', { name: 'Títulos', exact: true }).click();
+const general = async (page: Page) => page.getByRole('tab', { name: 'Visão geral', exact: true }).click();
 
 test('restores the overdue portfolio, aging bands, coverage and return indicators using the integral server summary', async ({ page }) => {
   const { calls } = await setup(page, { large: true });
   await expect(card(page, 'Carteira vencida atual')).toContainText('R$ 3.100,00'); await expect(card(page, 'Títulos vencidos').locator('strong')).toHaveText('31');
   await expect(overview(page).getByRole('button', { name: /^Ver títulos de/ })).toHaveCount(6);
-  await expect(page.getByRole('button', { name: /^Detalhar título/ })).toHaveCount(25);
   await expect(overview(page).getByText('Cobertura de cobrança', { exact: true })).toBeVisible();
+  await titles(page); await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(25);
   expect(calls.filter(call => call.name === 'collections_overdue_summary')).toHaveLength(1);
-  expect(calls.some(call => /^(commit_|validate_|record_|assign_)/.test(call.name))).toBe(false);
+  expect(calls.some(call => /^(commit_|validate_|record_|assign_|save_|collection_work_action)/.test(call.name))).toBe(false);
 });
 
 test('aging-band and pending-payment drilldowns apply real server-date bounds to the existing workspace', async ({ page }) => {
   const { calls } = await setup(page, { serverDate: '2026-11-05' });
   await overview(page).getByRole('button', { name: 'Ver títulos de 31–60 dias', exact: true }).click();
   await expect(page.getByLabel('Vencimento inicial')).toHaveValue(shifted('2026-11-05', -60)); await expect(page.getByLabel('Vencimento final')).toHaveValue(shifted('2026-11-05', -31));
-  await expect(page.getByRole('button', { name: /^Detalhar título/ })).toHaveCount(1);
-  await card(page, 'Pagamento informado').getByRole('button').click(); await expect(page.getByLabel('Situação do título')).toHaveValue('PENDING_VALIDATION');
+  await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(1);
+  await general(page); await card(page, 'Pagamento informado').getByRole('button').click(); await expect(page.getByRole('combobox', { name: 'Situação financeira', exact: true })).toHaveValue('PENDING_VALIDATION');
   await expect(page.getByLabel('Vencimento inicial')).toHaveValue('');
-  expect(calls.some(call => call.name === 'collection_overdue_titles' && new URLSearchParams(call.query).get('status') === 'eq.PENDING_VALIDATION')).toBe(true);
+  expect(calls.some(call => call.name === 'collection_workbench' && call.body.p_financial_status === 'PENDING_VALIDATION')).toBe(true);
 });
 
 test('wallet and next-action shortcuts retain visible filters and do not infer a responsible person', async ({ page }) => {
   await setup(page); await overview(page).getByRole('button', { name: 'Abrir carteira de Responsável B', exact: true }).click();
-  await expect(page.getByRole('combobox', { name: 'Cobradora', exact: true })).toHaveValue(other); await expect(page.getByRole('button', { name: /^Detalhar título/ })).toHaveCount(3);
-  await overview(page).getByRole('button').filter({ hasText: 'Sem próxima ação' }).click();
-  await expect(page.getByRole('combobox', { name: 'Próxima ação', exact: true })).toHaveValue('NONE'); await expect(page.getByRole('combobox', { name: 'Cobradora', exact: true })).toHaveValue('');
-  await expect(page.getByRole('button', { name: /^Detalhar título/ })).toHaveCount(5);
+  await expect(page.getByRole('combobox', { name: 'Cobradora', exact: true })).toHaveValue(other); await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(3);
+  await general(page); await overview(page).getByRole('button').filter({ hasText: 'Sem próxima ação' }).click();
+  await expect(page.getByRole('combobox', { name: 'Próxima ação da carteira', exact: true })).toHaveValue('NONE'); await expect(page.getByRole('combobox', { name: 'Cobradora', exact: true })).toHaveValue('');
+  await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(5);
 });
 
 test('a collector sees only their own summary and can retain contact, return and historical workflows', async ({ page }) => {
   const { calls } = await setup(page, { collector: true });
   await expect(card(page, 'Carteira vencida atual')).toContainText('R$ 300,00'); await expect(overview(page).getByText('Responsável B', { exact: true })).toHaveCount(0); await expect(overview(page).getByText('Sem cobradora definida', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Detalhar título NF-1 de Cliente sintético 1', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Título NF-1 · Cliente sintético 1' })).toBeVisible();
-  await expect(page.getByRole('combobox', { name: 'Ação de cobrança', exact: true })).toBeVisible(); await expect(page.getByLabel('Observação', { exact: true })).toBeVisible();
-  await page.getByLabel('Observação', { exact: true }).fill('Contato sintético para organizar o retorno');
-  await page.locator('.receivable-operation').getByRole('combobox', { name: 'Próxima ação', exact: true }).selectOption('CONTACT');
-  await page.getByLabel('Data da próxima ação', { exact: true }).fill(today); await page.getByLabel('Retorno do cliente').fill('Retorno sintético combinado');
-  await page.getByRole('button', { name: 'Registrar ação', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Ação de cobrança registrada');
+  await titles(page); await page.getByRole('button', { name: 'Abrir título NF-1', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Histórico do título', exact: true })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Status do atendimento', exact: true })).toBeVisible(); await expect(page.getByLabel('Observações', { exact: true })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Status do atendimento', exact: true }).selectOption('AGUARDANDO RETORNO');
+  await page.getByLabel('Observações', { exact: true }).fill('Contato sintético para organizar o retorno. Retorno sintético combinado.');
+  await page.getByLabel('Próxima ação', { exact: true }).fill('Ligar novamente');
+  await page.getByLabel('Data da próxima ação', { exact: true }).fill(today);
+  await page.getByRole('button', { name: 'Finalizar atendimento', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('finalizado');
   await expect.poll(() => calls.filter(call => call.name === 'collections_overdue_summary').length).toBe(2);
+  await general(page);
   await expect(card(page, 'Retornos para hoje').locator('strong')).toHaveText('2');
-  expect(calls.find(call => call.name === 'record_collection_action')?.body).toMatchObject({ p_action: 'CONTACT', p_next_action: 'CONTACT', p_next_date: today, p_return_note: 'Retorno sintético combinado', p_expected_revision: 1 });
-  await page.getByRole('button', { name: 'Detalhar título NF-1 de Cliente sintético 1', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Histórico do título', exact: true })).toBeVisible(); await expect(page.locator('.receivable-history').getByText('Retorno: Retorno sintético combinado', { exact: true })).toBeVisible();
-  expect(calls.filter(call => call.name === 'collection_overdue_titles').every(call => new URLSearchParams(call.query).get('collector_id') === `eq.${own}`)).toBe(true);
+  expect(calls.find(call => call.name === 'save_collection_case')?.body).toMatchObject({ p_status: 'AGUARDANDO RETORNO', p_next_action: 'Ligar novamente', p_next_date: today, p_observation: 'Contato sintético para organizar o retorno. Retorno sintético combinado.', p_expected_revision: 1, p_expected_case_revision: 0, p_finish: true });
+  expect(calls.some(call => call.name === 'validate_receivable_payment')).toBe(false); await titles(page);
+  await page.getByRole('button', { name: 'Abrir título NF-1', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Histórico do título', exact: true })).toBeVisible(); await expect(page.locator('.collection-case-history').getByText('Contato sintético para organizar o retorno. Retorno sintético combinado.', { exact: true })).toBeVisible();
+  expect(calls.filter(call => call.name === 'collection_workbench').every(call => call.body.p_collector_id === own)).toBe(true);
 });
 
 test('the Director can drill down and consult history without collection write controls', async ({ page }) => {
   const { calls } = await setup(page, { director: true }); await overview(page).getByRole('button', { name: 'Ver títulos de Acima de 365 dias', exact: true }).click();
-  await page.getByRole('button', { name: 'Detalhar título NF-6 de Cliente sintético 6', exact: true }).click();
-  await expect(page.getByText('Registrar ação de cobrança', { exact: true })).toHaveCount(0); await expect(page.getByLabel('Cobradora responsável', { exact: true })).toHaveCount(0);
-  expect(calls.some(call => /^(commit_|validate_|record_|assign_)/.test(call.name))).toBe(false);
+  await page.getByRole('button', { name: 'Abrir título NF-6', exact: true }).click();
+  await expect(page.getByText('Registrar ação de cobrança', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Cobradora responsável', { exact: true })).toHaveAttribute('readonly', '');
+  await expect(page.getByLabel('Cobradora responsável', { exact: true })).toBeDisabled();
+  for (const name of ['Iniciar', 'Pausar', 'Salvar andamento', 'Finalizar atendimento']) await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+  expect(calls.some(call => /^(commit_|validate_|record_|assign_|save_|collection_work_action)/.test(call.name))).toBe(false);
 });
 
 test('missing summary activation keeps the working overdue workspace and never falls back to all receivables', async ({ page }) => {
-  const { calls } = await setup(page, { missing: true }); await expect(overview(page).getByRole('alert')).toContainText('aguarda ativação'); await expect(page.getByRole('button', { name: /^Detalhar título/ })).toHaveCount(7);
+  const { calls } = await setup(page, { missing: true }); await expect(overview(page).getByRole('alert')).toContainText('aguarda ativação');
+  await titles(page); await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(7);
   await expect(page.getByText('private SQL sensitive details')).toHaveCount(0); expect(calls.some(call => call.name === 'receivable_titles')).toBe(false);
 });
 
@@ -151,7 +197,7 @@ test('an incompatible collector scope is rejected before displaying another wall
 
 test('an unbound collector receives guidance without reading either title or management bases', async ({ page }) => {
   const { calls } = await setup(page, { collector: true, unbound: true }); await expect(page.getByRole('status')).toContainText('Seu login ainda não está vinculado'); await expect(overview(page)).toHaveCount(0);
-  expect(calls.some(call => ['collections_overdue_summary', 'collection_overdue_titles', 'receivable_titles'].includes(call.name))).toBe(false);
+  expect(calls.some(call => ['collections_overdue_summary', 'collection_workbench', 'collection_case_detail', 'collection_overdue_titles', 'receivable_titles'].includes(call.name))).toBe(false);
 });
 
 test('an empty overdue wallet has no invented balances, contacts or collector distribution', async ({ page }) => {
@@ -159,7 +205,9 @@ test('an empty overdue wallet has no invented balances, contacts or collector di
 });
 
 test('refresh updates both the management summary and the existing title workspace', async ({ page }) => {
-  const { calls } = await setup(page); await expect(card(page, 'Carteira vencida atual')).toContainText('R$ 700,00'); const before = calls.filter(call => call.name === 'collection_overdue_titles').length;
-  await page.getByRole('button', { name: 'Atualizar visão da cobrança', exact: true }).click(); await expect.poll(() => calls.filter(call => call.name === 'collections_overdue_summary').length).toBe(2); await expect.poll(() => calls.filter(call => call.name === 'collection_overdue_titles').length).toBeGreaterThan(before);
+  const { calls } = await setup(page); await expect(card(page, 'Carteira vencida atual')).toContainText('R$ 700,00');
+  await titles(page); await expect(page.getByRole('button', { name: /^Abrir título / })).toHaveCount(7); await general(page);
+  const before = calls.filter(call => call.name === 'collection_workbench').length;
+  await page.getByRole('button', { name: 'Atualizar visão da cobrança', exact: true }).click(); await expect.poll(() => calls.filter(call => call.name === 'collections_overdue_summary').length).toBe(2); await expect.poll(() => calls.filter(call => call.name === 'collection_workbench').length).toBeGreaterThan(before);
   expect(await page.evaluate(() => ({ local: Object.keys(localStorage), session: Object.keys(sessionStorage) }))).toEqual({ local: [], session: [] });
 });

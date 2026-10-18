@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { buildReceivablesOperationsSql, RECEIVABLES_OPERATION_MIGRATIONS, writeReceivablesOperationsBundle } from './bundle-receivables-operations.mjs';
@@ -48,6 +48,15 @@ async function allTableState(db) {
   await db.exec('RESET ROLE');
   const tables = (await db.query("SELECT schemaname||'.'||tablename AS name FROM pg_tables WHERE schemaname IN ('public','cf_private','auth') ORDER BY schemaname,tablename")).rows.map(row => row.name);
   return tableState(db, tables);
+}
+async function schemaInventory(db) {
+  await db.exec('RESET ROLE');
+  return (await db.query(`SELECT 'relation' AS kind,n.nspname||'.'||c.relname AS name,c.relkind::text AS definition
+    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN('public','cf_private','auth')
+    UNION ALL SELECT 'function',n.nspname||'.'||p.proname||'('||pg_get_function_identity_arguments(p.oid)||')',pg_get_functiondef(p.oid)
+    FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname IN('public','cf_private','auth')
+    UNION ALL SELECT 'policy',schemaname||'.'||tablename||'.'||policyname,coalesce(qual,'')||'/'||coalesce(with_check,'')
+    FROM pg_policies WHERE schemaname IN('public','cf_private','auth') ORDER BY kind,name`)).rows;
 }
 async function close(db) { await db.close(); databases.delete(db); }
 async function importArgs(db, label, rows, received = false, confirm = false) {
@@ -107,7 +116,9 @@ async function fixture() {
 }
 async function assertUpgradeAbsent(db) {
   for (const relation of ['public.collection_overdue_titles', 'public.receivable_sync_imports', 'cf_private.receivable_parcel_aliases',
-    'cf_private.receivables_sync_state', 'public.effective_receivable_receipts', 'public.receivable_receipt_adjustments', 'public.receivable_received_import_rows']) {
+    'cf_private.receivables_sync_state', 'public.effective_receivable_receipts', 'public.receivable_receipt_adjustments', 'public.receivable_received_import_rows',
+    'public.collection_cases', 'public.collection_case_events', 'public.collection_work_sessions', 'public.collection_work_requests',
+    'cf_private.collection_workbench_state']) {
     assert.equal(await scalar(db, 'SELECT to_regclass($1)::text AS r', [relation]), null, relation);
   }
   assert.equal(await scalar(db, "SELECT to_regprocedure('public.collections_overdue_summary()')::text AS r"), null);
@@ -117,7 +128,7 @@ async function assertUpgradeAbsent(db) {
 
 try {
   const bundle = await buildReceivablesOperationsSql();
-  await test('generated CR activation contains all four ordered, conditional migrations in one current artifact and transaction', async () => {
+  await test('generated CR activation contains all five ordered, conditional migrations in one current artifact and transaction', async () => {
     await writeReceivablesOperationsBundle();
     assert.equal(await readFile(new URL('../supabase/dashboard/ativar-recebiveis-operacao.sql', import.meta.url), 'utf8'), bundle);
     assert.equal((bundle.match(/^BEGIN;$/gm) ?? []).length, 1);
@@ -177,6 +188,41 @@ try {
     await assert.rejects(db.exec(failing), error => error.code === '42883' && error.message.includes('synthetic_cr_activation_025_failure'));
     await db.exec('ROLLBACK'); assert.deepEqual(await allTableState(db), before); await assertUpgradeAbsent(db);
     assert.equal(await scalar(db, "SELECT qual AS r FROM pg_policies WHERE schemaname='public' AND tablename='receivable_titles' AND policyname='receivable_titles_read'"), policy);
+    await close(db);
+  });
+
+  await test('failure in 026 rolls back the whole activation including workbench cases, timers, permissions and audit structures', async () => {
+    const { db } = await fixture();
+    const before = await allTableState(db), schemaBefore = await schemaInventory(db);
+    const marker = '-- END SOURCE BODY: 026_collection_workbench.sql'; assert.equal(bundle.split(marker).length, 2);
+    const failing = bundle.replace(marker, `SELECT cf_private.synthetic_cr_activation_026_failure();\n${marker}`);
+    await assert.rejects(db.exec(failing), error => error.code === '42883' && error.message.includes('synthetic_cr_activation_026_failure'));
+    await db.exec('ROLLBACK');
+    assert.deepEqual(await allTableState(db), before); assert.deepEqual(await schemaInventory(db), schemaBefore);
+    await assertUpgradeAbsent(db); await close(db);
+  });
+
+  await test('an existing 0.9 installation upgrades only 026 while preserving original financial corrections, receipts, files and registry timestamps', async () => {
+    const { db, dates, rows } = await fixture();
+    for (const migration of RECEIVABLES_OPERATION_MIGRATIONS.slice(0, 4)) await db.exec(await source(migration));
+    await gateway(db, receivedSql, await importArgs(db, 'before-workbench-received', [{ ...rows[0], received_on: dates.today, received_amount_cents: 8500 }], true));
+    await gateway(db, receivedSql, await importArgs(db, 'before-workbench-corrected', [{ ...rows[0], received_on: dates.yesterday, received_amount_cents: 9000 }], true, true));
+    const before = await allTableState(db);
+    const oldTables = Object.keys(before).filter(name => name !== 'public.central_schema_migrations');
+    const beforeSchema = await schemaInventory(db);
+    const marker = '-- END SOURCE BODY: 026_collection_workbench.sql';
+    const failing = bundle.replace(marker, `SELECT cf_private.synthetic_cr_09_upgrade_failure();\n${marker}`);
+    await assert.rejects(db.exec(failing), error => error.code === '42883' && error.message.includes('synthetic_cr_09_upgrade_failure'));
+    await db.exec('ROLLBACK');
+    assert.deepEqual(await allTableState(db), before); assert.deepEqual(await schemaInventory(db), beforeSchema);
+    await db.exec(bundle);
+    assert.deepEqual(await tableState(db, oldTables), Object.fromEntries(oldTables.map(name => [name, before[name]])));
+    const registry = await scalar(db, "SELECT jsonb_agg(to_jsonb(m) ORDER BY to_jsonb(m)::text) AS r FROM public.central_schema_migrations m WHERE version<>'026_collection_workbench'");
+    assert.deepEqual(registry, before['public.central_schema_migrations']);
+    assert.equal(await scalar(db, "SELECT count(*)::integer AS r FROM public.central_schema_migrations WHERE version='026_collection_workbench'"), 1);
+    const effective = await scalar(db, 'SELECT to_jsonb(r) AS r FROM public.effective_receivable_receipts r JOIN public.receivable_titles t ON t.id=r.title_id WHERE t.document=$1', [rows[0].document]);
+    assert.equal(effective.amount_cents, 9000); assert.equal(effective.original_received_amount_cents, 8500); assert.equal(effective.receipt_revision, 1);
+    const upgraded = await allTableState(db); await db.exec(bundle); assert.deepEqual(await allTableState(db), upgraded);
     await close(db);
   });
 
@@ -256,6 +302,38 @@ try {
     assert.equal((await scalar(db, 'SELECT public.receivables_management_summary($1) AS r', [dates.today])).received_day_cents, 0);
     assert.equal((await scalar(db, 'SELECT public.receivables_management_summary($1) AS r', [dates.yesterday])).received_day_cents, 14000);
     assert.equal((await scalar(db, 'SELECT public.receivable_commission_base($1,$1) AS r', [dates.yesterday])).eligible_base_cents, 14000);
+  });
+
+  await test('026 starts and pauses an official timer, saves an owned case and summarizes work without changing financial receipts', async () => {
+    const financialTables = ['public.receivable_receipts', 'public.receivable_receipt_adjustments', 'public.receivable_receipt_import_provenance',
+      'public.receivable_received_import_rows', 'cf_private.receivable_import_files', 'public.payable_titles', 'public.bank_balance_positions'];
+    const financialBefore = await tableState(db, financialTables);
+    await actor(db, 'cobradora_1');
+    const item = await title(db, 'LEGACY-OPEN');
+    const timerSql = 'SELECT public.collection_work_action($1,$2,$3,$4) AS r';
+    await scalar(db, timerSql, [item.id, 'START', item.revision, randomUUID()]);
+    const pauseArgs = [item.id, 'PAUSE', (await title(db, 'LEGACY-OPEN')).revision, randomUUID()];
+    const paused = await scalar(db, timerSql, pauseArgs);
+    assert(paused && typeof paused === 'object');
+    const beforeReplay = await allTableState(db); await actor(db, 'cobradora_1');
+    const pauseReplay = await scalar(db, timerSql, pauseArgs); assert(pauseReplay && typeof pauseReplay === 'object');
+    assert.deepEqual(await allTableState(db), beforeReplay); await actor(db, 'cobradora_1');
+    const saved = await scalar(db, 'SELECT public.save_collection_case($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS r',
+      [item.id, 'COBRANCA POR WHATSAPP', 'Contato sintético registrado após a atualização', 'Retornar contato sintético', dates.future,
+        (await title(db, 'LEGACY-OPEN')).revision, 0, null, false, randomUUID()]);
+    assert.equal(saved.title_id, item.id); assert.equal(saved.case_revision, 1); assert.equal(saved.finished, false);
+    assert.equal(await scalar(db, 'SELECT count(*)::integer AS r FROM public.collection_cases WHERE title_id=$1', [item.id]), 1);
+    assert((await scalar(db, 'SELECT count(*)::integer AS r FROM public.collection_case_events WHERE title_id=$1', [item.id])) >= 1);
+    const summary = await scalar(db, 'SELECT public.collection_work_summary($1,$1) AS r', [dates.today]);
+    assert.equal(summary.session_count, 1); assert.equal(summary.running_count, 0); assert.equal(summary.title_count, 1);
+    assert(Number.isSafeInteger(summary.total_seconds) && summary.total_seconds >= 0);
+    assert.equal(summary.by_collector.length, 1);
+    assert.deepEqual(await tableState(db, financialTables), financialBefore);
+    await actor(db, 'diretor');
+    assert.equal((await scalar(db, 'SELECT public.collection_work_summary($1,$1) AS r', [dates.today])).session_count, 1);
+    const beforeRead = await allTableState(db); await actor(db, 'diretor');
+    await scalar(db, 'SELECT public.collection_work_summary($1,$1) AS r', [dates.today]);
+    assert.deepEqual(await allTableState(db), beforeRead);
   });
 
   await test('repeating complete activation preserves exact live receipts, correction history, file provenance, revision and registry timestamps', async () => {

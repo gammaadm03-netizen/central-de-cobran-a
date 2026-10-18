@@ -1,6 +1,8 @@
-# Publicação e ativação — 0.9.0
+# Publicação e ativação — 0.10.0
 
-A atualização atual **0.9.0** utiliza os dois relatórios reais de CR, confirma quitações por importação, atualiza Cobrança, apresenta recebido diário à Diretoria e disponibiliza a base efetiva de comissões. Seguir [ativacao-operacao-recebiveis.md](ativacao-operacao-recebiveis.md): aplicar o novo combinado condicional **022..025**, atualizar a função **receivables-import** e aguardar o site no mesmo endereço. Taxas de comissão não foram presumidas. Não repetir a instalação inicial.
+A atualização atual **0.10.0** recupera a Central de Cobrança operacional com quatro abas, atendimento ao lado da lista, status/agenda, validação e controle de tempo no banco. Seguir [central-cobranca-operacao.md](central-cobranca-operacao.md): executar o combinado condicional **022..026** e aguardar o site no mesmo endereço. Quem já ativou a 0.9.0 recebe somente a nova 026; a função de importação permanece a mesma. Nenhuma instalação inicial deve ser repetida.
+
+A atualização anterior **0.9.0** utiliza os dois relatórios reais de CR, confirma quitações por importação, atualiza Cobrança, apresenta recebido diário à Diretoria e disponibiliza a base efetiva de comissões. Seguir [ativacao-operacao-recebiveis.md](ativacao-operacao-recebiveis.md) para a função **receivables-import**, caso ainda não atualizada. O combinado atual **022..026** já inclui as atualizações de banco dessa entrega. Taxas de comissão não foram presumidas. Não repetir a instalação inicial.
 
 Para a versão anterior **0.8.0**, seguir [ativacao-contas-pagar.md](ativacao-contas-pagar.md): executar o SQL combinado condicional **012..021**, atualizar o código da função existente **payables-import** e aguardar o frontend no mesmo endereço. Inclui resumo semanal por Macro, total pago mensal, consulta por período, importação incremental de previsões e conciliação automática pelo relatório dos pagos. Nenhum serviço pago é habilitado. Não repetir a instalação inicial.
 
@@ -14,7 +16,7 @@ Para o estoque manual em **Importar Bases → Estoque**, basta o deploy da vers�
 
 Para o projeto atual, o usuário já confirmou a execução de 008/009/010/011. A atualização **0.4.1** usa somente `supabase/migrations/012_treasury_accounts.sql`, seguindo [ativacao-contas-caixas.md](ativacao-contas-caixas.md). Ela acrescenta Cora Ecoplast e cinco caixas das empresas: o total passa a 17 posições, sem alterar saldos anteriores. Não exige outra Edge Function. Não repetir o SQL combinado da versão anterior para acrescentar contas.
 
-Os procedimentos abaixo registram a ativação histórica 0.4.0 e a publicação inicial de CR. Na entrega histórica seguinte, o rodapé passou a mostrar 0.4.1. Para a atualização atual 0.9.0, seguir o guia no início desta página.
+Os procedimentos abaixo registram a ativação histórica 0.4.0 e a publicação inicial de CR. Na entrega histórica seguinte, o rodapé passou a mostrar 0.4.1. Para a atualização atual 0.10.0, seguir o guia no início desta página.
 
 A Central já possui endereço na Cloudflare Pages: https://central-de-cobran-a.pages.dev. O usuário informou que login, Painel, saldos e CP funcionam. A versão 0.4.0 acrescenta a entrada bancária em Importar Bases, CR e Cobrança. Os passos abaixo atualizam esse projeto, preservando seus dados. Testes locais não comprovam que o deploy ou a ativação remota já terminaram.
 
@@ -44,7 +46,7 @@ A conexão pública vem de `config/supabase.public.json`, contendo somente URL e
 
 O build inclui `_headers` com CSP e política de cache. A navegação atual usa a mesma página e não precisa de regra global de redirecionamento. Não publicar o HTML legado V75, `usuarios.json`, hashes ou bases financeiras como arquivos estáticos.
 
-Na publicação histórica do estoque, o rodapé passou a mostrar 0.5.0. Após a atualização atual, abrir a Central, atualizar com **Ctrl + Shift + R** se necessário, entrar e conferir **Versão 0.9.0**. Esse deploy não executa o SQL nem publica funções do Supabase. O endereço existente deve permanecer o mesmo; não criar outro site para cada atualização.
+Na publicação histórica do estoque, o rodapé passou a mostrar 0.5.0. Após a atualização atual, abrir a Central, atualizar com **Ctrl + Shift + R** se necessário, entrar e conferir **Versão 0.10.0**. Esse deploy não executa o SQL nem publica funções do Supabase. O endereço existente deve permanecer o mesmo; não criar outro site para cada atualização.
 
 ## 4. Conferir os dados e os acessos
 

@@ -1,0 +1,8 @@
+.collections-central{min-width:0}
+.collections-central .collections-central-tabs{margin:0 0 18px;gap:8px;flex-wrap:wrap}
+.collections-central-tabs [role=tab]{border:1px solid #dce8df;border-radius:10px;padding:10px 16px;background:#fff;color:#657b70;font-weight:650;box-shadow:0 2px 7px #17443108}
+.collections-central-tabs [role=tab][aria-selected=true]{background:#105442;border-color:#105442;color:#fff}
+.collections-central-tabs [role=tab]:focus-visible{outline:3px solid #94bb78;outline-offset:3px}
+.collections-central-panel{min-width:0}
+.collections-central-panel[hidden]{display:none}
+@media(max-width:600px){.collections-central .collections-central-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.collections-central-tabs [role=tab]{padding:11px 8px;font-size:12px}}

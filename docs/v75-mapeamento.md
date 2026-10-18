@@ -37,7 +37,7 @@ O arquivo original permanece intacto.
 | Caixa / Bancos | 488 | Contas oficiais 1157; `cashCompanyTotals` 1571; `renderCashBankModule` 1579 |
 | Contas a Pagar | 507 | `apImportDiff` 1529; classificação 1551; previsão 2004; Excel 2009 e 2020 |
 | Contas a Receber | 684 | Normalização 1711; comparação 1713; confirmação 1773 |
-| Cobrança | 709 | Herança de carteira 1702; ações 1844; validação 1851 e 1852 |
+| Cobrança | 709 | Herança de carteira 1702; timer 1817–1818; patch final de atendimento/validação 2190–2298, que substitui as funções anteriores |
 | Comissões | 760 | Cobradoras 1855–1862; vendedores 1869–1883 |
 | Faturamento | 846 | `normalizeFatImportRows` 1566; `renderSales` 1484 |
 | Margens | 861 | `renderMargins` 1494 |
@@ -48,6 +48,12 @@ São reaproveitáveis a identidade, as colunas das tabelas, os filtros conhecido
 as descrições dos fluxos e as regras que coincidam com a especificação vigente.
 O acesso ao DOM e a persistência do monólito precisam ser substituídos por
 componentes React e operações protegidas no banco.
+
+A 0.10.0 recupera as quatro abas operacionais da Cobrança, o atendimento lateral,
+os dez status finais e o controle de trabalho no servidor. A marcação de pago
+continua pendente até confirmação financeira ou importação dos quitados. Não
+foram copiados nomes, títulos ou tempos das bases embutidas. Procedimento e
+limites: [central-cobranca-operacao.md](central-cobranca-operacao.md).
 
 ## Estruturas de dados de origem
 

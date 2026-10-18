@@ -1,13 +1,15 @@
 # Ativar Contas a Receber, Cobrança e base de comissões — 0.9.0
 
+**Atualização 0.10.0:** o SQL combinado foi ampliado para **022..026**, incluindo a Central de Cobrança operacional. Versões anteriores já registradas são preservadas. O código da função de importação permanece o mesmo da 0.9.0; seguir o [guia atual de Cobrança](central-cobranca-operacao.md). Os passos abaixo preservam a ativação dos recebíveis e continuam úteis quando a função ainda não foi publicada.
+
 Esta atualização preserva o endereço, usuários, permissões, títulos, responsáveis, contatos, recebimentos, saldos, arquivos e históricos existentes. O envio de código pelo Git não executa SQL ou publica funções no Supabase.
 
 ## Atualizar o projeto existente
 
-1. Abra o [SQL combinado 022–025](https://github.com/gammaadm03-netizen/central-de-cobran-a/blob/main/supabase/dashboard/ativar-recebiveis-operacao.sql), clique em **Raw** e copie tudo.
+1. Abra o [SQL combinado atualizado](https://github.com/gammaadm03-netizen/central-de-cobran-a/blob/main/supabase/dashboard/ativar-recebiveis-operacao.sql), clique em **Raw** e copie tudo.
 2. No [SQL Editor do projeto](https://supabase.com/dashboard/project/sjimddcqgrsauzvffcol/sql/new), cole em uma consulta nova e execute **Run**. O arquivo aplica somente versões faltantes numa transação. Exige o módulo CR/Cobrança 009 já instalado; não depende de CP 021. Não repetir os scripts antigos 008/009/010/011 nem remover tabelas. Se houver erro, preserve a mensagem completa para análise.
 3. Em **Edge Functions**, abra **receivables-import → Code → index.ts**. Substitua todo o conteúdo pelo [código atualizado da função](https://github.com/gammaadm03-netizen/central-de-cobran-a/blob/main/supabase/dashboard/receivables-import.ts) e publique. Se `receivables-import` ainda não existir, crie via editor com esse nome exato; não use um nome automático. Preserve `auth-gateway`, `payables-import` e `ALLOWED_ORIGINS`. Mantenha **Verify JWT with legacy secret** desativado: o código verifica token, sessão e permissões oficiais.
-4. Aguarde o deploy da branch `main` na Cloudflare, atualize a Central e confira **Versão 0.9.0**.
+4. Aguarde o deploy da branch `main` na Cloudflare, atualize a Central e confira **Versão 0.10.0**.
 
 O arquivo **.sql vai no SQL Editor**. O arquivo **.ts vai no editor da função**, nunca no SQL Editor. O combinado pode ser repetido: versões já registradas são ignoradas. Não executar também as quatro migrations individuais após o combinado. Não é necessário novo serviço pago ou nova credencial.
 
