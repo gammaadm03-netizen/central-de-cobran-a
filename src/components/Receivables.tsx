@@ -16,9 +16,10 @@ export interface OperationalTitle {
   status: string; validation_status: string; payment_source: string | null; payment_reported_date: string | null; payment_date: string | null;
   reported_in_collection: boolean; collector_locked: boolean; in_latest_report: boolean; revision: number; updated_at: string;
   last_action: string | null; next_action: string | null; next_action_date: string | null;
+  collection_as_of_date?: string;
 }
 interface Agent { id: string; display_name: string; enabled: boolean }
-interface Filters { search: string; status: string; start: string; end: string; branch: string; collector: string }
+interface Filters { search: string; status: string; start: string; end: string; branch: string; collector: string; nextAction: string }
 interface CollectionEvent {
   id: string; action: string; contact_date: string | null; next_action: string | null; next_date: string | null;
   observation: string | null; return_note: string | null; payment_date: string | null; created_at: string;
@@ -27,8 +28,10 @@ interface Receipt { id: string; amount_cents: number; payment_date: string; dela
 export interface ReceivableWorkspaceProps {
   mode: 'receivables' | 'collections'; canWrite: boolean; canManage: boolean; canValidate?: boolean;
   collectorId?: string | null; isCollector?: boolean; onImport?: () => void;
+  collectionFilter?: { requestId: number; start?: string; end?: string; status?: string; collector?: string; nextAction?: string };
+  onCollectionChange?: () => void; refreshKey?: number;
 }
-const initialFilters: Filters = { search: '', status: 'ACTIVE', start: '', end: '', branch: '', collector: '' };
+const initialFilters: Filters = { search: '', status: 'ACTIVE', start: '', end: '', branch: '', collector: '', nextAction: '' };
 
 function today() {
   const parts = new Intl.DateTimeFormat('en', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
@@ -36,7 +39,7 @@ function today() {
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
 function delayDays(row: OperationalTitle) {
-  return Math.max(0, Math.round((Date.parse(`${row.payment_date ?? today()}T12:00:00Z`) - Date.parse(`${row.due_date}T12:00:00Z`)) / 86400000));
+  return Math.max(0, Math.round((Date.parse(`${row.payment_date ?? row.collection_as_of_date ?? today()}T12:00:00Z`) - Date.parse(`${row.due_date}T12:00:00Z`)) / 86400000));
 }
 function delayLabel(days: number) { return days === 0 ? 'Em dia' : days <= 30 ? '1 a 30 dias' : days <= 60 ? '31 a 60 dias' : days <= 90 ? '61 a 90 dias' : days <= 180 ? '91 a 180 dias' : days <= 365 ? '181 a 365 dias' : 'Acima de 365 dias'; }
 function operationError(error: unknown, fallback: string) {
@@ -45,13 +48,25 @@ function operationError(error: unknown, fallback: string) {
   if (code === '42501') return 'Seu perfil não tem permissão para esta operação ou carteira.';
   if (code === 'PGRST301' || code === 'PGRST303') return 'Sua sessão expirou. Entre novamente.';
   if (code === '23514' || code === '22023') return 'A operação foi recusada. Confira a situação do título, as datas e os campos obrigatórios. Nenhum dado foi alterado.';
+  if (code === 'COLLECTION_NOT_READY') return 'A Cobrança precisa da atualização do banco para exibir somente títulos vencidos. Peça à administração para ativar a atualização de Cobrança.';
   if (code === 'PGRST202' || code === '42703' || code === '42P01') return 'Contas a Receber e Cobrança precisam da atualização do banco de dados. Procure a administração.';
   return fallback;
 }
-async function readTitles(filters: Filters, offset: number, size: number, isCollector: boolean, collectorId: string | null, signal: AbortSignal) {
+function collectionReadError(error: unknown, mode: ReceivableWorkspaceProps['mode']) {
+  const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+  return mode === 'collections' && ['PGRST202', 'PGRST205', '42P01', '42703'].includes(code) ? { code: 'COLLECTION_NOT_READY' } : error;
+}
+function collectionTitleIsOverdue(row: OperationalTitle) {
+  return typeof row.collection_as_of_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.collection_as_of_date) && row.due_date < row.collection_as_of_date;
+}
+function previousDay(value: string) {
+  const date = new Date(`${value}T12:00:00Z`); date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+async function readTitles(filters: Filters, offset: number, size: number, isCollector: boolean, collectorId: string | null, signal: AbortSignal, mode: ReceivableWorkspaceProps['mode']) {
   if (!supabase) throw { code: 'PGRST301' };
   if (isCollector && !collectorId) return { rows: [], count: 0 };
-  let query = supabase.from('receivable_titles').select(columns, { count: 'exact' }).eq('scope', scope).order('due_date').order('id').range(offset, offset + size - 1);
+  let query = supabase.from(mode === 'collections' ? 'collection_overdue_titles' : 'receivable_titles').select(mode === 'collections' ? `${columns},collection_as_of_date` : columns, { count: 'exact' }).eq('scope', scope).order('due_date').order('id').range(offset, offset + size - 1);
   if (isCollector) query = query.eq('collector_id', collectorId!);
   if (filters.search.trim()) query = query.ilike('client_name', `%${filters.search.trim().replace(/[\\%_]/g, '\\$&')}%`);
   if (filters.status === 'ACTIVE') query = query.neq('status', 'VALIDATED');
@@ -61,8 +76,10 @@ async function readTitles(filters: Filters, offset: number, size: number, isColl
   if (filters.branch.trim()) query = query.eq('branch', filters.branch.trim());
   if (!isCollector && filters.collector === 'unassigned') query = query.is('collector_id', null);
   else if (!isCollector && filters.collector) query = query.eq('collector_id', filters.collector);
+  if (mode === 'collections' && filters.nextAction === 'NONE') query = query.is('next_action', null);
+  else if (mode === 'collections' && filters.nextAction) query = query.eq('next_action', filters.nextAction);
   const result = await query.abortSignal(signal);
-  if (result.error) throw result.error;
+  if (result.error) throw collectionReadError(result.error, mode);
   return { rows: (result.data ?? []) as unknown as OperationalTitle[], count: result.count ?? 0 };
 }
 function csv(rows: OperationalTitle[], agents: Agent[], name: string) {
@@ -78,7 +95,7 @@ export default function Receivables({ canWrite, canValidate, onImport }: { canWr
   return <ReceivableWorkspace mode="receivables" canWrite={canWrite} canManage={canWrite} canValidate={canValidate} onImport={onImport} />;
 }
 
-export function ReceivableWorkspace({ mode, canWrite, canManage, canValidate = false, collectorId = null, isCollector = false, onImport }: ReceivableWorkspaceProps) {
+export function ReceivableWorkspace({ mode, canWrite, canManage, canValidate = false, collectorId = null, isCollector = false, onImport, collectionFilter, onCollectionChange, refreshKey = 0 }: ReceivableWorkspaceProps) {
   const prefix = mode === 'collections' ? 'collection' : 'receivable';
   const [filters, setFilters] = useState(initialFilters), [search, setSearch] = useState('');
   const [rows, setRows] = useState<OperationalTitle[]>([]), [agents, setAgents] = useState<Agent[]>([]);
@@ -90,6 +107,10 @@ export function ReceivableWorkspace({ mode, canWrite, canManage, canValidate = f
   const [exporting, setExporting] = useState(false), [exportProgress, setExportProgress] = useState('');
   const exportAbort = useRef<AbortController | null>(null);
   useEffect(() => () => exportAbort.current?.abort(), []);
+  useEffect(() => {
+    if (mode !== 'collections' || !collectionFilter) return;
+    setSearch(''); setFilters({ ...initialFilters, start: collectionFilter.start ?? '', end: collectionFilter.end ?? '', status: collectionFilter.status ?? 'ACTIVE', collector: collectionFilter.collector ?? '', nextAction: collectionFilter.nextAction ?? '' }); setPage(0);
+  }, [mode, collectionFilter?.requestId]);
   useEffect(() => { if (search === filters.search) return; const timer = window.setTimeout(() => { setFilters(previous => ({ ...previous, search })); setPage(0); }, 250); return () => window.clearTimeout(timer); }, [search, filters.search]);
   useEffect(() => {
     const abort = new AbortController(); setAgentsLoading(true); setAgentsError('');
@@ -104,29 +125,29 @@ export function ReceivableWorkspace({ mode, canWrite, canManage, canValidate = f
   useEffect(() => {
     const abort = new AbortController(); setLoading(true); setError(''); setRows([]); setSelected(null);
     if (filters.start && filters.end && filters.start > filters.end) { setError('A data inicial deve ser anterior à data final.'); setLoading(false); setCount(0); return () => abort.abort(); }
-    void readTitles(filters, page * size, size, isCollector, collectorId, abort.signal).then(result => {
+    void readTitles(filters, page * size, size, isCollector, collectorId, abort.signal, mode).then(result => {
       if (abort.signal.aborted) return;
       setCount(result.count); const last = Math.max(0, Math.ceil(result.count / size) - 1);
       if (page > last) setPage(last); else setRows(result.rows);
     }).catch(failure => { if (!abort.signal.aborted) { setCount(0); setError(operationError(failure, 'Não foi possível carregar os títulos. Tente atualizar a lista.')); } }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
-  }, [filters, page, size, isCollector, collectorId, refresh]);
+  }, [filters, page, size, isCollector, collectorId, refresh, mode, refreshKey]);
   function change(key: keyof Filters, value: string) { setFilters(previous => ({ ...previous, [key]: value })); setPage(0); }
-  function completed(message: string) { setNotice(message); setSelected(null); setRefresh(value => value + 1); workspaceRef.current?.scrollIntoView({ block: 'start' }); }
+  function completed(message: string) { setNotice(message); setSelected(null); setRefresh(value => value + 1); if (mode === 'collections') onCollectionChange?.(); workspaceRef.current?.scrollIntoView({ block: 'start' }); }
   async function exportRows() {
     if (loading || exporting || !count) return;
     const abort = new AbortController(), frozen = { ...filters }; exportAbort.current = abort; setExporting(true); setExportProgress('Preparando exportação…'); setError('');
     try {
       const client = supabase; if (!client) throw { code: 'PGRST301' };
       const snapshot = async () => {
-        let query = client.from('receivable_titles').select('id,revision,updated_at').eq('scope', scope).order('updated_at', { ascending: false }).order('id').limit(1);
+        let query = client.from(mode === 'collections' ? 'collection_overdue_titles' : 'receivable_titles').select(mode === 'collections' ? 'id,revision,updated_at,collection_as_of_date' : 'id,revision,updated_at').eq('scope', scope).order('updated_at', { ascending: false }).order('id').limit(1);
         if (isCollector) query = query.eq('collector_id', collectorId!);
-        const result = await query.abortSignal(abort.signal); if (result.error) throw result.error;
+        const result = await query.abortSignal(abort.signal); if (result.error) throw collectionReadError(result.error, mode);
         return JSON.stringify(result.data ?? []);
       };
       const before = await snapshot(), selectedRows: OperationalTitle[] = []; let expected: number | null = null;
       for (let offset = 0; ; offset += 500) {
-        const result = await readTitles(frozen, offset, 500, isCollector, collectorId, abort.signal); if (abort.signal.aborted) return;
+        const result = await readTitles(frozen, offset, 500, isCollector, collectorId, abort.signal, mode); if (abort.signal.aborted) return;
         if (expected !== null && expected !== result.count) throw new Error('changed'); expected = result.count;
         selectedRows.push(...result.rows); if (selectedRows.length > 100000) throw new Error('limit');
         setExportProgress(`Exportando ${selectedRows.length.toLocaleString('pt-BR')} de ${expected.toLocaleString('pt-BR')} títulos…`);
@@ -140,24 +161,26 @@ export function ReceivableWorkspace({ mode, canWrite, canManage, canValidate = f
     finally { if (!abort.signal.aborted) setExporting(false); }
   }
   const pages = Math.max(1, Math.ceil(count / size)), unbound = isCollector && !collectorId;
+  const collectionDateLimit = mode === 'collections' ? previousDay(rows[0]?.collection_as_of_date ?? today()) : undefined;
   return <section ref={workspaceRef} className="panel receivables-workspace" aria-labelledby={`${prefix}-title`}>
-    <div className="panel-header"><div><h2 id={`${prefix}-title`}>{mode === 'collections' ? isCollector ? 'Minha carteira de cobrança' : 'Carteiras de cobrança' : 'Títulos de Contas a Receber'}</h2><p className="muted">{mode === 'collections' ? 'Contatos e pagamentos informados preservam a carteira até a validação financeira.' : 'Importação completa identifica ausências; somente a validação financeira confirma o recebimento.'}</p></div><div className="inline-actions">{onImport && <button type="button" className="button" onClick={onImport}>Ir para Importar Bases</button>}<button type="button" className="button secondary" disabled={loading || unbound} onClick={() => { setNotice(''); setRefresh(value => value + 1); }}>Atualizar títulos</button></div></div>
+    <div className="panel-header"><div><h2 id={`${prefix}-title`}>{mode === 'collections' ? isCollector ? 'Minha carteira de cobrança' : 'Carteiras de cobrança' : 'Títulos de Contas a Receber'}</h2><p className="muted">{mode === 'collections' ? 'Somente títulos com vencimento anterior a hoje, pela data oficial de São Paulo. Contatos e pagamentos informados preservam a carteira até a validação financeira.' : 'Importação completa identifica ausências; somente a validação financeira confirma o recebimento.'}</p></div><div className="inline-actions">{onImport && <button type="button" className="button" onClick={onImport}>Ir para Importar Bases</button>}<button type="button" className="button secondary" disabled={loading || unbound} onClick={() => { setNotice(''); setRefresh(value => value + 1); }}>Atualizar títulos</button></div></div>
     {unbound ? <p className="notice" role="status">Seu login ainda não está vinculado a uma cobradora. Peça à Gerência Geral para configurar o vínculo em Administração. Nenhuma carteira está disponível até essa configuração.</p> : <>
       {error && <p className="notice error" role="alert">{error}</p>}{agentsError && <p className="notice error" role="alert">{agentsError}</p>}{notice && <p className="notice success" role="status">{notice}</p>}
       {canValidate && mode === 'receivables' && <div className="receivable-queue"><div><strong>Validação financeira</strong><p>Confira a data real e a entrada bancária antes de confirmar. Pagamento apenas informado não compõe o valor recebido.</p></div><button className="button secondary" type="button" onClick={() => change('status', 'PENDING_VALIDATION')}>Abrir fila de validação</button></div>}
       <div className="form-grid receivable-filters">
         <label className="field" htmlFor={`${prefix}-search`}>Pesquisar cliente / órgão<input id={`${prefix}-search`} value={search} onChange={event => setSearch(event.target.value)} placeholder="Nome do cliente ou órgão" maxLength={200} /></label>
-        <label className="field" htmlFor={`${prefix}-status`}>Situação do título<select id={`${prefix}-status`} value={filters.status} onChange={event => change('status', event.target.value)}><option value="ACTIVE">Carteira ativa</option><option value="">Todos, incluindo histórico</option>{Object.entries(statuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-        <label className="field" htmlFor={`${prefix}-start`}>Vencimento inicial<input id={`${prefix}-start`} type="date" value={filters.start} onChange={event => change('start', event.target.value)} /></label>
-        <label className="field" htmlFor={`${prefix}-end`}>Vencimento final<input id={`${prefix}-end`} type="date" value={filters.end} onChange={event => change('end', event.target.value)} /></label>
+        <label className="field" htmlFor={`${prefix}-status`}>Situação do título<select id={`${prefix}-status`} value={filters.status} onChange={event => change('status', event.target.value)}><option value="ACTIVE">{mode === 'collections' ? 'Vencidos em aberto' : 'Carteira ativa'}</option><option value="">{mode === 'collections' ? 'Vencidos, incluindo histórico' : 'Todos, incluindo histórico'}</option>{Object.entries(statuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        <label className="field" htmlFor={`${prefix}-start`}>Vencimento inicial<input id={`${prefix}-start`} type="date" max={collectionDateLimit} value={filters.start} onChange={event => change('start', event.target.value)} /></label>
+        <label className="field" htmlFor={`${prefix}-end`}>Vencimento final<input id={`${prefix}-end`} type="date" max={collectionDateLimit} value={filters.end} onChange={event => change('end', event.target.value)} /></label>
         <label className="field" htmlFor={`${prefix}-branch`}>Filial<input id={`${prefix}-branch`} value={filters.branch} onChange={event => change('branch', event.target.value)} placeholder="Código / nome exato da base" maxLength={150} /></label>
         {!isCollector && <label className="field" htmlFor={`${prefix}-collector`}>Cobradora<select id={`${prefix}-collector`} value={filters.collector} onChange={event => change('collector', event.target.value)}><option value="">Todas as carteiras</option><option value="unassigned">Sem cobradora definida</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.display_name}{!agent.enabled ? ' (inativa)' : ''}</option>)}</select></label>}
+        {mode === 'collections' && <label className="field" htmlFor={`${prefix}-next-action`}>Próxima ação<select id={`${prefix}-next-action`} value={filters.nextAction} onChange={event => change('nextAction', event.target.value)}><option value="">Todas as próximas ações</option><option value="NONE">Sem próxima ação definida</option>{nextActions.map(key => <option value={key} key={key}>{actions[key]}</option>)}</select></label>}
       </div>
       <div className="toolbar"><button type="button" className="button secondary" onClick={() => { setSearch(''); setFilters(initialFilters); setPage(0); }}>Limpar filtros</button><button type="button" className="button secondary" disabled={loading || exporting || !count} onClick={() => void exportRows()}>{exporting ? 'Exportando…' : 'Baixar CSV dos filtros'}</button></div>
       {exportProgress && <p className="help-text" role="status">{exportProgress}</p>}
       <div className="table-wrap" aria-busy={loading}><table className="data-table"><caption className="sr-only">{mode === 'collections' ? 'Carteira de cobrança' : 'Contas a Receber'} com filtros e paginação</caption><thead><tr><th>Cliente / Documento</th><th>Filial / Emissão</th><th>Vencimento / Atraso</th><th>Valor</th>{!isCollector && <th>Cobradora</th>}<th>Situação / Última ação</th><th>Próxima ação</th><th>Pagamento</th><th>Detalhes</th></tr></thead><tbody>{loading ? <tr><td colSpan={isCollector ? 8 : 9} className="empty-state">Carregando títulos…</td></tr> : rows.length ? rows.map(row => <tr key={row.id} className={selected?.id === row.id ? 'receivable-selected' : ''}><td><strong>{row.client_name}</strong><div>Documento / NF: {row.document}</div>{row.client_document && <small>CNPJ: {row.client_document}</small>}</td><td>{row.branch}<div>{dateLabel(row.issued_on)}</div></td><td>{dateLabel(row.due_date)}<div className={delayDays(row) ? 'receivable-overdue' : 'muted'}>{delayDays(row)} dias · {delayLabel(delayDays(row))}</div></td><td className="receivable-money">{formatCents(row.amount_cents)}</td>{!isCollector && <td>{agents.find(agent => agent.id === row.collector_id)?.display_name ?? (row.collector_id ? 'Cobradora atribuída' : 'Sem cobradora definida')}</td>}<td><span className={`badge receivable-status status-${row.status.toLowerCase()}`}>{statuses[row.status]}</span><div>{actions[row.last_action ?? ''] ?? 'Sem ação registrada'}</div>{!row.in_latest_report && row.status !== 'VALIDATED' && <small className="receivable-warning">Ausente no último relatório completo</small>}</td><td>{actions[row.next_action ?? ''] ?? '—'}<div>{dateLabel(row.next_action_date)}</div></td><td><div>Informado: {dateLabel(row.payment_reported_date)}</div><div>Validado: {dateLabel(row.payment_date)}</div></td><td><button type="button" className="button secondary" onClick={() => { setSelected(row); setNotice(''); }} aria-label={`Detalhar título ${row.document} de ${row.client_name}`}>Detalhar</button></td></tr>) : <tr><td colSpan={isCollector ? 8 : 9} className="empty-state">{error ? 'Lista indisponível.' : 'Nenhum título para os filtros selecionados.'}</td></tr>}</tbody></table></div>
       <div className="pagination"><label className="field" htmlFor={`${prefix}-size`}>Por página<select id={`${prefix}-size`} value={size} onChange={event => { setSize(Number(event.target.value)); setPage(0); }}><option value="25">25</option><option value="50">50</option></select></label><span>{count.toLocaleString('pt-BR')} títulos · página {page + 1} de {pages}</span><button type="button" className="button secondary" disabled={loading || !page} onClick={() => setPage(value => value - 1)}>Anterior</button><button type="button" className="button secondary" disabled={loading || page + 1 >= pages} onClick={() => setPage(value => value + 1)}>Próxima</button></div>
-      {selected && <TitleDetails key={`${selected.id}:${selected.revision}`} row={selected} agents={agents} canAssign={canWrite && canManage && !agentsLoading && !agentsError} canContact={canWrite && mode === 'collections'} canValidate={canValidate && mode === 'receivables'} onClose={() => setSelected(null)} onCompleted={completed} />}
+      {selected && <TitleDetails key={`${selected.id}:${selected.revision}`} row={selected} agents={agents} canAssign={canWrite && canManage && !agentsLoading && !agentsError} canContact={canWrite && mode === 'collections' && collectionTitleIsOverdue(selected)} canValidate={canValidate && mode === 'receivables'} onClose={() => setSelected(null)} onCompleted={completed} />}
     </>}
   </section>;
 }
@@ -170,7 +193,12 @@ function TitleDetails({ row, agents, canAssign, canContact, canValidate, onClose
     const client = supabase, abort = new AbortController(); if (!client) { setLoading(false); setHistoryError('Sua sessão expirou. Entre novamente.'); return; }
     void Promise.all([
       client.from('receivable_collection_events').select('id,action,contact_date,next_action,next_date,observation,return_note,payment_date,created_at').eq('title_id', row.id).order('created_at', { ascending: false }).order('id').limit(50).abortSignal(abort.signal),
-      client.from('receivable_receipts').select('id,amount_cents,payment_date,delay_days,delay_band,payment_source,validated_at').eq('title_id', row.id).limit(1).abortSignal(abort.signal),
+      (async () => {
+        const receiptColumns = 'id,amount_cents,payment_date,delay_days,delay_band,payment_source,validated_at';
+        const current = await client.from('effective_receivable_receipts').select(receiptColumns).eq('title_id', row.id).limit(1).abortSignal(abort.signal);
+        if (!current.error || !['PGRST205', '42P01'].includes(current.error.code)) return current;
+        return client.from('receivable_receipts').select(receiptColumns).eq('title_id', row.id).limit(1).abortSignal(abort.signal);
+      })(),
     ]).then(results => {
       if (abort.signal.aborted) return;
       const failed = results.find(result => result.error); if (failed) { setHistoryError(operationError(failed.error, 'Não foi possível carregar o histórico. Atualize os títulos e tente novamente.')); return; }
@@ -212,6 +240,7 @@ function ContactForm({ row, onCompleted }: { row: OperationalTitle; onCompleted:
   const [observation, setObservation] = useState(''), [returnNote, setReturnNote] = useState(''), [paymentDate, setPaymentDate] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('');
   async function submit(event: FormEvent) {
     event.preventDefault(); if (busy) return;
+    if (row.status === 'VALIDATED' || !collectionTitleIsOverdue(row)) { setError('Somente títulos vencidos e ainda não validados podem receber ações de cobrança. Atualize os títulos.'); return; }
     setError(''); if (action === 'PAID' && !paymentDate) { setError('Informe a data do pagamento. O título ficará aguardando validação financeira.'); return; }
     if (action === 'PAID' && !window.confirm(`Informar pagamento do título ${row.document} em ${dateLabel(paymentDate)}? O título continuará na carteira, aguardando validação financeira. Este registro não confirma o recebimento.`)) return;
     setBusy(true);

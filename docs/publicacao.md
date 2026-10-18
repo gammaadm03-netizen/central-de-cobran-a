@@ -1,6 +1,8 @@
-# Publicação e ativação — 0.8.0
+# Publicação e ativação — 0.9.0
 
-Para a versão atual **0.8.0**, seguir [ativacao-contas-pagar.md](ativacao-contas-pagar.md): executar o SQL combinado condicional **012..021**, atualizar o código da função existente **payables-import** e aguardar o frontend no mesmo endereço. Inclui resumo semanal por Macro, total pago mensal, consulta por período, importação incremental de previsões e conciliação automática pelo relatório dos pagos. Nenhum serviço pago é habilitado. Não repetir a instalação inicial.
+A atualização atual **0.9.0** utiliza os dois relatórios reais de CR, confirma quitações por importação, atualiza Cobrança, apresenta recebido diário à Diretoria e disponibiliza a base efetiva de comissões. Seguir [ativacao-operacao-recebiveis.md](ativacao-operacao-recebiveis.md): aplicar o novo combinado condicional **022..025**, atualizar a função **receivables-import** e aguardar o site no mesmo endereço. Taxas de comissão não foram presumidas. Não repetir a instalação inicial.
+
+Para a versão anterior **0.8.0**, seguir [ativacao-contas-pagar.md](ativacao-contas-pagar.md): executar o SQL combinado condicional **012..021**, atualizar o código da função existente **payables-import** e aguardar o frontend no mesmo endereço. Inclui resumo semanal por Macro, total pago mensal, consulta por período, importação incremental de previsões e conciliação automática pelo relatório dos pagos. Nenhum serviço pago é habilitado. Não repetir a instalação inicial.
 
 Os procedimentos abaixo preservam o histórico das versões anteriores.
 
@@ -12,7 +14,7 @@ Para o estoque manual em **Importar Bases → Estoque**, basta o deploy da vers�
 
 Para o projeto atual, o usuário já confirmou a execução de 008/009/010/011. A atualização **0.4.1** usa somente `supabase/migrations/012_treasury_accounts.sql`, seguindo [ativacao-contas-caixas.md](ativacao-contas-caixas.md). Ela acrescenta Cora Ecoplast e cinco caixas das empresas: o total passa a 17 posições, sem alterar saldos anteriores. Não exige outra Edge Function. Não repetir o SQL combinado da versão anterior para acrescentar contas.
 
-Os procedimentos abaixo registram a ativação 0.4.0 e a publicação de CR, quando ainda necessária. O deploy atual deve exibir a versão 0.4.1 no rodapé.
+Os procedimentos abaixo registram a ativação histórica 0.4.0 e a publicação inicial de CR. Na entrega histórica seguinte, o rodapé passou a mostrar 0.4.1. Para a atualização atual 0.9.0, seguir o guia no início desta página.
 
 A Central já possui endereço na Cloudflare Pages: https://central-de-cobran-a.pages.dev. O usuário informou que login, Painel, saldos e CP funcionam. A versão 0.4.0 acrescenta a entrada bancária em Importar Bases, CR e Cobrança. Os passos abaixo atualizam esse projeto, preservando seus dados. Testes locais não comprovam que o deploy ou a ativação remota já terminaram.
 
@@ -42,7 +44,7 @@ A conexão pública vem de `config/supabase.public.json`, contendo somente URL e
 
 O build inclui `_headers` com CSP e política de cache. A navegação atual usa a mesma página e não precisa de regra global de redirecionamento. Não publicar o HTML legado V75, `usuarios.json`, hashes ou bases financeiras como arquivos estáticos.
 
-Após a publicação atual, abrir a Central, atualizar com **Ctrl + Shift + R** se necessário, entrar e conferir **Versão 0.5.0** no rodapé. Esse deploy não executa o SQL nem publica funções do Supabase. O endereço existente deve permanecer o mesmo; não criar outro site para cada atualização.
+Na publicação histórica do estoque, o rodapé passou a mostrar 0.5.0. Após a atualização atual, abrir a Central, atualizar com **Ctrl + Shift + R** se necessário, entrar e conferir **Versão 0.9.0**. Esse deploy não executa o SQL nem publica funções do Supabase. O endereço existente deve permanecer o mesmo; não criar outro site para cada atualização.
 
 ## 4. Conferir os dados e os acessos
 
@@ -69,6 +71,6 @@ Somente uma solicitação em **Esqueci minha senha** pede o email ao Supabase. D
 
 ## Limites e recuperação de falhas
 
-Faturamento, Margens, Comissões, RH/DP, conciliação automática de extratos bancários, backups operacionais e migração conferida do estado atual da Central antiga permanecem pendentes. Não considerar concluída a primeira versão de produção enquanto esses itens e os critérios de aceite não forem homologados. Fontes ausentes continuam pendentes, sem números fictícios.
+Faturamento, Margens, cálculo/pagamento de Comissões, RH/DP, conciliação automática de extratos bancários, backups operacionais e migração conferida do estado atual da Central antiga permanecem pendentes. A base efetivamente recebida para comissões está disponível na 0.9.0. Não considerar concluída a primeira versão de produção enquanto esses itens e os critérios de aceite não forem homologados. Fontes ausentes continuam pendentes, sem números fictícios.
 
 Preservar banco, ZIP original e estado operacional anterior. Publicar código não substitui backup. Se houver falha, preservar a mensagem administrativa e investigar; não apagar dados, desativar permissões ou liberar acesso para contornar um erro. A restauração de produção ainda precisa ser implantada e testada. Não ativar billing para resolver cotas ou configuração sem autorização.

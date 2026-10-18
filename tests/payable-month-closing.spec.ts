@@ -109,6 +109,7 @@ async function setup(page: Page, options: Options = {}) {
     const body = request.postDataJSON(); calls.push({ name, body, query: url.search, method: request.method() });
     if (name === 'auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', token_type: 'bearer', expires_in: 3600 } });
     if (url.pathname === '/auth/v1/user') return reply({ id: userId, aud: 'authenticated', role: 'authenticated', email: 'fixture@test.invalid', email_confirmed_at: stamp, created_at: stamp, app_metadata: {}, user_metadata: {} });
+    if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (name === 'current_access') return reply(access);
     if (['director_report', 'payables_forecast', 'payables_management_summary'].includes(name)) return reply({ code: 'PGRST202' }, 404);
     if (name === 'cash_position') return reply({ accounts: [], total_cents: null, expected_accounts: 17, reported_accounts: 0, latest_position_date: null });

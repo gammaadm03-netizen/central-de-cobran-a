@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { createReceivablesGateway } from './handler.mjs';
+import { isReceivableIdentifierHeader, readReceivableIdentifierCell } from '../../../src/lib/receivables-parser.mjs';
 
 const USER = '10000000-0000-4000-8000-000000000001';
 const SESSION = '20000000-0000-4000-8000-000000000001';
@@ -15,8 +16,12 @@ const SERVICE = 'synthetic-server-only-key';
 const jwt = claims => `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ sub: USER, session_id: SESSION, ...claims })).toString('base64url')}.verified-only-by-auth`;
 const TOKEN = jwt({});
 const CSV = 'Documento;Cliente;Vencimento;Valor;Filial;Emissão;CNPJ\r\nNF-1;Cliente sintético;16/10/2026;1.234,56;2 - TESTE;01/10/2026;12345678000195\r\n';
+const ERP_HEADER = ['Entidade 1 - Entidade: nome','Documento: número','Emissão: valor do lançamento','Emissão: data','Vencimento: data','Filial'];
+const ERP_ROW = ['Cliente exclusivamente sintético','000123','125,90','01/10/2026 23:59','20/10/2026 00:01','FILIAL TESTE'];
+const OPEN_CSV = ERP_HEADER.join(';') + '\r\n' + ERP_ROW.join(';') + '\r\n';
+const RECEIVED_CSV = [...ERP_HEADER,'Quitação: data do recebimento','Quitação: valor recebido'].join(';') + '\r\n' + [...ERP_ROW,'17/10/2026 23:59','120,00'].join(';') + '\r\n';
 const encode = value => Buffer.from(value).toString('base64');
-const body = (action = 'preview', extra = {}) => ({ action, file_name: 'grupo.csv', file_base64: encode(CSV), ...(action === 'commit' ? { complete: true, previous_import_id: null } : {}), ...extra });
+const body = (action = 'preview', extra = {}) => ({ action, file_name: 'grupo.csv', file_base64: encode(CSV), ...(action === 'commit' ? { complete: true, previous_import_id: null, ...(extra.mode ? { previous_financial_revision:'17' } : {}) } : {}), ...extra });
 const json = (payload, status = 200) => new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
 
 function setup(options = {}) {
@@ -29,7 +34,13 @@ function setup(options = {}) {
     const sheet = populated[0];
     if (sheet.rowCount > 5001 || sheet.columnCount > 100) throw new Error('Planilha excede 5.000 linhas ou 100 colunas.');
     const matrix = [];
-    for (let i = 1; i <= sheet.rowCount; i++) matrix.push(sheet.getRow(i).values.slice(1));
+    const identifiers = [];
+    sheet.getRow(1).eachCell((cell, column) => { if (isReceivableIdentifierHeader(cell.value)) identifiers.push(column); });
+    for (let i = 1; i <= sheet.rowCount; i++) {
+      const row = sheet.getRow(i), values = row.values.slice(1);
+      if (i > 1) for (const column of identifiers) { const cell = row.getCell(column); values[column - 1] = readReceivableIdentifierCell(cell.value, cell.numFmt); }
+      matrix.push(values);
+    }
     return { matrix, excel1904: Boolean(workbook.properties.date1904) };
   });
   const fetcher = async (url, init) => {
@@ -45,17 +56,27 @@ function setup(options = {}) {
     if (path === '/rest/v1/rpc/current_access') {
       assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization.startsWith('Bearer '), true);
       if (options.accessError) return json(options.accessError, 403);
-      return json({ profile: { id: USER, enabled: options.enabled ?? true, role_key: options.role ?? 'contas_receber' }, permissions: options.permissions ?? [{ resource: 'contas_receber', action: 'import' }] });
+      return json({ profile: { id: USER, enabled: options.enabled ?? true, role_key: options.role ?? 'contas_receber' }, permissions: options.permissions ?? ['import','read','write'].map(action => ({ resource:'contas_receber',action })) });
     }
-    if (path === '/rest/v1/rpc/preview_receivables_import') {
+    if (path === '/rest/v1/rpc/receivables_import_capabilities') {
+      assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
+      if (options.capabilityError) return json(options.capabilityError, options.capabilityStatus ?? 404);
+      return json(options.capabilities ?? { open_sync:true, received_import:true });
+    }
+    if (['/rest/v1/rpc/preview_receivables_import','/rest/v1/rpc/preview_receivables_open_import','/rest/v1/rpc/preview_receivables_received_import'].includes(path)) {
       assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
       if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
+      if (options.previewPayload) return json(options.previewPayload);
+      if (!path.endsWith('/preview_receivables_import')) {
+        const mode = path.endsWith('/preview_receivables_open_import') ? 'open' : 'received';
+        return json({ mode,previous_import_id:null,financial_revision:'17',row_count:data.p_rows.length,new_count:data.p_rows.length,open_count:0,changed_count:0,pending_count:0,validated_in_source_count:0,received_count:data.p_rows.length,matched_count:0,correction_count:0,historical_count:0,conflict_count:0,can_commit:true,errors:[],rows:data.p_rows.map((row,index) => ({ ...row,line:index+1,title_id:null,outcome:mode==='open'?'NEW':'NEW_RECEIPT',candidates:[] })) });
+      }
       return json({ previous_import_id: null, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, pending_count: 0, validated_in_source_count: 0 });
     }
-    if (path === '/rest/v1/rpc/commit_receivables_import_from_gateway') {
+    if (['/rest/v1/rpc/commit_receivables_import_from_gateway','/rest/v1/rpc/commit_receivables_open_import_from_gateway','/rest/v1/rpc/commit_receivables_received_import_from_gateway'].includes(path)) {
       assert.equal(init.headers.apikey, SERVICE); assert.equal(init.headers.Authorization, `Bearer ${SERVICE}`);
       if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
-      return json({ import_id: IMPORT, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, pending_count: 0, validated_in_source_count: 0 });
+      return json(options.commitPayload ?? { import_id: IMPORT, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, pending_count: 0, validated_in_source_count: 0, ...(path.endsWith('/commit_receivables_open_import_from_gateway') ? { mode:'open' } : path.endsWith('/commit_receivables_received_import_from_gateway') ? { mode:'received' } : {}) });
     }
     throw new Error('Unexpected upstream path');
   };
@@ -223,4 +244,119 @@ test('CORS matches exact origins and only allows approved preflight headers and 
   assert.equal(denied.status, 403);
   const method = await app.handle(new Request(BASE, { method: 'GET', headers: { Origin: ORIGIN } }));
   assert.equal(method.status, 405);
+});
+
+test('explicit open mode routes a synthetic ERP report to source synchronization with verified proof and title mappings', async () => {
+  for (const action of ['preview','commit']) {
+    const app = setup(); const request = body(action, { mode:'open',file_base64:encode(OPEN_CSV),title_mappings:{ '1':'NEW' } });
+    const response = await app.send(request); assert.equal(response.status, 200);
+    const payload = await response.json(), call = app.calls.at(-1);
+    assert.equal(call.path, `/rest/v1/rpc/${action === 'preview' ? 'preview_receivables_open_import' : 'commit_receivables_open_import_from_gateway'}`);
+    assert.deepEqual(call.data.p_title_mappings, { '1':'NEW' });
+    assert.deepEqual(call.data.p_rows, [{ document:'000123',client_name:'Cliente exclusivamente sintético',client_document:null,branch:'FILIAL TESTE',issued_on:'2026-10-01',due_date:'2026-10-20',amount_cents:12590 }]);
+    assert.equal(Object.hasOwn(call.data, 'p_complete'), false); assert.equal(Object.hasOwn(call.data, 'p_confirm_corrections'), false);
+    if (action === 'preview') { assert.equal(payload.rows[0].line, 1); assert.equal(payload.rows[0].outcome, 'NEW'); assert.deepEqual(payload.rows, payload.preview.rows); }
+    else { assert.equal(call.data.p_user_id, USER); assert.equal(call.data.p_session_id, SESSION); assert.equal(call.data.p_file_sha256, createHash('sha256').update(OPEN_CSV).digest('hex')); assert.equal(call.data.p_file_base64, request.file_base64); assert.equal(call.data.p_previous_financial_revision, '17'); }
+    assert.equal(app.calls[2].path, '/rest/v1/rpc/receivables_import_capabilities');
+  }
+});
+
+test('received mode preserves nominal and actual amounts independently, including advance receipt, without inventing a bank', async () => {
+  for (const action of ['preview','commit']) {
+    const app = setup(); const request = body(action, { mode:'received',file_base64:encode(RECEIVED_CSV),title_mappings:{ '1':IMPORT },...(action === 'commit' ? { confirm_corrections:true } : {}) });
+    const response = await app.send(request); assert.equal(response.status, 200);
+    const payload = await response.json(), call = app.calls.at(-1);
+    assert.equal(call.path, `/rest/v1/rpc/${action === 'preview' ? 'preview_receivables_received_import' : 'commit_receivables_received_import_from_gateway'}`);
+    assert.deepEqual(call.data.p_rows[0], { document:'000123',client_name:'Cliente exclusivamente sintético',client_document:null,branch:'FILIAL TESTE',issued_on:'2026-10-01',due_date:'2026-10-20',amount_cents:12590,received_on:'2026-10-17',received_amount_cents:12000 });
+    assert.equal(Object.hasOwn(call.data.p_rows[0], 'bank'), false); assert.deepEqual(call.data.p_title_mappings, { '1':IMPORT });
+    if (action === 'preview') { assert.deepEqual(payload.rows, payload.preview.rows); assert.equal(payload.rows[0].outcome, 'NEW_RECEIPT'); assert.equal(payload.preview.financial_revision, '17'); }
+    else { assert.equal(call.data.p_confirm_corrections, true); assert.equal(call.data.p_file_sha256, createHash('sha256').update(RECEIVED_CSV).digest('hex')); assert.equal(call.data.p_user_id, USER); assert.equal(call.data.p_session_id, SESSION); }
+  }
+  const app = setup(); assert.equal((await app.send(body('commit', { mode:'received',file_base64:encode(RECEIVED_CSV),title_mappings:{ '1':'NEW' } }))).status, 200); assert.equal(app.calls.at(-1).data.p_confirm_corrections, false);
+});
+
+test('open and legacy modes reject receipt columns even when the payment cells are blank, before financial calls', async () => {
+  for (const mode of [undefined,'open']) for (const input of [RECEIVED_CSV, [...ERP_HEADER,'Quitação: valor recebido'].join(';')+'\n'+[...ERP_ROW,''].join(';')]) {
+    const app = setup(); const response = await app.send(body('preview', { ...(mode ? { mode } : {}),file_base64:encode(input) }));
+    assert.equal(response.status, 422); assert.match((await response.json()).errors[0].problem, /Selecione o modo Recebimentos/); assert.equal(app.calls.length, 2);
+  }
+  const workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet('CR');
+  sheet.addRow([...ERP_HEADER,{ richText:[{ text:'Quitação: valor recebido' }] }]); sheet.addRow([...ERP_ROW,null]);
+  const app = setup(); const response = await app.send(body('preview', { mode:'open',file_name:'modelo.xlsx',file_base64:encode(await workbook.xlsx.writeBuffer()) }));
+  assert.equal(response.status, 422); assert.match((await response.json()).errors[0].problem, /colunas de quitação/); assert.equal(app.calls.length, 2);
+});
+
+test('missing mode capabilities never fall back to legacy writes and distinguish open from received activation', async () => {
+  for (const mode of ['open','received']) for (const options of [{ capabilityError:{ code:'PGRST202',message:'private schema' } },{ capabilityError:{ code:'42883',message:'private function' } },{ capabilities:{ open_sync:mode !== 'open',received_import:mode !== 'received' } }]) {
+    const app = setup(options); const response = await app.send(body('commit', { mode,file_base64:encode(mode === 'open' ? OPEN_CSV : RECEIVED_CSV) }));
+    assert.equal(response.status, 409); const payload = await response.json(); assert.equal(payload.code, mode === 'open' ? 'P0023' : 'P0024'); assert.match(payload.error, /Ative a atualização/); assert(!payload.error.includes('private'));
+    assert.equal(app.calls.length, 3); assert.equal(app.calls.at(-1).path, '/rest/v1/rpc/receivables_import_capabilities');
+  }
+});
+
+test('new modes require official read/write/import permission before decoding and deny client roles or money', async () => {
+  for (const mode of ['open','received']) {
+    for (const permissions of [[{ resource:'contas_receber',action:'import' }],['import','read'].map(action => ({ resource:'contas_receber',action }))]) {
+      const app = setup({ permissions,role:'gerente_geral' }); const response = await app.send(body('commit', { mode,file_name:'invalido.xlsx',file_base64:'!bad!' }));
+      assert.equal(response.status, 403); assert.equal(app.calls.length, 2); assert.equal(app.workbookCalls(), 0);
+    }
+    for (const extra of [{ role:'gerente_geral' },{ user_id:USER },{ p_rows:[] },{ amount_cents:1 },{ received_amount_cents:1 }]) {
+      const app = setup(); const response = await app.send(body('commit', { mode,...extra })); assert.equal(response.status, 400); assert.equal(app.calls.length, 2);
+    }
+  }
+});
+
+test('title mappings, financial revisions and correction approval accept only their explicit bounded contracts', async () => {
+  for (const extra of [{ mode:null },{ mode:'paid' },{ title_mappings:{} },{ previous_financial_revision:'17' },{ mode:'open',confirm_corrections:false },{ mode:'received',confirm_corrections:'true' },{ mode:'open',title_mappings:[] },{ mode:'open',title_mappings:{ '0':'NEW' } },{ mode:'open',title_mappings:{ '01':'NEW' } },{ mode:'open',title_mappings:{ '5001':'NEW' } },{ mode:'open',title_mappings:{ '1':'invalid' } },{ mode:'open',title_mappings:{ '1':{ title_id:IMPORT } } }]) {
+    const app = setup(); const response = await app.send(body('commit', extra)); assert.equal(response.status, 400,JSON.stringify(extra)); assert.equal(app.calls.length, 2);
+  }
+  for (const mode of ['open','received']) for (const previous_financial_revision of [undefined,null,'',' 17 ',17,{},'x'.repeat(257)]) {
+    const app = setup(); const response = await app.send(body('commit', { mode,previous_financial_revision })); assert.equal(response.status, 400); assert.equal(app.calls.length, 2);
+  }
+  const app = setup(); const response = await app.send(body('preview', { mode:'open',file_base64:encode(OPEN_CSV),title_mappings:{ '2':'NEW' } })); assert.equal(response.status, 400); assert.equal(app.calls.length, 2);
+});
+
+test('received reports reject missing actual fields, bad clocks and invalid precision before capabilities or writes', async () => {
+  for (const input of [OPEN_CSV,RECEIVED_CSV.replace('17/10/2026 23:59','17/10/2026 24:00'),RECEIVED_CSV.replace('120,00','0,00'),RECEIVED_CSV.replace('120,00','120,001'),RECEIVED_CSV.replace('Cliente exclusivamente sintético','=1+1')]) {
+    const app = setup(); const response = await app.send(body('commit', { mode:'received',file_base64:encode(input) })); assert.equal(response.status, 422); assert.ok((await response.json()).errors.length > 0); assert.equal(app.calls.length, 2);
+  }
+});
+
+test('new preview envelopes preserve official enriched matches and reject missing revisions or altered source facts', async () => {
+  for (const mode of ['open','received']) {
+    const request = body('preview', { mode,file_base64:encode(mode === 'open' ? OPEN_CSV : RECEIVED_CSV) });
+    const app = setup(); const response = await app.send(request); assert.equal(response.status, 200); const payload = await response.json();
+    assert.deepEqual(payload.rows, payload.preview.rows); assert.equal(payload.rows[0].line, 1); assert.equal(payload.rows[0].title_id, null); assert.deepEqual(payload.rows[0].candidates, []);
+    for (const update of [{ rows:[] },{ financial_revision:null },{ financial_revision:'' },{ rows:[{ ...payload.rows[0],line:2 }] },{ rows:[{ ...payload.rows[0],title_id:'invalid' }] },{ rows:[{ ...payload.rows[0],amount_cents:1 }] },...(mode === 'received' ? [{ rows:[{ ...payload.rows[0],received_amount_cents:1 }] },{ rows:[{ ...payload.rows[0],received_on:'2026-10-20' }] }] : [])]) {
+      const invalid = setup({ previewPayload:{ ...payload.preview,...update } }); const result = await invalid.send(request); assert.equal(result.status, 503); assert(!JSON.stringify(await result.json()).includes('SQL'));
+    }
+  }
+});
+
+test('native XLSX received imports preserve document display zeros and independent amounts and civil dates', async () => {
+  const workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet('Recebimentos');
+  sheet.addRow([...ERP_HEADER,'Quitação: data do recebimento','Quitação: valor recebido']);
+  sheet.addRow([ERP_ROW[0],123,125.90,new Date('2026-10-01T23:59:00Z'),new Date('2026-10-20T00:01:00Z'),ERP_ROW[5],new Date('2026-10-17T23:59:00Z'),130]);
+  sheet.getCell('B2').numFmt = '000000'; for (const address of ['D2','E2','G2']) sheet.getCell(address).numFmt = 'dd/mm/yyyy hh:mm';
+  const bytes = await workbook.xlsx.writeBuffer(), app = setup(); const response = await app.send(body('commit', { mode:'received',file_name:'recebimentos.xlsx',file_base64:encode(bytes) })); assert.equal(response.status, 200);
+  const data = app.calls.at(-1).data; assert.equal(data.p_rows[0].document, '000123'); assert.equal(data.p_rows[0].amount_cents, 12590); assert.equal(data.p_rows[0].received_amount_cents, 13000); assert.equal(data.p_rows[0].received_on, '2026-10-17'); assert.equal(data.p_rows[0].due_date, '2026-10-20'); assert.equal(data.p_file_sha256, createHash('sha256').update(bytes).digest('hex'));
+  sheet.getCell('B2').numFmt = '0.00'; const invalid = setup(); const bad = await invalid.send(body('preview', { mode:'received',file_name:'documento.xlsx',file_base64:encode(await workbook.xlsx.writeBuffer()) })); assert.equal(bad.status, 422); assert.match((await bad.json()).errors[0].problem, /Formato do identificador não suportado/); assert.equal(invalid.calls.length, 2);
+});
+
+test('new mode SQL conflicts and capability denial expose safe guidance without raw database details', async () => {
+  for (const code of ['P0023','P0024','40001']) {
+    const app = setup({ rpcError:{ code,message:'SECRET SQL',details:SERVICE,hint:TOKEN } }); const response = await app.send(body('commit', { mode:'received',file_base64:encode(RECEIVED_CSV) })); assert.equal(response.status, 409);
+    const serialized = JSON.stringify(await response.json()); assert(!serialized.includes('SECRET')); assert(!serialized.includes(SERVICE)); assert(!serialized.includes(TOKEN));
+  }
+  const app = setup({ capabilityError:{ code:'42501',message:'SECRET SQL' },capabilityStatus:403 }); const response = await app.send(body('preview', { mode:'open',file_base64:encode(OPEN_CSV) })); assert.equal(response.status, 403); assert.equal(app.calls.length, 3);
+});
+
+test('activation_required distinguishes missing schema capabilities from financial conflicts using the same safe code', async () => {
+  for (const [mode,code] of [['open','P0023'],['received','P0024']]) {
+    const request = body('commit', { mode,file_base64:encode(mode === 'open' ? OPEN_CSV : RECEIVED_CSV) });
+    const missing = setup({ capabilityError:{ code:'PGRST202' } }); const unavailable = await missing.send(request);
+    assert.equal(unavailable.status, 409); const activation = await unavailable.json(); assert.equal(activation.code, code); assert.equal(activation.activation_required, true);
+    const conflict = setup({ rpcError:{ code,message:'private SQL' } }); const refused = await conflict.send(request);
+    assert.equal(refused.status, 409); const financial = await refused.json(); assert.equal(financial.code, code); assert.equal(Object.hasOwn(financial, 'activation_required'), false);
+  }
 });

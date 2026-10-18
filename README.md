@@ -1,6 +1,14 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.8.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+Versão de desenvolvimento **0.9.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+
+## Contas a Receber e Cobrança — 0.9.0
+
+Importação dos dois modelos reais do ERP: **Abertos e vencidos** atualiza a carteira; **Títulos quitados** confirma recebimentos, retira títulos da cobrança ativa e alimenta a base de comissões. Nominal e recebido ficam separados, inclusive diferenças e antecipações. Reimportações são idempotentes e correções preservam versões. Parcela é identificada por filial, cliente, documento e vencimento; valor é atualizável. Mudança ambígua de vencimento exige vínculo explícito, pois a origem não fornece código único da parcela.
+
+Cobrança recupera indicadores, carteira por responsável, faixas, contatos, retornos e próximas ações, limitada aos vencidos pela data oficial de São Paulo. Diretoria vê atraso, total a receber e recebido no dia. Comissões consulta o valor efetivamente recebido por período/responsável, sem taxas ou pagamentos presumidos. Percentuais e vigências ainda precisam de definição. Responsáveis existentes e histórico são preservados; vínculos desconhecidos ficam pendentes.
+
+Ativação: [guia 0.9.0](docs/ativacao-operacao-recebiveis.md): combinado condicional **022..025**, função existente **receivables-import** e site. Não repetir a instalação inicial; sem dependência de CP021. [Fluxo confirmado e colunas dos relatórios](docs/contas-receber-fluxo.md).
 
 ## Contas a Pagar por importação — 0.8.0
 
@@ -20,9 +28,9 @@ O Painel preserva a organização e a marca da V75: Hoje/Semana/Mês, semana fin
 
 **Importar Bases** centraliza as áreas autorizadas. Em **Caixa / Bancos**, a Gerência informa data, saldos das **17 posições: 12 contas bancárias e 5 caixas das empresas**, e observação, confere o consolidado e salva a posição inteira em uma transação. O cadastro segue a lista atualizada do usuário, incluindo Cora Ecoplast e os caixas de Ecoplast, Limpe Fácil, Gamma, Fast Clean e Easy Clean. Zero exige preenchimento explícito; valores de datas anteriores não são copiados automaticamente para um novo dia. Extratos de até 2 MiB são guardados como apoio privado, com hash e auditoria, sem alterar saldos ou conciliar títulos. A consulta de Caixa/Bancos e o estoque de contingência permanecem disponíveis conforme as permissões.
 
-CP possui importação atômica de previsões e pagamentos, classificação obrigatória, histórico preservado, filtros, paginação, CSV e Excel. CR possui importação completa com arquivo novamente analisado pelo servidor; novas ausências aguardam validação financeira, sem serem consideradas recebimentos. A carteira é herdada da dívida ativa do cliente quando existe uma atribuição oficial. Mudanças na identificação nome/CNPJ exigem conferência para evitar duplicidade; não há união automática. Cobrança oferece carteira individual, contatos, retornos e pagamento informado; CR confirma a data real ou devolve à mesma cobradora como não localizado. Registros de recebimentos validados preservam origem, cobradora e atraso, preparando a futura apuração de comissões.
+CP possui importação atômica de previsões e pagamentos, classificação obrigatória, histórico preservado, filtros, paginação, CSV e Excel. CR relê o arquivo no servidor e atualiza os títulos incrementalmente; ausência no relatório não baixa nem altera o título. A carteira é herdada da dívida ativa do cliente quando existe uma única atribuição oficial. Identificação ambígua exige conferência, sem união automática. Cobrança oferece carteira individual, contatos, retornos e pagamento informado; a validação manual permanece disponível, e o relatório de quitados confirma os recebimentos automaticamente. Registros validados preservam origem, cobradora e atraso; correções importadas acrescentam versões auditadas. Comissões consulta a base efetivamente recebida, com cálculo de taxas e pagamento ainda pendentes.
 
-Faturamento, Margens, Comissões, RH/DP, conciliação automática de extratos bancários, migração do estado operacional anterior e backups ainda estão pendentes. Também faltam criação completa de contas Auth, redefinição administrativa e troca obrigatória de senha. Não há valores fictícios nem bases V75 embutidas nos arquivos públicos.
+Faturamento, Margens, cálculo/pagamento de Comissões, RH/DP, conciliação automática de extratos bancários, migração do estado operacional anterior e backups ainda estão pendentes. Também faltam criação completa de contas Auth, redefinição administrativa e troca obrigatória de senha. Não há valores fictícios nem bases V75 embutidas nos arquivos públicos.
 
 ## Atualizar o projeto existente
 
@@ -76,6 +84,11 @@ npm run test:treasury-sql
 npm run test:director-sql
 npm run test:receivables-sql
 npm run test:collections-sql
+npm run test:collections-overdue-sql
+npm run test:receivable-sync-sql
+npm run test:receivable-received-import-sql
+npm run test:collections-management-sql
+npm run test:receivables-operations-sql
 npm run test:bank-import-sql
 npm run test:treasury-accounts-sql
 npm run test:director-report-sql

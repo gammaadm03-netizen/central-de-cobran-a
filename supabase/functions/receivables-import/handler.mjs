@@ -1,7 +1,7 @@
 import {
   MAX_FILE_BYTES, MAX_ROWS, parseCsv, validateWorkbookExpandedSize,
 } from '../../../src/lib/payables-parser.mjs';
-import { validateReceivableRows } from '../../../src/lib/receivables-parser.mjs';
+import { validateReceivableRows, validateReceivablePaidRows } from '../../../src/lib/receivables-parser.mjs';
 
 const MAX_BODY_BYTES = 3 * 1024 * 1024;
 const MAX_BASE64_LENGTH = 4 * Math.ceil(MAX_FILE_BYTES / 3);
@@ -37,6 +37,11 @@ const SAFE_MESSAGES = new Set([
   'Mais de 100 colunas.', 'Há valores fora das colunas do cabeçalho ou mais de 100 colunas.',
   'Tipo de célula inválido. Use somente texto, data ou número.',
   'O valor deve ter no máximo duas casas decimais, sem arredondamento.',
+  'Data Excel inválida.', 'Horário inválido. Use hh:mm ou hh:mm:ss, entre 00:00:00 e 23:59:59.',
+  'Identificador de documento inválido. Use texto ou número inteiro não negativo, sem notação científica.',
+  'Formato do identificador não suportado. No Excel, use Texto ou um formato simples de zeros, como 000000.',
+  'O valor recebido deve ser maior que zero.',
+  'Este arquivo contém colunas de quitação. Selecione o modo Recebimentos para importar datas e valores efetivamente recebidos.',
 ]);
 const safeMessage = message => SAFE_MESSAGES.has(message) || /^Limite de (?:150|300|1500) caracteres excedido\.$/.test(message) ? message : PARSE_FAILURE;
 
@@ -101,6 +106,17 @@ function problemsFor(errors) {
     correction: typeof error.correction === 'string' ? error.correction.slice(0, 300) : CORRECTION,
   }));
 }
+function receiptColumn(value) {
+  if (value && typeof value === 'object') {
+    if ('formula' in value || 'sharedFormula' in value) return false;
+    if (Array.isArray(value.richText)) value = value.richText.map(part => part?.text ?? '').join('');
+    else if (typeof value.text === 'string' && 'hyperlink' in value) value = value.text;
+  }
+  const normalized = String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return ['QUITACAODATADORECEBIMENTO', 'QUITACAOVALORRECEBIDO'].includes(normalized);
+}
+const validRevision = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && value === value.trim();
+const sourceFields = ['document', 'due_date', 'amount_cents'];
 
 /** Parse the preserved bytes on the server; no financial rows or identities are accepted from a browser. */
 export function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWorkbook, log = () => {} }) {
@@ -150,6 +166,8 @@ export function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetc
       if (code === '42501') return respond(403, { code, error: 'Seu perfil não tem permissão para esta operação.' });
       if (code === '40001') return respond(409, { code, error: 'A base mudou desde a análise. Analise o arquivo novamente antes de concluir.' });
       if (code === '23505') return respond(409, { code, error: 'Este arquivo já foi importado para esta origem. Nenhum dado foi alterado.' });
+      if (code === 'P0023') return respond(409, { code, error: 'Confira os vínculos e as possíveis alterações de identificação dos títulos antes de confirmar. Nenhum dado foi alterado.' });
+      if (code === 'P0024') return respond(409, { code, error: 'Há recebimentos que precisam de revisão. Confira os vínculos, valores e histórico antes de confirmar. Nenhum dado foi alterado.' });
       if (code === '23514' && result.payload?.message === IDENTITY_CHANGE) return respond(400, { code, error: IDENTITY_CHANGE });
       if (code === '22023' || code === '23514') return respond(400, { code, error: 'A importação foi recusada. Confira as linhas, a origem completa e os vínculos de cobradora dos clientes antes de concluir.' });
       if (result.status === 401) return respond(401, { error: 'Sua sessão expirou. Entre novamente.' });
@@ -176,13 +194,25 @@ export function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetc
       let body;
       try { body = await readBody(request); }
       catch { return respond(400, { error: INVALID_REQUEST }); }
-      if (Object.keys(body).some(key => !['action', 'file_name', 'file_base64', 'complete', 'previous_import_id'].includes(key))
+      if (Object.keys(body).some(key => !['action', 'file_name', 'file_base64', 'complete', 'previous_import_id', 'mode', 'title_mappings', 'previous_financial_revision', 'confirm_corrections'].includes(key))
         || !['preview', 'commit'].includes(body.action)
+        || (Object.hasOwn(body, 'mode') && !['open', 'received'].includes(body.mode))
+        || (!body.mode && (Object.hasOwn(body, 'title_mappings') || Object.hasOwn(body, 'previous_financial_revision') || Object.hasOwn(body, 'confirm_corrections')))
+        || (body.mode !== 'received' && Object.hasOwn(body, 'confirm_corrections'))
         || typeof body.file_name !== 'string' || body.file_name.length < 1 || body.file_name.length > 250
         || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name)) return respond(400, { error: INVALID_REQUEST });
+      if ((Object.hasOwn(body, 'title_mappings') && (!body.title_mappings || typeof body.title_mappings !== 'object' || Array.isArray(body.title_mappings)
+        || Object.keys(body.title_mappings).length > MAX_ROWS
+        || Object.entries(body.title_mappings).some(([key, value]) => !/^[1-9]\d{0,3}$/.test(key) || Number(key) > MAX_ROWS || typeof value !== 'string' || !(value === 'NEW' || UUID.test(value)))))
+        || (Object.hasOwn(body, 'previous_financial_revision') && !validRevision(body.previous_financial_revision))
+        || (Object.hasOwn(body, 'confirm_corrections') && typeof body.confirm_corrections !== 'boolean')) return respond(400, { error: INVALID_REQUEST });
+      if (body.mode && !['read', 'write'].every(action => access.payload.permissions.some(permission => permission?.resource === 'contas_receber' && permission.action === action))) {
+        return respond(403, { code: '42501', error: 'Seu perfil não tem permissão para esta operação.' });
+      }
       if (/\.xls$/i.test(body.file_name)) return respond(400, { error: 'O formato .xls antigo ainda não é aceito. No Excel, salve uma cópia como .xlsx.' });
       if (!/\.(xlsx|xlsm|csv)$/i.test(body.file_name)) return respond(400, { error: 'Selecione um arquivo .xlsx, .xlsm ou .csv.' });
       if (body.action === 'commit' && (body.complete !== true
+        || (body.mode && !validRevision(body.previous_financial_revision))
         || !(body.previous_import_id === null || (typeof body.previous_import_id === 'string' && UUID.test(body.previous_import_id))))) return respond(400, { error: INVALID_REQUEST });
       let bytes;
       try { bytes = decodeFile(body.file_base64); }
@@ -201,28 +231,53 @@ export function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetc
         if (!Array.isArray(matrix) || matrix.length > MAX_ROWS + 1 || matrix.some(row => !Array.isArray(row) || row.length > 100)) {
           throw new Error('Planilha excede 5.000 linhas ou 100 colunas.');
         }
-        parsed = validateReceivableRows(matrix, { excel1904 });
+        if (body.mode !== 'received' && matrix[0]?.some(receiptColumn)) throw new Error('Este arquivo contém colunas de quitação. Selecione o modo Recebimentos para importar datas e valores efetivamente recebidos.');
+        parsed = body.mode === 'received' ? validateReceivablePaidRows(matrix, { excel1904 }) : validateReceivableRows(matrix, { excel1904 });
       } catch (error) {
         return respond(422, { error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: [{ line: 0, column: 'Arquivo', problem: safeMessage(error instanceof Error ? error.message : ''), correction: CORRECTION }] });
       }
       if (parsed.errors.length) return respond(422, { error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: problemsFor(parsed.errors) });
+      if (body.mode) {
+        if (Object.keys(body.title_mappings ?? {}).some(key => Number(key) > parsed.rows.length)) return respond(400, { error: INVALID_REQUEST });
+        const capabilities = await call('/rest/v1/rpc/receivables_import_capabilities', { data: {} });
+        const required = body.mode === 'open' ? 'open_sync' : 'received_import';
+        if ((!capabilities.ok && ['PGRST202', '42883'].includes(capabilities.payload?.code)) || (capabilities.ok && capabilities.payload?.[required] !== true)) {
+          return respond(409, { code: body.mode === 'open' ? 'P0023' : 'P0024', activation_required:true, error: `Ative a atualização de ${body.mode === 'open' ? 'títulos em aberto' : 'recebimentos'} no banco de dados antes de usar este modo. Nenhum dado foi alterado.` });
+        }
+        if (!capabilities.ok) return upstreamFailure(capabilities);
+      }
       const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
       if (signal.aborted) throw new Error('request_timed_out');
       if (body.action === 'preview') {
-        const preview = await call('/rest/v1/rpc/preview_receivables_import', { data: { p_scope: 'grupo-consolidado', p_rows: parsed.rows } });
+        const path = body.mode === 'open' ? 'preview_receivables_open_import' : body.mode === 'received' ? 'preview_receivables_received_import' : 'preview_receivables_import';
+        const preview = await call(`/rest/v1/rpc/${path}`, { data: { p_scope: 'grupo-consolidado', p_rows: parsed.rows, ...(body.mode ? { p_title_mappings: body.title_mappings ?? {} } : {}) } });
         if (!preview.ok) return upstreamFailure(preview);
-        if (!preview.payload || preview.payload.row_count !== parsed.rows.length || !Number.isSafeInteger(preview.payload.new_count)
-          || !Number.isSafeInteger(preview.payload.open_count) || !Number.isSafeInteger(preview.payload.pending_count) || !Number.isSafeInteger(preview.payload.validated_in_source_count)) throw new Error('invalid_preview');
-        return respond(200, { rows: parsed.rows, preview: preview.payload, file_sha256: hash });
+        if (!preview.payload || preview.payload.row_count !== parsed.rows.length) throw new Error('invalid_preview');
+        if (body.mode) {
+          const counters = body.mode === 'open' ? ['new_count', 'open_count', 'changed_count', 'pending_count', 'validated_in_source_count', 'conflict_count'] : ['new_count', 'received_count', 'matched_count', 'correction_count', 'historical_count', 'conflict_count'];
+          const outcomes = body.mode === 'open' ? ['NEW', 'UPDATE', 'MATCHED', 'AMBIGUOUS', 'CONFLICT'] : ['NEW_RECEIPT', 'MATCHED', 'CORRECTION', 'HISTORICAL', 'AMBIGUOUS', 'CONFLICT'];
+          const checkedFields = body.mode === 'received' ? [...sourceFields, 'received_on', 'received_amount_cents'] : sourceFields;
+          if (preview.payload.mode !== body.mode || !validRevision(preview.payload.financial_revision)
+            || !counters.every(key => Number.isSafeInteger(preview.payload[key]) && preview.payload[key] >= 0)
+            || typeof preview.payload.can_commit !== 'boolean' || !Array.isArray(preview.payload.errors)
+            || !Array.isArray(preview.payload.rows) || preview.payload.rows.length !== parsed.rows.length
+            || preview.payload.rows.some((row, index) => !row || typeof row !== 'object' || Array.isArray(row) || row.line !== index + 1
+              || !outcomes.includes(row.outcome) || !(row.title_id === null || (typeof row.title_id === 'string' && UUID.test(row.title_id)))
+              || checkedFields.some(key => row[key] !== parsed.rows[index][key]))) throw new Error('invalid_preview');
+        } else if (!Number.isSafeInteger(preview.payload.new_count) || !Number.isSafeInteger(preview.payload.open_count) || !Number.isSafeInteger(preview.payload.pending_count) || !Number.isSafeInteger(preview.payload.validated_in_source_count)) throw new Error('invalid_preview');
+        return respond(200, { rows: body.mode ? preview.payload.rows : parsed.rows, preview: preview.payload, file_sha256: hash });
       }
-      const committed = await call('/rest/v1/rpc/commit_receivables_import_from_gateway', { service: true, data: {
+      const path = body.mode === 'open' ? 'commit_receivables_open_import_from_gateway' : body.mode === 'received' ? 'commit_receivables_received_import_from_gateway' : 'commit_receivables_import_from_gateway';
+      const committed = await call(`/rest/v1/rpc/${path}`, { service: true, data: {
         p_user_id: auth.payload.id, p_session_id: sessionId, p_scope: 'grupo-consolidado',
         p_file_name: body.file_name, p_file_sha256: hash, p_file_base64: body.file_base64,
-        p_rows: parsed.rows, p_complete: true, p_previous_import_id: body.previous_import_id,
+        p_rows: parsed.rows, p_previous_import_id: body.previous_import_id,
+        ...(body.mode ? { p_title_mappings: body.title_mappings ?? {}, p_previous_financial_revision: body.previous_financial_revision } : { p_complete:true }),
+        ...(body.mode === 'received' ? { p_confirm_corrections: body.confirm_corrections ?? false } : {}),
       } });
       if (!committed.ok) return upstreamFailure(committed);
       if (!committed.payload || committed.payload.row_count !== parsed.rows.length || typeof committed.payload.import_id !== 'string'
-        || !UUID.test(committed.payload.import_id)) throw new Error('invalid_commit_response');
+        || !UUID.test(committed.payload.import_id) || (body.mode && committed.payload.mode !== body.mode)) throw new Error('invalid_commit_response');
       return respond(200, committed.payload);
     } catch {
       // Fixed identifiers only. Never log a file, token, credentials, financial

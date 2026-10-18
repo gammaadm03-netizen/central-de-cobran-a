@@ -7,12 +7,28 @@ import '../financial.css';
 type PeriodMode = 'today' | 'week' | 'month';
 interface PayableSummary { open_cents: number; overdue_cents: number; period_cents: number; active_count: number; latest_import_at: string | null }
 interface ReceivableSummary { open_cents: number; overdue_cents: number; period_cents: number; active_count: number; pending_count: number; unassigned_count: number; received_period_cents: number; latest_import_at: string | null; overdue_bps: number | null; overdue_comlurb_cents: number | null }
+interface ReceivablesManagementSummary { as_of_date: string; received_date: string; open_cents: number | null; overdue_cents: number | null; received_day_cents: number | null; received_month_cents: number | null; active_count: number | null; latest_import_at: string | null; latest_import_id: string | null }
+interface ReceivablesManagementPosition { day: string | null; open_cents: number | null; overdue_cents: number | null; received_day_cents: number | null; imported_at: string | null; legacy: boolean }
 interface Position { cash: CashPosition; stock: StockPosition; payables: PayableSummary; receivables: ReceivableSummary | null; report: DirectorReport | null }
 interface DirectorPosition { id: string; created_at: string; created_by: string; period_start: string; period_end: string; indicators: Record<string, unknown> }
 interface Indicator { label: string; cents: number | null; detail: string; percentageBps?: number | null; millions?: string | null }
 const BASE_PENDING = 'BASE AGUARDANDO IMPORTAÇÃO';
 const CASH_PENDING = 'SALDOS AGUARDANDO ATUALIZAÇÃO';
 const STOCK_PENDING = 'ESTOQUE AGUARDANDO ATUALIZAÇÃO';
+const RECEIVED_PENDING = 'RECEBIMENTOS AGUARDANDO ATIVAÇÃO';
+const missingReceivablesManagement = (code: string) => ['PGRST202', 'PGRST205', '42P01', '42883'].includes(code);
+function safeReceivableAmount(value: unknown): number | null { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null; }
+function validReceivablesManagement(value: unknown): value is ReceivablesManagementSummary {
+  if (!value || typeof value !== 'object') return false;
+  const data = value as ReceivablesManagementSummary;
+  if (typeof data.as_of_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(data.as_of_date) || data.received_date !== data.as_of_date) return false;
+  try { if (addDays(data.as_of_date, 0) !== data.as_of_date) return false; } catch { return false; }
+  const keys = ['open_cents', 'overdue_cents', 'received_day_cents', 'received_month_cents', 'active_count'] as const;
+  if (data.latest_import_id === null) return data.latest_import_at === null && keys.every(key => data[key] === null);
+  return typeof data.latest_import_id === 'string' && /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(data.latest_import_id)
+    && typeof data.latest_import_at === 'string' && Number.isFinite(new Date(data.latest_import_at).getTime())
+    && keys.every(key => safeReceivableAmount(data[key]) !== null);
+}
 
 export function addDays(date: string, days: number) { const value = new Date(`${date}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); }
 export function financialWeek(date: string) { const day = new Date(`${date}T12:00:00Z`).getUTCDay(); const start = addDays(date, -((day + 1) % 7)); return { start, end: addDays(start, 6) }; }
@@ -53,6 +69,9 @@ export default function ExecutiveDashboard({ canManage, canReadDirectorSummary =
   const [revision, setRevision] = useState(0);
   const [error, setError] = useState('');
   const [receivableNotice, setReceivableNotice] = useState('');
+  const [receivableManagement, setReceivableManagement] = useState<ReceivablesManagementPosition | null>(null);
+  const [receivableManagementNotice, setReceivableManagementNotice] = useState('');
+  const [receivableManagementError, setReceivableManagementError] = useState('');
   const [reportNotice, setReportNotice] = useState('');
   const [success, setSuccess] = useState('');
   const [saving, setSaving] = useState(false);
@@ -77,11 +96,24 @@ export default function ExecutiveDashboard({ canManage, canReadDirectorSummary =
   useEffect(() => {
     let active = true;
     setLoading(true); setPosition(null); setUpdatedAt(null); setError(''); setReceivableNotice(''); setReportNotice(''); setSuccess('');
+    setReceivableManagement(null); setReceivableManagementNotice(''); setReceivableManagementError('');
     const client = supabase;
     async function load() {
       try {
         if (!client) throw new Error('connection');
-        const [cash, stock, payables, receivables, report] = await Promise.all([client.rpc('cash_position', { p_as_of: today }), client.rpc('current_stock'), client.rpc('payables_summary', { p_start: range.start, p_end: range.end }), Promise.resolve(client.rpc('receivables_summary', { p_start: range.start, p_end: range.end })).catch(() => ({ data: null, error: { code: 'connection' } })), canReadDirectorSummary ? Promise.resolve(client.rpc('director_report', { p_start: range.start, p_end: range.end })).catch(() => ({ data: null, error: { code: 'connection' } })) : Promise.resolve({ data: null, error: null })]);
+        const [cash, stock, payables, receivables, report, receivablesManagement] = await Promise.all([client.rpc('cash_position', { p_as_of: today }), client.rpc('current_stock'), client.rpc('payables_summary', { p_start: range.start, p_end: range.end }), Promise.resolve(client.rpc('receivables_summary', { p_start: range.start, p_end: range.end })).catch(() => ({ data: null, error: { code: 'connection' } })), canReadDirectorSummary ? Promise.resolve(client.rpc('director_report', { p_start: range.start, p_end: range.end })).catch(() => ({ data: null, error: { code: 'connection' } })) : Promise.resolve({ data: null, error: null }), Promise.resolve(client.rpc('receivables_management_summary', { p_day: null }).retry(false)).catch(() => ({ data: null, error: { code: 'connection' } }))]);
+        if (active) {
+          if (!receivablesManagement.error && validReceivablesManagement(receivablesManagement.data)) {
+            const summary = receivablesManagement.data;
+            setReceivableManagement({ day: summary.as_of_date, open_cents: summary.open_cents, overdue_cents: summary.overdue_cents, received_day_cents: summary.received_day_cents, imported_at: summary.latest_import_at, legacy: false });
+          } else if (missingReceivablesManagement(receivablesManagement.error?.code ?? '')) {
+            const legacy = !receivables.error && typeof receivables.data?.latest_import_at === 'string' && Number.isFinite(new Date(receivables.data.latest_import_at).getTime()) ? receivables.data as ReceivableSummary : null;
+            setReceivableManagement({ day: null, open_cents: safeReceivableAmount(legacy?.open_cents), overdue_cents: safeReceivableAmount(legacy?.overdue_cents), received_day_cents: null, imported_at: legacy?.latest_import_at ?? null, legacy: true });
+            setReceivableManagementNotice('O recebimento do dia aguarda ativação no banco. Os totais disponíveis usam a base oficial de Contas a Receber.');
+          } else {
+            setReceivableManagementError(receivablesManagement.error?.code === '42501' ? 'Seu perfil não tem permissão para consultar estes indicadores de Contas a Receber.' : 'Não foi possível atualizar os indicadores de Contas a Receber. Os valores não foram exibidos; atualize para tentar novamente.');
+          }
+        }
         if (cash.error || stock.error || payables.error || !cash.data || !stock.data || !payables.data) throw new Error('read');
         if (active) { setPosition({ cash: cash.data as CashPosition, stock: stock.data as StockPosition, payables: payables.data as PayableSummary, receivables: !receivables.error && receivables.data ? receivables.data as ReceivableSummary : null, report: !report.error && report.data ? report.data as DirectorReport : null });
           if (canReadDirectorSummary && (report.error || !report.data)) setReportNotice(['PGRST202', '42883'].includes(report.error?.code ?? '') ? 'O novo Resumo da Diretoria aguarda ativação no banco. Os saldos e bases já cadastrados continuam disponíveis.' : 'Não foi possível consultar o relatório completo da Diretoria. Atualize agora para tentar novamente.');
@@ -124,6 +156,9 @@ export default function ExecutiveDashboard({ canManage, canReadDirectorSummary =
   const receivableOverdue = receivableImported ? position!.receivables!.overdue_cents : null;
   const receivedPeriod = receivableImported ? position!.receivables!.received_period_cents : null;
   const overdueBps = receivableImported ? position!.receivables!.overdue_bps : null;
+  const receivableManagementPosition = receivableManagement;
+  const receivableManagementDay = receivableManagementPosition?.day ?? null;
+  const receivableManagementPending = receivableManagementError ? 'INDICADOR INDISPONÍVEL' : loading ? 'ATUALIZANDO INDICADORES' : BASE_PENDING;
   const projectionBig = cashCents !== null && receivablePeriod !== null && payablePeriod !== null ? BigInt(cashCents) + BigInt(receivablePeriod) - BigInt(payablePeriod) : null;
   const projection = projectionBig !== null && projectionBig <= BigInt(Number.MAX_SAFE_INTEGER) && projectionBig >= -BigInt(Number.MAX_SAFE_INTEGER) ? Number(projectionBig) : null;
   const report = position?.report ?? null;
@@ -252,6 +287,17 @@ export default function ExecutiveDashboard({ canManage, canReadDirectorSummary =
       <article className="financial-kpi payable-kpi"><span className="financial-kpi-label">A PAGAR {scopeLabel.toUpperCase()}</span><strong><MoneyValue cents={payablePeriod} /></strong><small>{rangeLabel}</small></article>
     </div>
     <div className="financial-overview-grid"><section className="financial-card movement-card"><div className="financial-card-heading"><div><h2>Movimento {mode === 'week' ? 'da semana' : mode === 'month' ? 'do mês' : 'do dia'}</h2><p className="financial-caption">{rangeLabel} · caixa atual + receber − pagar</p></div>{canViewCash && <button className="button secondary" onClick={() => onNavigate('caixa')}>Abrir Caixa →</button>}</div><dl className="financial-ledger"><div><dt>Saldo de entrada</dt><dd><MoneyValue cents={cashCents} caption={CASH_PENDING} /></dd></div><div><dt>+ Receber {scopeLabel}</dt><dd><MoneyValue cents={receivablePeriod} /></dd></div><div><dt>− Pagar {scopeLabel}</dt><dd><MoneyValue cents={payablePeriod} /></dd></div><div className="financial-ledger-total"><dt>Caixa projetado</dt><dd><MoneyValue cents={projection} /></dd></div></dl><p className="financial-caption">{projection !== null ? 'Projeção por vencimento. Inclui títulos sem recebimento validado; não representa dinheiro disponível em conta.' : 'Projeção aguardando saldos e bases completas do período.'}</p></section><section className="financial-card attention-card"><div className="financial-card-heading"><div><h2>Atenção da Gestão</h2><p className="financial-caption">Pontos que merecem acompanhamento.</p></div></div><dl className="financial-attention">{coverage.count > 0 && <div className="cash-coverage-attention"><dt><i className="attention-dot red" /><span>Contas negativas — cobrir hoje<small>{coverage.count} conta(s){` · ${negativeFreshness}`}{position?.cash.total_cents === null ? " · Posição incompleta" : ""}</small>{canViewCash && <button className="financial-text-button" onClick={() => onNavigate('caixa')}>Ver contas negativas →</button>}</span></dt><dd>{coverage.cents !== null ? money(coverage.cents) : "Valor acima do limite seguro"}</dd></div>}<div><dt><i className="attention-dot red" />Contas a receber vencidas</dt><dd><MoneyValue cents={receivableOverdue} /></dd></div><div><dt><i className="attention-dot amber" />Contas a pagar vencidas / pendentes</dt><dd><MoneyValue cents={payableOverdue} /></dd></div><div><dt><i className="attention-dot amber" />Títulos sem cobradora definida</dt><dd>{receivableImported ? position!.receivables!.unassigned_count : <Pending />}</dd></div><div><dt><i className="attention-dot green" />Margem líquida do fechamento</dt><dd><Pending /></dd></div></dl></section></div>
+    <section className="financial-card receivables-management-summary" aria-labelledby="receivables-management-title">
+      <div className="financial-card-heading"><div><h2 id="receivables-management-title">Contas a Receber · posição de hoje</h2><p className="financial-caption">{receivableManagementDay ? `Referência ${displayDate(receivableManagementDay)} · data oficial de Brasília.` : 'Data oficial aguardando consulta ao banco.'} O recebimento do dia acompanha esta data, independentemente do período escolhido no painel.</p></div><button type="button" className="button secondary" disabled={loading} onClick={() => setRevision(value => value + 1)}>Atualizar Contas a Receber</button></div>
+      {receivableManagementError && <p className="alert error" role="alert">{receivableManagementError}</p>}
+      {receivableManagementNotice && <p className="notice">{receivableManagementNotice}</p>}
+      <div className="financial-module-grid">
+        <article><h3>Contas a receber em atraso</h3><strong><MoneyValue cents={receivableManagementPosition?.overdue_cents ?? null} caption={receivableManagementPending} /></strong><p>{receivableManagementDay ? `Saldo em aberto dos títulos vencidos antes de ${displayDate(receivableManagementDay)}` : 'Saldo em aberto dos títulos vencidos na posição oficial'}, após os recebimentos validados.</p></article>
+        <article><h3>Total a receber</h3><strong><MoneyValue cents={receivableManagementPosition?.open_cents ?? null} caption={receivableManagementPending} /></strong><p>Saldo da carteira ativa, incluindo os títulos de hoje e a vencer. Recebimentos validados já foram descontados.</p></article>
+        <article><h3>Recebido no dia</h3><strong><MoneyValue cents={receivableManagementPosition?.received_day_cents ?? null} caption={receivableManagementPosition?.legacy ? RECEIVED_PENDING : receivableManagementPending} /></strong><p>{receivableManagementDay ? displayDate(receivableManagementDay) : 'Data oficial não disponível'} · valores efetivamente recebidos e validados financeiramente pela data real do recebimento.</p></article>
+      </div>
+      {receivableManagementPosition?.imported_at && <p className="financial-caption">Última importação de Contas a Receber: {displayDateTime(receivableManagementPosition.imported_at)}.</p>}
+    </section>
     {canReadDirectorSummary && <section className="financial-card director-summary">
       <div className="financial-card-heading">
         <div><h2>Resumo da Diretoria</h2><p className="financial-caption">Referência {displayDate(reportDate)} · Faturamento do mês atual · Fluxo financeiro de {rangeLabel}.{position && updatedAt ? ` Atualizado ${displayDateTime(updatedAt)}.` : ''}</p></div>

@@ -2,7 +2,7 @@
 
 18/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.8.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.9.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -209,3 +209,22 @@ Verificação local desta entrega:
 - Migrations **001..018 inalteradas**; novas 019..021 incrementais. Lockfile mudou somente a versão. Nenhuma base real, senha, chave privada, dependência nova ou serviço pago foi adicionado.
 
 Ativação remota pendente: executar `supabase/dashboard/ativar-contas-pagar.sql` no SQL Editor; atualizar **Code** da função existente `payables-import` com o arquivo `.ts` gerado; aguardar o frontend 0.8.0 na Cloudflare. O endereço e os dados são preservados. SQL e TypeScript têm destinos diferentes; não colar a função no SQL Editor. Não é necessário criar outra função ou repetir a instalação inicial. O envio do código não comprova execução do SQL, publicação da função, término do deploy ou conferência com relatórios operacionais reais. Os demais módulos e critérios de produção pendentes permanecem no escopo documentado.
+
+## Atualização 0.9.0 — recebíveis do ERP, cobrança e base de comissões
+
+O usuário forneceu dois relatórios reais separados: abertos/vencidos e quitados. Confirmou que somente vencidos alimentam Cobrança, que quitados saem da carteira ativa e que a base da comissão é **Quitação: valor recebido**. Não existe código único de título/parcela exportável. Solicitou também atraso, total a receber e recebido diário no Painel da Diretoria, além da recuperação das funções de Cobrança da V75.
+
+Implementados: dois modos explícitos de importação com análise dos bytes originais no servidor, atualização incremental, identidade filial/cliente/documento/vencimento, valor atualizável e vínculo explícito para parcelas ambíguas. Ausência no relatório não baixa nem marca como pago. Quitados registram nominal e recebido separadamente, data real, antecipações e diferenças; validam o título e removem-no da cobrança ativa. Repetição não duplica recebimentos. Correções de importação exigem confirmação e acrescentam versões imutáveis, mantendo a origem e o histórico. Conflitos com recebimentos manuais impedem alteração automática. Revisão financeira oficial obrigatória evita confirmar uma prévia desatualizada.
+
+Cobrança recupera totais, carteira por responsável, faixas de atraso, próximos contatos/retornos, filtros e acesso individual com histórico e ações existentes. A carteira ativa contém somente vencidos anteriores à data oficial de São Paulo; o banco também aplica esse limite às ações. Responsáveis conhecidos são preservados/herdados quando inequívocos; não há atribuição fictícia a quem importa. O Painel mostra os três indicadores pedidos, com recebido diário independente do período selecionado e do relógio do computador. Comissões consulta o valor efetivamente recebido por período e responsável, incluindo pendências de atribuição; **percentuais, vigências, cálculo e pagamento de comissão ainda não foram definidos ou implementados**.
+
+Verificação local desta entrega:
+
+- **151 testes Node aprovados**, sem falhas ou casos ignorados: parsers de CP/CR, gateways, permissões, capacidades, bytes originais, datas, centavos e configuração pública.
+- **86 cenários/grupos SQL aprovados** em PostgreSQL local PGlite: 16 de cobrança somente vencida, 22 de sincronização dos abertos, 24 de recebimentos/correções, 14 do resumo de cobrança e 10 da ativação combinada. Incluem identidade, concorrência, idempotência, RLS, leitura da Diretoria, sessões, rollback e preservação dos dados existentes.
+- **114 cenários distintos de navegador aprovados** com respostas sintéticas: 15 do Painel de recebíveis, 29 regressões de tesouraria, seis da base de comissões, 11 de importação dos abertos, 11 de quitados, 22 da operação CR/Cobrança, 11 do novo resumo de cobrança e nove de acesso. Após os ajustes finais, repetiram-se os 15 cenários do Painel e três casos focados de importação. O relógio incorreto do computador não altera a referência diária oficial; a data inválida do servidor é recusada.
+- Build TypeScript/Vite final **0.9.0 aprovado**. Os avisos conhecidos de tamanho dos chunks do leitor Excel permanecem. Nenhuma dependência foi acrescentada; lockfile mudou somente a versão.
+- Os arquivos fornecidos foram analisados sem renomear colunas: **962 linhas abertas/vencidas e 178 quitadas**, sem erros de parsing. Um ensaio financeiro em banco local isolado conferiu os totais com as fontes, a validação dos quitados, a base pelo valor recebido, a preservação de responsáveis desconhecidos e a repetição sem duplicação. Nesse ensaio técnico, 27 parcelas históricas ambíguas foram explicitamente tratadas como novas; isso **não homologa o vínculo operacional dessas parcelas**. Nenhuma linha financeira desses arquivos foi incorporada ao Git ou enviada ao banco de produção.
+- As migrations **001..021 permanecem inalteradas**. O novo combinado 022..025 exige CR/Cobrança 009, sem depender de CP 021, e aplica somente versões faltantes numa transação. Foram verificados instalação parcial, repetição e rollback integral após falha final, preservando usuários, permissões, saldos, CP/CR, arquivos e auditoria. SHA256 do combinado: `eed23f84458d139e8c7a7a7e775ee203eee32306d16297b7b5ad8b4f3e4cb7b1`.
+
+Ativação remota ainda necessária: executar **ativar-recebiveis-operacao.sql** no SQL Editor; atualizar **receivables-import → Code → index.ts** com o arquivo único TypeScript; aguardar o site 0.9.0 na Cloudflare. Guia: [ativacao-operacao-recebiveis.md](ativacao-operacao-recebiveis.md). Publicar Git não aplica essas alterações do Supabase. O agente não executou SQL/importações em produção nem verificou o runtime Deno hospedado ou o término desse deploy. A conferência operacional, as atribuições desconhecidas e as regras de comissão continuam pendentes. Faturamento, Margens, RH/DP e os demais requisitos de produção ainda não entregues permanecem no escopo documentado.

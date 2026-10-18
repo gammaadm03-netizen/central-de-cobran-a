@@ -32,6 +32,7 @@ async function setup(page: Page, options: Options = {}) {
     const body = request.postDataJSON(); calls.push({ name, body, query: url.search, method: request.method() });
     if (name === 'auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', token_type: 'bearer', expires_in: 3600 } });
     if (url.pathname === '/auth/v1/user') return reply({ id, aud: 'authenticated', role: 'authenticated', email: 'fixture@test.invalid', email_confirmed_at: now.toISOString(), created_at: now.toISOString(), app_metadata: {}, user_metadata: {} });
+    if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (name === 'current_access') return reply(access);
     if (name === 'payables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (name === 'payable_review_titles') return reply({ code: 'PGRST205' }, 404);

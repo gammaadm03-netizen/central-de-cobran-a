@@ -128,6 +128,7 @@ async function setup(page: Page, options: FixtureOptions = {}) {
     if (url.pathname === '/auth/v1/user') return reply({ id, aud: 'authenticated', role: 'authenticated', email: 'fixture@test.invalid', email_confirmed_at: stamp, created_at: stamp, app_metadata: {}, user_metadata: {} });
     const name = url.pathname.split('/').at(-1)!;
     calls.push({ name, body });
+    if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (name === 'current_access') return reply(access);
     if (name === 'cash_position') {
       if (options.fail) return reply({ message: 'private SQL secret trace' }, 500);
@@ -322,7 +323,7 @@ test('receivables summary fills actual projection and validated daily receipts w
   await expect(page.locator('.financial-kpi').nth(1)).toContainText('R$ 4.865,44');
   await expect(page.locator('.financial-kpi').nth(2)).toContainText('R$ 5.000,00');
   await expect(page.locator('.attention-card')).toContainText('R$ 7.500,00');
-  await expect(page.locator('.financial-module-grid')).toContainText('R$ 123,45');
+  await expect(page.getByRole('heading', { name: 'Total recebido consolidado', exact: true }).locator('..')).toContainText('R$ 123,45');
   await expect(page.getByText('Projeção por vencimento. Inclui títulos sem recebimento validado; não representa dinheiro disponível em conta.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Consultar Contas a Receber →', exact: true })).toHaveCount(0);
   expect(calls.some(call => call.name === 'receivable_titles')).toBe(false);

@@ -6,7 +6,7 @@ const userId = '10000000-0000-4000-8000-000000000001';
 const ownAgent = '20000000-0000-4000-8000-000000000001';
 const otherAgent = '20000000-0000-4000-8000-000000000002';
 const titleId = '30000000-0000-4000-8000-000000000001';
-type Options = { role?: 'gerente_geral' | 'diretor' | 'contas_receber' | 'cobradora_1'; unbound?: boolean; unassigned?: boolean; pending?: boolean; stale?: boolean; pages?: boolean; exportChange?: boolean };
+type Options = { role?: 'gerente_geral' | 'diretor' | 'contas_receber' | 'cobradora_1'; unbound?: boolean; unassigned?: boolean; pending?: boolean; stale?: boolean; pages?: boolean; exportChange?: boolean; dates?: boolean; serverToday?: string; missingCollection?: 'PGRST205' | '42P01'; malformedCollection?: boolean; missingReceipts?: 'PGRST205' | '42P01' | '42501'; correctedReceipt?: boolean };
 
 async function setup(page: Page, options: Options = {}) {
   const role = options.role ?? 'gerente_geral', collector = role === 'cobradora_1';
@@ -23,7 +23,9 @@ async function setup(page: Page, options: Options = {}) {
     collector_id: options.unassigned ? null : ownAgent, status: options.pending ? 'PENDING_VALIDATION' : 'OPEN', validation_status: options.pending ? 'PENDING' : 'NONE', payment_source: options.pending ? 'IMPORTACAO_DIARIA' : null, payment_reported_date: null as string | null, payment_date: null as string | null,
     reported_in_collection: false, collector_locked: false, in_latest_report: !options.pending, revision: 7, updated_at: '2026-10-15T10:00:00Z', last_action: null as string | null, next_action: null as string | null, next_action_date: null,
   };
-  const seen = { titleQueries: [] as string[], writes: [] as { name: string; body: any }[], events: [] as any[], receipts: [] as any[], exportSnapshots: 0 };
+  const seen = { titleQueries: [] as string[], titlePaths: [] as string[], receiptPaths: [] as string[], writes: [] as { name: string; body: any }[], events: [] as any[], receipts: [] as any[], exportSnapshots: 0 };
+  const serverToday = options.serverToday ?? '2026-10-18';
+  const shiftedDate = (days: number) => { const date = new Date(`${serverToday}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10); };
   await page.route(`${project}/**`, async route => {
     const request = route.request(), url = new URL(request.url()), body = request.postDataJSON();
     const headers = { 'access-control-allow-origin': 'http://127.0.0.1:4173', 'access-control-allow-headers': 'apikey,content-type,authorization,x-client-info,prefer,range,range-unit', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-expose-headers': 'content-range' };
@@ -31,17 +33,39 @@ async function setup(page: Page, options: Options = {}) {
     if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers });
     if (url.pathname === '/functions/v1/auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', expires_in: 3600, token_type: 'bearer' }, access });
     if (url.pathname === '/auth/v1/user') return reply(user);
+    if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
+    if (url.pathname === '/rest/v1/rpc/collections_overdue_summary') return reply({ code: 'PGRST202' }, 404);
     if (url.pathname === '/rest/v1/rpc/current_access') return reply(access);
     if (url.pathname === '/rest/v1/collection_agents') return reply([{ id: ownAgent, display_name: 'Responsável A', enabled: true }, ...(collector ? [] : [{ id: otherAgent, display_name: 'Responsável B', enabled: true }])], 200, collector ? 1 : 2);
-    if (url.pathname === '/rest/v1/receivable_titles') {
+    if (url.pathname === '/rest/v1/receivable_titles' || url.pathname === '/rest/v1/collection_overdue_titles') {
+      const collection = url.pathname === '/rest/v1/collection_overdue_titles';
+      seen.titlePaths.push(url.pathname);
       seen.titleQueries.push(url.search);
-      if (url.searchParams.get('select') === 'id,revision,updated_at') { seen.exportSnapshots++; return reply([{ id: title.id, revision: seen.exportSnapshots > 1 && options.exportChange ? 8 : 7, updated_at: title.updated_at }]); }
-      if (options.unbound || title.status === 'VALIDATED' && url.searchParams.get('status') === 'neq.VALIDATED') return reply([], 200, 0);
-      if (options.pages) { const offset = Number(url.searchParams.get('offset') ?? '0'), limit = Number(url.searchParams.get('limit') ?? '25'); return reply(Array.from({ length: Math.min(limit, 26 - offset) }, (_, i) => ({ ...title, id: `${titleId}-${offset + i}`, document: `NF-${offset + i + 1}` })), 200, 26); }
-      return reply([title], 200, 1);
+      if (collection && options.missingCollection) return reply({ code: options.missingCollection, message: 'private relation name and SQL details' }, 404);
+      if (url.searchParams.get('select')?.startsWith('id,revision,updated_at')) { seen.exportSnapshots++; return reply([{ id: title.id, revision: seen.exportSnapshots > 1 && options.exportChange ? 8 : 7, updated_at: title.updated_at, ...(collection ? { collection_as_of_date: serverToday } : {}) }]); }
+      const current = { ...title, ...(collection ? { collection_as_of_date: serverToday } : {}) };
+      let candidates = options.dates ? [
+        { ...current, id: `${titleId}-past`, document: 'NF-VENCIDO', due_date: shiftedDate(-1) },
+        { ...current, id: `${titleId}-today`, document: 'NF-HOJE', due_date: serverToday },
+        { ...current, id: `${titleId}-future`, document: 'NF-FUTURO', due_date: shiftedDate(1) },
+        { ...current, id: `${titleId}-paid`, document: 'NF-PAGO', due_date: shiftedDate(-2), status: 'VALIDATED', validation_status: 'VALIDATED', payment_date: shiftedDate(-1) },
+      ] : [current];
+      if (collection && !options.malformedCollection) candidates = candidates.filter(item => item.due_date < serverToday);
+      const status = url.searchParams.get('status');
+      if (status === 'neq.VALIDATED') candidates = candidates.filter(item => item.status !== 'VALIDATED');
+      else if (status?.startsWith('eq.')) candidates = candidates.filter(item => item.status === status.slice(3));
+      if (url.searchParams.has('due_date')) for (const filter of url.searchParams.getAll('due_date')) candidates = candidates.filter(item => filter.startsWith('gte.') ? item.due_date >= filter.slice(4) : filter.startsWith('lte.') ? item.due_date <= filter.slice(4) : true);
+      if (options.unbound) return reply([], 200, 0);
+      if (options.pages) { const offset = Number(url.searchParams.get('offset') ?? '0'), limit = Number(url.searchParams.get('limit') ?? '25'); return reply(Array.from({ length: Math.max(0, Math.min(limit, 26 - offset)) }, (_, i) => ({ ...current, id: `${titleId}-${offset + i}`, document: `NF-${offset + i + 1}` })), 200, 26); }
+      return reply(candidates, 200, candidates.length);
     }
     if (url.pathname === '/rest/v1/receivable_collection_events') return reply(seen.events);
-    if (url.pathname === '/rest/v1/receivable_receipts') return reply(seen.receipts);
+    if (url.pathname === '/rest/v1/effective_receivable_receipts' || url.pathname === '/rest/v1/receivable_receipts') {
+      seen.receiptPaths.push(url.pathname);
+      if (url.pathname === '/rest/v1/effective_receivable_receipts' && options.missingReceipts) return reply({ code: options.missingReceipts }, options.missingReceipts === '42501' ? 403 : 404);
+      if (options.correctedReceipt) return reply([{ id: 'receipt-adjusted', amount_cents: url.pathname === '/rest/v1/effective_receivable_receipts' ? 120000 : 123456, payment_date: '2026-10-17', delay_days: 63, delay_band: '61_90', payment_source: 'IMPORTACAO_DIARIA', validated_at: '2026-10-18T10:00:00Z' }]);
+      return reply(seen.receipts);
+    }
     if (url.pathname === '/rest/v1/receivable_imports') return reply([], 200, 0);
     if (url.pathname.startsWith('/rest/v1/rpc/')) {
       const name = url.pathname.split('/').at(-1)!;
@@ -158,4 +182,105 @@ test('CSV da carteira exporta todos os registros filtrados além da primeira pá
   const download = await pending, path = await download.path(); expect(path).not.toBeNull();
   const content = await readFile(path!, 'utf8'); expect(content).toContain('"NF-26"'); expect(content.split('\r\n')).toHaveLength(27); expect(content).toContain('"1234,56"');
   expect(seen.titleQueries.some(query => { const p = new URLSearchParams(query); return p.get('limit') === '500' && p.get('status') === 'neq.VALIDATED'; })).toBe(true);
+});
+
+for (const role of ['gerente_geral', 'diretor', 'cobradora_1'] as const) {
+  test(`${role}: Cobrança mostra apenas vencidos por São Paulo e CR conserva títulos de hoje e futuros`, async ({ page }) => {
+    // Em UTC já é dia 18; em São Paulo ainda é dia 17.
+    await page.clock.install({ time: new Date('2026-10-18T02:30:00Z') });
+    const seen = await setup(page, { role, dates: true, pending: true, serverToday: '2026-10-17' });
+    if (role !== 'cobradora_1') {
+      await expect(page.getByRole('table').getByText('Documento / NF: NF-VENCIDO', { exact: true })).toBeVisible();
+      await expect(page.getByRole('table').getByText('Documento / NF: NF-HOJE', { exact: true })).toBeVisible();
+      await expect(page.getByRole('table').getByText('Documento / NF: NF-FUTURO', { exact: true })).toBeVisible();
+      await page.getByRole('navigation').getByRole('button', { name: 'Cobrança', exact: true }).click();
+    }
+    await expect(page.getByRole('table').getByText('Documento / NF: NF-VENCIDO', { exact: true })).toBeVisible();
+    await expect(page.getByRole('table').getByText('Documento / NF: NF-HOJE', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('table').getByText('Documento / NF: NF-FUTURO', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('table').getByText('Documento / NF: NF-PAGO', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Somente títulos com vencimento anterior a hoje', { exact: false })).toBeVisible();
+    await expect(page.getByLabel('Situação do título')).toHaveValue('ACTIVE');
+    await expect(page.getByRole('option', { name: 'Vencidos em aberto', exact: true })).toHaveCount(1);
+    await expect(page.getByLabel('Vencimento final', { exact: true })).toHaveAttribute('max', '2026-10-16');
+    const collectionStart = seen.titlePaths.length;
+    await page.getByLabel('Situação do título').selectOption('');
+    await expect(page.getByRole('table').getByText('Documento / NF: NF-PAGO', { exact: true })).toBeVisible();
+    await expect(page.getByRole('table').getByText('Documento / NF: NF-HOJE', { exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Limpar filtros' }).click();
+    await expect(page.getByLabel('Situação do título')).toHaveValue('ACTIVE');
+    await expect(page.getByRole('table').getByText('Documento / NF: NF-PAGO', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('table').getByText('Pago — aguardando validação', { exact: true })).toBeVisible();
+    expect(seen.titlePaths.slice(collectionStart).every(path => path === '/rest/v1/collection_overdue_titles')).toBe(true);
+    expect(seen.writes).toHaveLength(0);
+  });
+}
+
+test('a carteira usa a nova data oficial após a meia-noite de São Paulo', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-10-18T03:30:00Z') });
+  await setup(page, { role: 'cobradora_1', dates: true, serverToday: '2026-10-18' });
+  await expect(page.getByRole('table').getByText('Documento / NF: NF-VENCIDO', { exact: true })).toBeVisible();
+  await expect(page.getByRole('table').getByText('Documento / NF: NF-HOJE', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Vencimento final', { exact: true })).toHaveAttribute('max', '2026-10-17');
+});
+
+for (const code of ['PGRST205', '42P01'] as const) {
+  test(`Cobrança sem atualização (${code}) orienta ativação e não consulta a base sem restrição`, async ({ page }) => {
+    const seen = await setup(page, { role: 'diretor', missingCollection: code });
+    await expect(page.getByRole('button', { name: 'Detalhar título NF-120 de Cliente sintético da carteira', exact: true })).toBeVisible();
+    const previous = seen.titlePaths.length;
+    await page.getByRole('navigation').getByRole('button', { name: 'Cobrança', exact: true }).click();
+    const error = page.locator('.receivables-workspace').getByRole('alert');
+    await expect(error).toContainText('A Cobrança precisa da atualização do banco para exibir somente títulos vencidos');
+    await expect(error).not.toContainText('private relation');
+    await expect(page.getByRole('button', { name: 'Baixar CSV dos filtros' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Detalhar', exact: false })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Atualizar títulos' }).click();
+    await expect(error).toBeVisible();
+    expect(seen.titlePaths.slice(previous)).not.toHaveLength(0);
+    expect(seen.titlePaths.slice(previous).every(path => path === '/rest/v1/collection_overdue_titles')).toBe(true);
+    expect(seen.writes).toHaveLength(0);
+  });
+}
+
+test('ações ficam indisponíveis se um retorno desatualizado contiver vencimento de hoje ou futuro', async ({ page }) => {
+  await setup(page, { role: 'cobradora_1', dates: true, malformedCollection: true });
+  for (const document of ['NF-HOJE', 'NF-FUTURO']) {
+    await page.getByRole('button', { name: `Detalhar título ${document} de Cliente sintético da carteira`, exact: true }).click();
+    await expect(page.getByRole('heading', { name: `Título ${document} · Cliente sintético da carteira`, exact: true })).toBeVisible();
+    await expect(page.getByText('Registrar ação de cobrança', { exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Fechar detalhes' }).click();
+  }
+});
+
+test('CSV da Cobrança usa a visão de vencidos em todas as páginas e nas duas verificações da base', async ({ page }) => {
+  const seen = await setup(page, { role: 'diretor', pages: true });
+  await page.getByRole('navigation').getByRole('button', { name: 'Cobrança', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Detalhar', exact: false })).toHaveCount(25);
+  const before = seen.titlePaths.length;
+  const pending = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Baixar CSV dos filtros' }).click();
+  const download = await pending, path = await download.path(); expect(path).not.toBeNull();
+  expect(await readFile(path!, 'utf8')).toContain('"NF-26"');
+  expect(seen.exportSnapshots).toBe(2);
+  expect(seen.titlePaths.slice(before).every(path => path === '/rest/v1/collection_overdue_titles')).toBe(true);
+  expect(seen.titleQueries.some(query => new URLSearchParams(query).get('select') === 'id,revision,updated_at,collection_as_of_date')).toBe(true);
+});
+
+test('detalhe mostra recebimento efetivo corrigido e não consulta o valor antigo', async ({ page }) => {
+  const seen = await setup(page, { role: 'diretor', correctedReceipt: true }); await openDetail(page);
+  await expect(page.getByText('Recebimento validado: R$ 1.200,00', { exact: false })).toBeVisible();
+  expect(seen.receiptPaths).toEqual(['/rest/v1/effective_receivable_receipts']);
+});
+for (const code of ['PGRST205', '42P01'] as const) {
+  test(`banco anterior à visão efetiva (${code}) preserva consulta do histórico legado`, async ({ page }) => {
+    const seen = await setup(page, { role: 'diretor', correctedReceipt: true, missingReceipts: code }); await openDetail(page);
+    await expect(page.getByText('Recebimento validado: R$ 1.234,56', { exact: false })).toBeVisible();
+    expect(seen.receiptPaths).toEqual(['/rest/v1/effective_receivable_receipts', '/rest/v1/receivable_receipts']);
+  });
+}
+test('permissão negada na visão efetiva não tenta consultar o histórico antigo', async ({ page }) => {
+  const seen = await setup(page, { role: 'diretor', missingReceipts: '42501' }); await openDetail(page);
+  await expect(page.getByRole('alert')).toContainText('Seu perfil não tem permissão');
+  expect(seen.receiptPaths).toEqual(['/rest/v1/effective_receivable_receipts']);
 });

@@ -71,6 +71,7 @@ async function setup(page: Page, options: Options = {}) {
     const body = request.postDataJSON(); calls.push({ name, body, query: url.search, method: request.method() });
     if (name === 'auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', token_type: 'bearer', expires_in: 3600 } });
     if (url.pathname === '/auth/v1/user') return reply({ id: userId, aud: 'authenticated', role: 'authenticated', email: 'fixture@test.invalid', created_at: fixedTime.toISOString(), app_metadata: {}, user_metadata: {} });
+    if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (name === 'current_access') return reply(access);
     if (name === 'payables_management_summary') {
       if (options.missing) return reply({ code: 'PGRST202', message: 'private SQL query secret' }, 404);

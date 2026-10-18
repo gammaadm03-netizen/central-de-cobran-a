@@ -1,5 +1,7 @@
 # Ativar Caixa em Importar Bases, Contas a Receber e Cobrança — 0.4.0
 
+**Regra vigente 0.9.0:** os modelos reais de abertos/vencidos e quitados são importados separadamente. Quitados confirmam recebimentos, retiram títulos da cobrança ativa e alimentam a base efetiva de comissões. Para atualizar, seguir o [novo guia](ativacao-operacao-recebiveis.md) e aplicar o combinado condicional022..025, sem repetir a instalação abaixo. [Fluxo e cabeçalhos](contas-receber-fluxo.md). O procedimento abaixo registra a instalação original.
+
 **Atualização posterior:** o usuário confirmou a execução do SQL desta página. Para ampliar o cadastro a 17 posições, seguir [ativacao-contas-caixas.md](ativacao-contas-caixas.md) e executar somente 012; não repetir 008/009/010/011. A publicação de `receivables-import` continua sendo uma etapa separada para quem ainda não a realizou. As referências a onze contas abaixo registram o escopo original da versão 0.4.0.
 
 Esta atualização acrescenta o preenchimento das onze contas dentro de **Importar Bases → Caixa / Bancos**, a importação de Contas a Receber e a operação de Cobrança com validação financeira. O endereço da Central continua sendo https://central-de-cobran-a.pages.dev.

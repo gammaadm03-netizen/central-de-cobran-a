@@ -33,6 +33,7 @@ async function setup(page: Page, options: { changed?: boolean; noBase?: boolean;
     const name = url.pathname.split('/').at(-1)!;
     if (name === 'auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', expires_in: 3600, token_type: 'bearer' } });
     if (url.pathname === '/auth/v1/user') return reply({ id, aud: 'authenticated', role: 'authenticated', email: 'synthetic@test.invalid', email_confirmed_at: stamp, created_at: stamp, app_metadata: {}, user_metadata: {} });
+    if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (name === 'current_access') return reply(access);
     if (name === 'payables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (['payable_review_titles', 'payable_financial_titles'].includes(name)) return reply({ code: 'PGRST205' }, 404);

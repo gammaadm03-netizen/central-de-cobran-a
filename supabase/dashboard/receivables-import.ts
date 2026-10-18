@@ -7,13 +7,14 @@ var MAX_ROWS = 5e3;
 var ALIASES = {
   entry_number: ["LANCAMENTO", "NLANCAMENTO", "NOLANCAMENTO", "NUMEROLANCAMENTO", "NUMERODOLANCAMENTO", "NUMEROLANC", "NROLANCAMENTO"],
   description: ["HISTORICO", "DESCRICAO", "HISTORICOFAVORECIDO", "FAVORECIDO"],
-  due_date: ["VENCIMENTO", "DATAVENCIMENTO", "DTVENCIMENTO"],
-  amount_cents: ["VALOR", "VALORTITULO", "VALORORIGINAL"],
-  plan: ["PLANODECONTAS", "PLANOCONTAS"],
+  due_date: ["VENCIMENTO", "DATAVENCIMENTO", "DTVENCIMENTO", "VENCIMENTODATA"],
+  amount_cents: ["VALOR", "VALORTITULO", "VALORORIGINAL", "EMISSAOVALORDOLANCAMENTO"],
+  plan: ["PLANODECONTAS", "PLANOCONTAS", "PLANOCPCONTANOME"],
   branch: ["FILIAL", "CODFILIAL"],
-  bank_account: ["BANCO", "CONTA", "BANCOCONTA"],
-  issued_on: ["EMISSAO", "DATAEMISSAO", "DTEMISSAO"],
-  source_status: ["STATUS", "SITUACAO"]
+  bank_account: ["BANCO", "CONTA", "BANCOCONTA", "PLANOCCCONTANOME"],
+  issued_on: ["EMISSAO", "DATAEMISSAO", "DTEMISSAO", "EMISSAODATA"],
+  source_status: ["STATUS", "SITUACAO"],
+  cheque_number: ["CHEQUENUMERO"]
 };
 var headerMap = new Map(Object.entries(ALIASES).flatMap(([key, aliases]) => aliases.map((alias) => [alias, key])));
 function parseCivilDate(value, excel1904 = false) {
@@ -175,19 +176,22 @@ async function validateWorkbookExpandedSize(buffer) {
 }
 
 // src/lib/receivables-parser.mjs
-var COLUMN_LABELS = { document: "Documento / NF", client_name: "Cliente / \xD3rg\xE3o", branch: "Filial", due_date: "Vencimento", amount_cents: "Valor", issued_on: "Emiss\xE3o", client_document: "CNPJ" };
+var COLUMN_LABELS = { document: "Documento / NF", client_name: "Cliente / \xD3rg\xE3o", branch: "Filial", due_date: "Vencimento", amount_cents: "Valor", issued_on: "Emiss\xE3o", client_document: "CNPJ", received_on: "Quita\xE7\xE3o: data do recebimento", received_amount_cents: "Quita\xE7\xE3o: valor recebido" };
 var REQUIRED = ["document", "client_name", "branch", "due_date", "amount_cents"];
 var normalize = (value) => String(value ?? "").normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 var ALIASES2 = {
-  document: ["DOCUMENTO", "NF", "NOTAFISCAL", "NUMERODOCUMENTO", "NUMERONF"],
-  client_name: ["CLIENTE", "ORGAO", "CLIENTEORGAO", "ORGAOCLIENTE"],
+  document: ["DOCUMENTO", "NF", "NOTAFISCAL", "NUMERODOCUMENTO", "NUMERONF", "DOCUMENTONUMERO"],
+  client_name: ["CLIENTE", "ORGAO", "CLIENTEORGAO", "ORGAOCLIENTE", "ENTIDADE1ENTIDADENOME"],
   branch: ["FILIAL", "CODFILIAL"],
-  due_date: ["VENCIMENTO", "DATAVENCIMENTO", "DTVENCIMENTO"],
-  amount_cents: ["VALOR", "VALORTITULO", "VALORORIGINAL"],
-  issued_on: ["EMISSAO", "DATAEMISSAO", "DTEMISSAO"],
-  client_document: ["CNPJ", "CNPJCLIENTE", "DOCUMENTOCLIENTE"]
+  due_date: ["VENCIMENTO", "DATAVENCIMENTO", "DTVENCIMENTO", "VENCIMENTODATA"],
+  amount_cents: ["VALOR", "VALORTITULO", "VALORORIGINAL", "EMISSAOVALORDOLANCAMENTO"],
+  issued_on: ["EMISSAO", "DATAEMISSAO", "DTEMISSAO", "EMISSAODATA"],
+  client_document: ["CNPJ", "CNPJCLIENTE", "DOCUMENTOCLIENTE"],
+  received_on: ["QUITACAODATADORECEBIMENTO"],
+  received_amount_cents: ["QUITACAOVALORRECEBIDO"]
 };
 var headerMap2 = new Map(Object.entries(ALIASES2).flatMap(([key, aliases]) => aliases.map((alias) => [alias, key])));
+var ERP_TIMESTAMP_HEADERS = /* @__PURE__ */ new Set(["EMISSAODATA", "VENCIMENTODATA", "QUITACAODATADORECEBIMENTO"]);
 function scalar(value) {
   if (value === null || value === void 0) return "";
   if (typeof value === "object" && !(value instanceof Date)) {
@@ -200,18 +204,61 @@ function scalar(value) {
   if (!["string", "number"].includes(typeof value) && !(value instanceof Date)) throw new Error("Tipo de c\xE9lula inv\xE1lido. Use somente texto, data ou n\xFAmero.");
   return value;
 }
+function parseErpDate(value, excel1904) {
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) throw new Error("Data inv\xE1lida.");
+    return parseCivilDate(`${String(value.getUTCFullYear()).padStart(4, "0")}-${String(value.getUTCMonth() + 1).padStart(2, "0")}-${String(value.getUTCDate()).padStart(2, "0")}`);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 1 || value > 2958465) throw new Error("Data Excel inv\xE1lida.");
+    return parseCivilDate(Math.floor(value), excel1904);
+  }
+  const timestamp = /^(\d{2}\/\d{2}\/\d{4}) +(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(value ?? "").trim());
+  if (!timestamp) return parseCivilDate(value, excel1904);
+  if (+timestamp[2] > 23 || +timestamp[3] > 59 || +(timestamp[4] ?? 0) > 59) throw new Error("Hor\xE1rio inv\xE1lido. Use hh:mm ou hh:mm:ss, entre 00:00:00 e 23:59:59.");
+  return parseCivilDate(timestamp[1], excel1904);
+}
+var INVALID_IDENTIFIER = "Identificador de documento inv\xE1lido. Use texto ou n\xFAmero inteiro n\xE3o negativo, sem nota\xE7\xE3o cient\xEDfica.";
+var UNSUPPORTED_IDENTIFIER_FORMAT = "Formato do identificador n\xE3o suportado. No Excel, use Texto ou um formato simples de zeros, como 000000.";
+function parseIdentifier(value) {
+  const primitive = scalar(value);
+  if (typeof primitive === "number") {
+    if (!Number.isSafeInteger(primitive) || primitive < 0) throw new Error(INVALID_IDENTIFIER);
+    return String(primitive);
+  }
+  if (typeof primitive !== "string") throw new Error(INVALID_IDENTIFIER);
+  const text = primitive.trim().replace(/\s+/g, " ");
+  if (text.length > 150) throw new Error("Limite de 150 caracteres excedido.");
+  if (/^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)[eE][+-]?\d+$/.test(text) || /^-\d+(?:[.,]\d+)?$/.test(text) || /[\u0000-\u001f\u007f]/.test(text)) throw new Error(INVALID_IDENTIFIER);
+  return text;
+}
+function isReceivableIdentifierHeader(value) {
+  return headerMap2.get(normalize(scalar(value))) === "document";
+}
+function readReceivableIdentifierCell(value, numFmt) {
+  if (value instanceof Date) throw new Error(UNSUPPORTED_IDENTIFIER_FORMAT);
+  const text = parseIdentifier(value);
+  if (typeof value !== "number") return text;
+  const format = String(numFmt ?? "").trim();
+  if (!format || format.toUpperCase() === "GENERAL" || format === "@") return text;
+  if (!/^0+$/.test(format)) throw new Error(UNSUPPORTED_IDENTIFIER_FORMAT);
+  if (format.length > 150) throw new Error("Limite de 150 caracteres excedido.");
+  return text.padStart(format.length, "0");
+}
 function receivableCustomerKey(row) {
   return row.client_document ? `cnpj:${row.client_document}` : `name:${row.client_name.trim().replace(/\s+/g, " ").toUpperCase()}`;
 }
-function validateReceivableRows(matrix, { excel1904 = false } = {}) {
+function validateReceivableMatrix(matrix, { excel1904 = false } = {}, received = false) {
   const errors = [], rows = [];
   if (!matrix.length) return { rows, errors: [{ line: 1, column: "Arquivo", problem: "Arquivo vazio.", correction: "Exporte o relat\xF3rio completo com os cabe\xE7alhos." }] };
   if (matrix[0].length > 100) return { rows, errors: [{ line: 1, column: "Arquivo", problem: "Mais de 100 colunas.", correction: "Salve uma c\xF3pia com at\xE9 100 colunas." }] };
-  const columns = /* @__PURE__ */ new Map();
+  const columns = /* @__PURE__ */ new Map(), timestampColumns = /* @__PURE__ */ new Set();
   matrix[0].forEach((value, index) => {
     let key;
     try {
-      key = headerMap2.get(normalize(scalar(value)));
+      const normalizedHeader = normalize(scalar(value));
+      key = headerMap2.get(normalizedHeader);
+      if (ERP_TIMESTAMP_HEADERS.has(normalizedHeader)) timestampColumns.add(index);
     } catch {
       errors.push({ line: 1, column: "Cabe\xE7alho", problem: "Cabe\xE7alho inv\xE1lido.", correction: "Use nomes de colunas sem f\xF3rmulas." });
       return;
@@ -219,10 +266,10 @@ function validateReceivableRows(matrix, { excel1904 = false } = {}) {
     if (key && columns.has(key)) errors.push({ line: 1, column: COLUMN_LABELS[key], problem: "Coluna duplicada ou amb\xEDgua.", correction: "Mantenha uma \xFAnica coluna para este campo." });
     else if (key) columns.set(key, index);
   });
-  for (const key of REQUIRED) if (!columns.has(key)) errors.push({ line: 1, column: COLUMN_LABELS[key], problem: "Coluna obrigat\xF3ria ausente.", correction: `Inclua a coluna ${COLUMN_LABELS[key]}.` });
+  for (const key of [...REQUIRED, ...received ? ["received_on", "received_amount_cents"] : []]) if (!columns.has(key)) errors.push({ line: 1, column: COLUMN_LABELS[key], problem: "Coluna obrigat\xF3ria ausente.", correction: `Inclua a coluna ${COLUMN_LABELS[key]}.` });
   if (errors.length) return { rows, errors };
   const keys = /* @__PURE__ */ new Set(), recognized = new Set(columns.values());
-  let total = 0, nonempty = 0;
+  let total = 0, receivedTotal = 0, nonempty = 0;
   for (let index = 1; index < matrix.length; index++) {
     const source = matrix[index];
     if (source.every((value) => value === null || value === void 0 || String(value).trim() === "")) continue;
@@ -231,6 +278,10 @@ function validateReceivableRows(matrix, { excel1904 = false } = {}) {
       break;
     }
     const row = { document: "", client_name: "", client_document: null, branch: "", issued_on: null, due_date: "", amount_cents: 0 };
+    if (received) {
+      row.received_on = "";
+      row.received_amount_cents = 0;
+    }
     const before = errors.length;
     if (source.length > 100 || source.length > matrix[0].length && source.slice(matrix[0].length).some((value) => value !== null && value !== void 0 && String(value).trim())) errors.push({ line: index + 1, column: "Arquivo", problem: "H\xE1 valores fora das colunas do cabe\xE7alho ou mais de 100 colunas.", correction: "Confira delimitadores e cabe\xE7alhos; valores com v\xEDrgula em CSV devem estar entre aspas." });
     source.forEach((value, column) => {
@@ -243,10 +294,16 @@ function validateReceivableRows(matrix, { excel1904 = false } = {}) {
     for (const [key, column] of columns) {
       try {
         const value = scalar(source[column]);
-        if (key === "amount_cents") row[key] = parseMoneyCents(value);
-        else if (key === "due_date") row[key] = parseCivilDate(value, excel1904);
-        else if (key === "issued_on") row[key] = String(value).trim() ? parseCivilDate(value, excel1904) : null;
-        else if (key === "client_document") {
+        if (!received && ["received_on", "received_amount_cents"].includes(key)) continue;
+        if (key === "amount_cents" || key === "received_amount_cents") {
+          row[key] = parseMoneyCents(value);
+          if (key === "received_amount_cents" && row[key] <= 0) throw new Error("O valor recebido deve ser maior que zero.");
+        } else if (key === "due_date" || key === "received_on") row[key] = timestampColumns.has(column) ? parseErpDate(value, excel1904) : parseCivilDate(value, excel1904);
+        else if (key === "issued_on") row[key] = String(value).trim() ? timestampColumns.has(column) ? parseErpDate(value, excel1904) : parseCivilDate(value, excel1904) : null;
+        else if (key === "document") {
+          row[key] = parseIdentifier(value);
+          if (!row[key]) throw new Error("Campo obrigat\xF3rio vazio.");
+        } else if (key === "client_document") {
           const document = String(value).trim();
           if (!document) row[key] = null;
           else {
@@ -265,11 +322,12 @@ function validateReceivableRows(matrix, { excel1904 = false } = {}) {
         errors.push({ line: index + 1, column: COLUMN_LABELS[key], problem: error.message, correction: "Corrija a c\xE9lula no arquivo original e selecione uma nova c\xF3pia." });
       }
     }
-    const identity = JSON.stringify([row.branch, row.document, receivableCustomerKey(row), row.due_date, row.amount_cents]);
-    if (errors.length === before && keys.has(identity)) errors.push({ line: index + 1, column: "Documento / NF", problem: "Chave de t\xEDtulo duplicada na mesma base.", correction: "Confira filial, documento, cliente, vencimento e valor. N\xE3o remova duplicados sem validar a origem." });
+    const identity = JSON.stringify([row.branch, row.document, receivableCustomerKey(row), row.due_date]);
+    if (errors.length === before && keys.has(identity)) errors.push({ line: index + 1, column: "Documento / NF", problem: "Chave de t\xEDtulo duplicada na mesma base.", correction: "Confira filial, documento, cliente e vencimento. Uma altera\xE7\xE3o de valor n\xE3o cria outro t\xEDtulo." });
     if (errors.length === before) {
       total += row.amount_cents;
-      if (!Number.isSafeInteger(total)) errors.push({ line: index + 1, column: "Valor", problem: "Total do relat\xF3rio excede o limite de precis\xE3o.", correction: "Confira valores e origem da base antes de importar." });
+      if (received) receivedTotal += row.received_amount_cents;
+      if (!Number.isSafeInteger(total) || !Number.isSafeInteger(receivedTotal)) errors.push({ line: index + 1, column: "Valor", problem: "Total do relat\xF3rio excede o limite de precis\xE3o.", correction: "Confira valores e origem da base antes de importar." });
       else {
         keys.add(identity);
         rows.push(row);
@@ -279,6 +337,12 @@ function validateReceivableRows(matrix, { excel1904 = false } = {}) {
   }
   if (!rows.length && !errors.length) errors.push({ line: 2, column: "Arquivo", problem: "N\xE3o h\xE1 t\xEDtulos no relat\xF3rio.", correction: "Selecione um relat\xF3rio completo com t\xEDtulos; uma base vazia n\xE3o pode gerar aus\xEAncias." });
   return { rows: errors.length ? [] : rows, errors: errors.slice(0, 100) };
+}
+function validateReceivableRows(matrix, options = {}) {
+  return validateReceivableMatrix(matrix, options, false);
+}
+function validateReceivablePaidRows(matrix, options = {}) {
+  return validateReceivableMatrix(matrix, options, true);
 }
 
 // supabase/functions/receivables-import/handler.mjs
@@ -338,7 +402,13 @@ var SAFE_MESSAGES = /* @__PURE__ */ new Set([
   "Mais de 100 colunas.",
   "H\xE1 valores fora das colunas do cabe\xE7alho ou mais de 100 colunas.",
   "Tipo de c\xE9lula inv\xE1lido. Use somente texto, data ou n\xFAmero.",
-  "O valor deve ter no m\xE1ximo duas casas decimais, sem arredondamento."
+  "O valor deve ter no m\xE1ximo duas casas decimais, sem arredondamento.",
+  "Data Excel inv\xE1lida.",
+  "Hor\xE1rio inv\xE1lido. Use hh:mm ou hh:mm:ss, entre 00:00:00 e 23:59:59.",
+  "Identificador de documento inv\xE1lido. Use texto ou n\xFAmero inteiro n\xE3o negativo, sem nota\xE7\xE3o cient\xEDfica.",
+  "Formato do identificador n\xE3o suportado. No Excel, use Texto ou um formato simples de zeros, como 000000.",
+  "O valor recebido deve ser maior que zero.",
+  "Este arquivo cont\xE9m colunas de quita\xE7\xE3o. Selecione o modo Recebimentos para importar datas e valores efetivamente recebidos."
 ]);
 var safeMessage = (message) => SAFE_MESSAGES.has(message) || /^Limite de (?:150|300|1500) caracteres excedido\.$/.test(message) ? message : PARSE_FAILURE;
 function originsFrom(raw) {
@@ -403,6 +473,17 @@ function problemsFor(errors) {
     correction: typeof error.correction === "string" ? error.correction.slice(0, 300) : CORRECTION
   }));
 }
+function receiptColumn(value) {
+  if (value && typeof value === "object") {
+    if ("formula" in value || "sharedFormula" in value) return false;
+    if (Array.isArray(value.richText)) value = value.richText.map((part) => part?.text ?? "").join("");
+    else if (typeof value.text === "string" && "hyperlink" in value) value = value.text;
+  }
+  const normalized = String(value ?? "").normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return ["QUITACAODATADORECEBIMENTO", "QUITACAOVALORRECEBIDO"].includes(normalized);
+}
+var validRevision = (value) => typeof value === "string" && value.length > 0 && value.length <= 256 && value === value.trim();
+var sourceFields = ["document", "due_date", "amount_cents"];
 function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWorkbook, log = () => {
 } }) {
   return async function handle(request) {
@@ -465,6 +546,8 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       if (code === "42501") return respond(403, { code, error: "Seu perfil n\xE3o tem permiss\xE3o para esta opera\xE7\xE3o." });
       if (code === "40001") return respond(409, { code, error: "A base mudou desde a an\xE1lise. Analise o arquivo novamente antes de concluir." });
       if (code === "23505") return respond(409, { code, error: "Este arquivo j\xE1 foi importado para esta origem. Nenhum dado foi alterado." });
+      if (code === "P0023") return respond(409, { code, error: "Confira os v\xEDnculos e as poss\xEDveis altera\xE7\xF5es de identifica\xE7\xE3o dos t\xEDtulos antes de confirmar. Nenhum dado foi alterado." });
+      if (code === "P0024") return respond(409, { code, error: "H\xE1 recebimentos que precisam de revis\xE3o. Confira os v\xEDnculos, valores e hist\xF3rico antes de confirmar. Nenhum dado foi alterado." });
       if (code === "23514" && result.payload?.message === IDENTITY_CHANGE) return respond(400, { code, error: IDENTITY_CHANGE });
       if (code === "22023" || code === "23514") return respond(400, { code, error: "A importa\xE7\xE3o foi recusada. Confira as linhas, a origem completa e os v\xEDnculos de cobradora dos clientes antes de concluir." });
       if (result.status === 401) return respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." });
@@ -492,10 +575,14 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       } catch {
         return respond(400, { error: INVALID_REQUEST });
       }
-      if (Object.keys(body).some((key) => !["action", "file_name", "file_base64", "complete", "previous_import_id"].includes(key)) || !["preview", "commit"].includes(body.action) || typeof body.file_name !== "string" || body.file_name.length < 1 || body.file_name.length > 250 || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name)) return respond(400, { error: INVALID_REQUEST });
+      if (Object.keys(body).some((key) => !["action", "file_name", "file_base64", "complete", "previous_import_id", "mode", "title_mappings", "previous_financial_revision", "confirm_corrections"].includes(key)) || !["preview", "commit"].includes(body.action) || Object.hasOwn(body, "mode") && !["open", "received"].includes(body.mode) || !body.mode && (Object.hasOwn(body, "title_mappings") || Object.hasOwn(body, "previous_financial_revision") || Object.hasOwn(body, "confirm_corrections")) || body.mode !== "received" && Object.hasOwn(body, "confirm_corrections") || typeof body.file_name !== "string" || body.file_name.length < 1 || body.file_name.length > 250 || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name)) return respond(400, { error: INVALID_REQUEST });
+      if (Object.hasOwn(body, "title_mappings") && (!body.title_mappings || typeof body.title_mappings !== "object" || Array.isArray(body.title_mappings) || Object.keys(body.title_mappings).length > MAX_ROWS || Object.entries(body.title_mappings).some(([key, value]) => !/^[1-9]\d{0,3}$/.test(key) || Number(key) > MAX_ROWS || typeof value !== "string" || !(value === "NEW" || UUID.test(value)))) || Object.hasOwn(body, "previous_financial_revision") && !validRevision(body.previous_financial_revision) || Object.hasOwn(body, "confirm_corrections") && typeof body.confirm_corrections !== "boolean") return respond(400, { error: INVALID_REQUEST });
+      if (body.mode && !["read", "write"].every((action) => access.payload.permissions.some((permission) => permission?.resource === "contas_receber" && permission.action === action))) {
+        return respond(403, { code: "42501", error: "Seu perfil n\xE3o tem permiss\xE3o para esta opera\xE7\xE3o." });
+      }
       if (/\.xls$/i.test(body.file_name)) return respond(400, { error: "O formato .xls antigo ainda n\xE3o \xE9 aceito. No Excel, salve uma c\xF3pia como .xlsx." });
       if (!/\.(xlsx|xlsm|csv)$/i.test(body.file_name)) return respond(400, { error: "Selecione um arquivo .xlsx, .xlsm ou .csv." });
-      if (body.action === "commit" && (body.complete !== true || !(body.previous_import_id === null || typeof body.previous_import_id === "string" && UUID.test(body.previous_import_id)))) return respond(400, { error: INVALID_REQUEST });
+      if (body.action === "commit" && (body.complete !== true || body.mode && !validRevision(body.previous_financial_revision) || !(body.previous_import_id === null || typeof body.previous_import_id === "string" && UUID.test(body.previous_import_id)))) return respond(400, { error: INVALID_REQUEST });
       let bytes;
       try {
         bytes = decodeFile(body.file_base64);
@@ -517,20 +604,38 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
         if (!Array.isArray(matrix) || matrix.length > MAX_ROWS + 1 || matrix.some((row) => !Array.isArray(row) || row.length > 100)) {
           throw new Error("Planilha excede 5.000 linhas ou 100 colunas.");
         }
-        parsed = validateReceivableRows(matrix, { excel1904 });
+        if (body.mode !== "received" && matrix[0]?.some(receiptColumn)) throw new Error("Este arquivo cont\xE9m colunas de quita\xE7\xE3o. Selecione o modo Recebimentos para importar datas e valores efetivamente recebidos.");
+        parsed = body.mode === "received" ? validateReceivablePaidRows(matrix, { excel1904 }) : validateReceivableRows(matrix, { excel1904 });
       } catch (error) {
         return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: [{ line: 0, column: "Arquivo", problem: safeMessage(error instanceof Error ? error.message : ""), correction: CORRECTION }] });
       }
       if (parsed.errors.length) return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: problemsFor(parsed.errors) });
+      if (body.mode) {
+        if (Object.keys(body.title_mappings ?? {}).some((key) => Number(key) > parsed.rows.length)) return respond(400, { error: INVALID_REQUEST });
+        const capabilities = await call("/rest/v1/rpc/receivables_import_capabilities", { data: {} });
+        const required = body.mode === "open" ? "open_sync" : "received_import";
+        if (!capabilities.ok && ["PGRST202", "42883"].includes(capabilities.payload?.code) || capabilities.ok && capabilities.payload?.[required] !== true) {
+          return respond(409, { code: body.mode === "open" ? "P0023" : "P0024", activation_required: true, error: `Ative a atualiza\xE7\xE3o de ${body.mode === "open" ? "t\xEDtulos em aberto" : "recebimentos"} no banco de dados antes de usar este modo. Nenhum dado foi alterado.` });
+        }
+        if (!capabilities.ok) return upstreamFailure(capabilities);
+      }
       const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
       if (signal.aborted) throw new Error("request_timed_out");
       if (body.action === "preview") {
-        const preview = await call("/rest/v1/rpc/preview_receivables_import", { data: { p_scope: "grupo-consolidado", p_rows: parsed.rows } });
+        const path2 = body.mode === "open" ? "preview_receivables_open_import" : body.mode === "received" ? "preview_receivables_received_import" : "preview_receivables_import";
+        const preview = await call(`/rest/v1/rpc/${path2}`, { data: { p_scope: "grupo-consolidado", p_rows: parsed.rows, ...body.mode ? { p_title_mappings: body.title_mappings ?? {} } : {} } });
         if (!preview.ok) return upstreamFailure(preview);
-        if (!preview.payload || preview.payload.row_count !== parsed.rows.length || !Number.isSafeInteger(preview.payload.new_count) || !Number.isSafeInteger(preview.payload.open_count) || !Number.isSafeInteger(preview.payload.pending_count) || !Number.isSafeInteger(preview.payload.validated_in_source_count)) throw new Error("invalid_preview");
-        return respond(200, { rows: parsed.rows, preview: preview.payload, file_sha256: hash });
+        if (!preview.payload || preview.payload.row_count !== parsed.rows.length) throw new Error("invalid_preview");
+        if (body.mode) {
+          const counters = body.mode === "open" ? ["new_count", "open_count", "changed_count", "pending_count", "validated_in_source_count", "conflict_count"] : ["new_count", "received_count", "matched_count", "correction_count", "historical_count", "conflict_count"];
+          const outcomes = body.mode === "open" ? ["NEW", "UPDATE", "MATCHED", "AMBIGUOUS", "CONFLICT"] : ["NEW_RECEIPT", "MATCHED", "CORRECTION", "HISTORICAL", "AMBIGUOUS", "CONFLICT"];
+          const checkedFields = body.mode === "received" ? [...sourceFields, "received_on", "received_amount_cents"] : sourceFields;
+          if (preview.payload.mode !== body.mode || !validRevision(preview.payload.financial_revision) || !counters.every((key) => Number.isSafeInteger(preview.payload[key]) && preview.payload[key] >= 0) || typeof preview.payload.can_commit !== "boolean" || !Array.isArray(preview.payload.errors) || !Array.isArray(preview.payload.rows) || preview.payload.rows.length !== parsed.rows.length || preview.payload.rows.some((row, index) => !row || typeof row !== "object" || Array.isArray(row) || row.line !== index + 1 || !outcomes.includes(row.outcome) || !(row.title_id === null || typeof row.title_id === "string" && UUID.test(row.title_id)) || checkedFields.some((key) => row[key] !== parsed.rows[index][key]))) throw new Error("invalid_preview");
+        } else if (!Number.isSafeInteger(preview.payload.new_count) || !Number.isSafeInteger(preview.payload.open_count) || !Number.isSafeInteger(preview.payload.pending_count) || !Number.isSafeInteger(preview.payload.validated_in_source_count)) throw new Error("invalid_preview");
+        return respond(200, { rows: body.mode ? preview.payload.rows : parsed.rows, preview: preview.payload, file_sha256: hash });
       }
-      const committed = await call("/rest/v1/rpc/commit_receivables_import_from_gateway", { service: true, data: {
+      const path = body.mode === "open" ? "commit_receivables_open_import_from_gateway" : body.mode === "received" ? "commit_receivables_received_import_from_gateway" : "commit_receivables_import_from_gateway";
+      const committed = await call(`/rest/v1/rpc/${path}`, { service: true, data: {
         p_user_id: auth.payload.id,
         p_session_id: sessionId,
         p_scope: "grupo-consolidado",
@@ -538,11 +643,12 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
         p_file_sha256: hash,
         p_file_base64: body.file_base64,
         p_rows: parsed.rows,
-        p_complete: true,
-        p_previous_import_id: body.previous_import_id
+        p_previous_import_id: body.previous_import_id,
+        ...body.mode ? { p_title_mappings: body.title_mappings ?? {}, p_previous_financial_revision: body.previous_financial_revision } : { p_complete: true },
+        ...body.mode === "received" ? { p_confirm_corrections: body.confirm_corrections ?? false } : {}
       } });
       if (!committed.ok) return upstreamFailure(committed);
-      if (!committed.payload || committed.payload.row_count !== parsed.rows.length || typeof committed.payload.import_id !== "string" || !UUID.test(committed.payload.import_id)) throw new Error("invalid_commit_response");
+      if (!committed.payload || committed.payload.row_count !== parsed.rows.length || typeof committed.payload.import_id !== "string" || !UUID.test(committed.payload.import_id) || body.mode && committed.payload.mode !== body.mode) throw new Error("invalid_commit_response");
       return respond(200, committed.payload);
     } catch {
       log("request_unavailable");
@@ -562,8 +668,19 @@ Deno.serve(createReceivablesGateway({
     if (populated.length !== 1) throw new Error("A c\xF3pia para importa\xE7\xE3o deve conter uma \xFAnica aba com dados.");
     const sheet = populated[0];
     if (sheet.rowCount > 5001 || sheet.columnCount > 100) throw new Error("Planilha excede 5.000 linhas ou 100 colunas.");
+    const identifierColumns = [];
+    sheet.getRow(1).eachCell((cell, column) => {
+      if (isReceivableIdentifierHeader(cell.value)) identifierColumns.push(column);
+    });
     const matrix = [];
-    for (let index = 1; index <= sheet.rowCount; index++) matrix.push(sheet.getRow(index).values.slice(1));
+    for (let index = 1; index <= sheet.rowCount; index++) {
+      const source = sheet.getRow(index), values = source.values.slice(1);
+      if (index > 1) for (const column of identifierColumns) {
+        const cell = source.getCell(column);
+        values[column - 1] = readReceivableIdentifierCell(cell.value, cell.numFmt);
+      }
+      matrix.push(values);
+    }
     return { matrix, excel1904: Boolean(workbook.properties.date1904) };
   },
   log: (event) => console.warn(`receivables-import:${event}`)

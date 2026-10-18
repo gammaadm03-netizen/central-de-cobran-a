@@ -41,6 +41,7 @@ async function setup(page: Page, options: Options = {}) {
     const body = request.postDataJSON(); calls.push({ name, body });
     if (name === 'auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', token_type: 'bearer', expires_in: 3600 } });
     if (url.pathname === '/auth/v1/user') return reply({ id, aud: 'authenticated', role: 'authenticated', email: 'fixture@test.invalid', email_confirmed_at: now.toISOString(), created_at: now.toISOString(), app_metadata: {}, user_metadata: {} });
+    if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (name === 'current_access') return reply(access);
     if (['director_report', 'payables_management_summary', 'payables_forecast', 'payable_payment_summary', 'list_payable_payments', 'get_payables_revision', 'payables_month_status', 'list_payable_month_closures'].includes(name)) return reply({ code: 'PGRST202' }, 404);
     if (name === 'cash_position') return reply({ accounts: [], total_cents: null, reported_accounts: 0, expected_accounts: 17, latest_position_date: null });

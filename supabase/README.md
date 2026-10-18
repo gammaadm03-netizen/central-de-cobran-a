@@ -2,6 +2,12 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
+## Contas a Receber e Cobrança — 0.9.0
+
+Aplicar `dashboard/ativar-recebiveis-operacao.sql`: somente versões faltantes022..025, numa transação, com pré-requisito009 e sem dependência de CP021. A022 restringe carteira/ações aos vencidos;023 resolve parcelas e sincroniza abertos incrementalmente;024 confirma recebimentos reais e mantém versões imutáveis, resumo diário e base de comissões;025 agrega gestão da cobrança sob RLS. Atualizar também a função existente `receivables-import` com o arquivo único gerado.
+
+Valores nominal e recebido permanecem separados. Revisão financeira obrigatória evita concluir uma análise desatualizada; repetição de arquivo retorna sem duplicidade. Vencimento ambíguo exige vínculo explícito. Dados e atribuições existentes são preservados. Comissões usa o efetivamente recebido e ainda não calcula taxa/pagamento. Não alterar gateways Auth/CP para esta entrega. [Guia](../docs/ativacao-operacao-recebiveis.md); [modelos/regras](../docs/contas-receber-fluxo.md).
+
 ## Contas a Pagar — 0.8.0
 
 No projeto existente, executar `dashboard/ativar-contas-pagar.sql`: aplica somente migrations faltantes **012..021** numa transação. A 019 acrescenta número de cheque sem reescrever snapshots antigos; a 020 agrega previsto/realizado semanal por Macro e total mensal pela data real; a 021 oferece previsões incrementais e importação explícita de pagamentos integrais com revisão automática, idempotência e correções auditadas.
@@ -43,6 +49,7 @@ Os passos abaixo são referência da instalação inicial. **Não repeti-los no 
 
 8. Após 012, executar `migrations/013_director_report.sql` uma vez. Não repetir a instalação inicial em projetos já existentes.
 9. Após 013, aplicar 014 a 021 em ordem, ou usar o combinado condicional `dashboard/ativar-contas-pagar.sql`, que ignora versões já registradas. Publicar `payables-import` atualizado.
+10. Aplicar022..025 ou o novo combinado `dashboard/ativar-recebiveis-operacao.sql`, que ignora versões registradas. Publicar `receivables-import` atualizado.
 
 Em projetos já configurados manualmente, registrar as migrations aplicadas antes de usar `supabase db push`. Não rodar o histórico inteiro contra um banco existente sem conferir o histórico. Não executar `db reset` em um projeto com dados.
 

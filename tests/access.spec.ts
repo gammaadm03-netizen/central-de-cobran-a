@@ -37,6 +37,7 @@ async function setup(page:Page,role='gerente_geral',options:{invalid?:boolean,lo
   if(url.pathname==='/rest/v1/rpc/payables_summary')return reply({open_cents:0,overdue_cents:0,period_cents:0,active_count:0,latest_import_at:null});
   if(url.pathname==='/rest/v1/rpc/receivables_summary')return reply({open_cents:0,overdue_cents:0,period_cents:0,active_count:0,pending_count:0,unassigned_count:0,received_period_cents:0,latest_import_at:null,overdue_bps:null,overdue_comlurb_cents:null});
   if(['/rest/v1/payable_titles','/rest/v1/payable_macros','/rest/v1/payable_plan_mappings','/rest/v1/payable_imports','/rest/v1/director_positions'].includes(url.pathname))return route.fulfill({status:200,headers:{...headers,'content-range':'*/0'},json:[]});
+  if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
   if(url.pathname==='/rest/v1/rpc/current_access'){
    accessCalls++;if(accessCalls>1&&options.holdAccess)await options.holdAccess();return reply(data.access);
   }

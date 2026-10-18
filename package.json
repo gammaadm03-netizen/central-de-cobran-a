@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -37,7 +37,13 @@
     "test:payables-operations-sql": "node scripts/bundle-payables-operations.mjs && node scripts/test-payables-operations-sql.mjs",
     "test:payable-cheques-sql": "node scripts/test-payable-cheques-sql.mjs",
     "test:payables-management-sql": "node scripts/test-payables-management-sql.mjs",
-    "test:payable-paid-import-sql": "node scripts/test-payable-paid-import-sql.mjs"
+    "test:payable-paid-import-sql": "node scripts/test-payable-paid-import-sql.mjs",
+    "test:collections-overdue-sql": "node scripts/test-collections-overdue-sql.mjs",
+    "test:receivable-sync-sql": "node scripts/test-receivable-sync-sql.mjs",
+    "test:receivable-received-import-sql": "node scripts/test-receivable-received-import-sql.mjs",
+    "test:collections-management-sql": "node scripts/test-collections-management-sql.mjs",
+    "bundle:receivables-operations": "node scripts/bundle-receivables-operations.mjs",
+    "test:receivables-operations-sql": "node scripts/bundle-receivables-operations.mjs && node scripts/test-receivables-operations-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

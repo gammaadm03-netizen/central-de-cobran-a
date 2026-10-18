@@ -42,6 +42,7 @@ async function setup(page: Page, options: Options = {}) {
     if (name === 'auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', expires_in: 3600, token_type: 'bearer' } });
     if (url.pathname === '/auth/v1/user') return reply({ id, aud: 'authenticated', role: 'authenticated', email: 'synthetic@test.invalid', created_at: now.toISOString(), app_metadata: {}, user_metadata: {} });
     calls.push({ name, body });
+    if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (name === 'current_access') return reply(access);
     if (name === 'payables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (['payable_review_titles', 'payable_financial_titles'].includes(name)) return reply({ code: 'PGRST205' }, 404);

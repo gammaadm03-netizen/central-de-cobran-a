@@ -23,6 +23,7 @@ async function setup(page:Page, options:{ director?:boolean; stale?:boolean; pre
     if(req.method()==='OPTIONS')return route.fulfill({status:204,headers});
     if(url.pathname==='/functions/v1/auth-gateway')return reply({session:{access_token:token,refresh_token:'synthetic-refresh',expires_in:3600,token_type:'bearer'},access});
     if(url.pathname==='/auth/v1/user')return reply(user);
+    if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if(url.pathname==='/rest/v1/rpc/current_access')return reply(access);
     if(url.pathname==='/rest/v1/rpc/payables_management_summary')return reply({code:'PGRST202'},404);
   if(['/rest/v1/payable_review_titles','/rest/v1/payable_financial_titles'].includes(url.pathname))return reply({code:'PGRST205'},404);
