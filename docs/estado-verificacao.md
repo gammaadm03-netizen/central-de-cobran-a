@@ -2,7 +2,7 @@
 
 16/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.7.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.7.1 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -174,3 +174,14 @@ Verificações locais da entrega:
 - Uma consulta HTTP pública ao endereço do site voltou a receber `CONNECT tunnel failed, response 403` do proxy deste ambiente. Git continua sendo o meio de entrega autorizado; esse resultado não diagnostica a disponibilidade do site no navegador do usuário.
 
 A execução remota do SQL, a atualização da função, os totais operacionais reais e o término do deploy da Cloudflare ainda precisam ser confirmados no provedor. O Git publica código, não executa SQL ou funções. A integração Deno hospedada não foi homologada neste ambiente. Nenhum serviço pago ou credencial privada foi solicitado. Faturamento, Margens, Comissões, RH/DP completos, administração Auth completa, backups/restauração e migração conferida do estado operacional antigo permanecem pendentes; esta entrega não declara toda a Central pronta para produção.
+
+
+## Atualização 0.7.1 — modelo do relatório de Contas a Pagar
+
+O usuário apresentou a imagem do relatório e confirmou o nome completo da coluna E como `Emissão: valor do lançamento`, além da presença de `Filial` e `Situação`. O parser CP passou a reconhecer os cabeçalhos ERP exatos de plano CP, conta CC, valor, emissão e vencimento; formatos anteriores continuam aceitos. O horário é validado somente nas colunas ERP de data e convertido para o mesmo dia civil informado, sem deslocamento de fuso. O parser compartilhado usado por CR permanece estrito para data sem horário.
+
+O formulário descreve a correspondência das colunas e mostra uma prévia de até dez títulos derivados pelo servidor antes da conclusão. Essa prévia limita apenas a renderização, não a importação. O banco/conta da fonte fica separado do banco efetivo de pagamento; filial continua explícita, sem inferência. Classificação por Macro, relatório completo, arquivo original privado e confirmação permanecem obrigatórios. Nenhuma regra de pagamento, fechamento, conta ou autorização foi alterada.
+
+Build de produção, **106 testes Node** e **7 testes Chromium de CP** passaram. Foram acrescentados seis cenários de parser e dois de gateway, com CSV/XLSX reais sintéticos, nomes confirmados, centavos, horários, conta/plano separados, coluna obrigatória ausente, duplicidade e recusa integral. A suíte de CR passou sem mudança no parser compartilhado. O gateway também prova leitura de linha oculta do Excel e preservação dos bytes/hash originais. O cenário novo de navegador percorre seleção de XLSX, worker, análise do servidor e prévia; a conclusão fica bloqueada até classificar o plano.
+
+Não há migration nem dados reais novos. O gateway único foi regenerado para publicação na função existente `payables-import`; é necessário atualizar esse código além do frontend 0.7.1. Não é necessário republicar `auth-gateway` ou a função de CR. O arquivo operacional real e seus totais ainda não foram homologados; a função Supabase e o término do deploy não foram verificados remotamente. Guia: [modelo-importacao-contas-pagar.md](modelo-importacao-contas-pagar.md).

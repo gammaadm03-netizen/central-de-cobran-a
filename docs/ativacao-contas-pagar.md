@@ -2,12 +2,14 @@
 
 Esta atualização mantém o endereço da Central, os usuários, os saldos, os títulos e seus históricos. Acrescenta consulta mensal por macro, pagamentos integrais com valor/data/conta efetivos, revisão por título, fechamento mensal versionado, previsões de oito semanas e Excel detalhado. O envio de código pelo Git não executa SQL nem publica funções no Supabase.
 
+O formato de relatório atualizado está em [modelo-importacao-contas-pagar.md](modelo-importacao-contas-pagar.md). A versão 0.7.1 usa o mesmo SQL e a função de importação atualizada.
+
 ## Ativar no projeto existente
 
 1. Abra o [SQL de ativação de Contas a Pagar](https://github.com/gammaadm03-netizen/central-de-cobran-a/blob/main/supabase/dashboard/ativar-contas-pagar.sql), clique em **Raw** e copie todo o conteúdo.
 2. Abra o [SQL Editor do projeto](https://supabase.com/dashboard/project/sjimddcqgrsauzvffcol/sql/new), cole em uma nova consulta e clique em **Run**. O arquivo confere as migrations já aplicadas e instala somente as que faltam entre 012 e 018, em uma transação. As atualizações 012/013 são dependências para as 17 contas e os indicadores consolidados. Não repetir a instalação inicial, remover tabelas ou executar reset. Se houver erro, preservar a mensagem; nenhuma aplicação parcial deve permanecer.
 3. Em **Edge Functions**, abra a função existente **payables-import → Code**. Substitua todo o conteúdo de **index.ts** pelo [arquivo atualizado da função](https://github.com/gammaadm03-netizen/central-de-cobran-a/blob/main/supabase/dashboard/payables-import.ts) e publique a atualização. Não criar outra função com nome automático. Manter **Verify JWT with legacy secret** desativado: o código valida o token, a sessão aprovada e a permissão oficial no servidor. Preservar `ALLOWED_ORIGINS` e as funções de login/CR.
-4. Aguarde a publicação da branch `main` na Cloudflare. Abra [a Central](https://central-de-cobran-a.pages.dev), atualize com **Ctrl + Shift + R** e confira **Versão 0.7.0** no rodapé.
+4. Aguarde a publicação da branch `main` na Cloudflare. Abra [a Central](https://central-de-cobran-a.pages.dev), atualize com **Ctrl + Shift + R** e confira **Versão 0.7.1** no rodapé.
 
 O arquivo combinado pode ser executado novamente: migrations registradas são ignoradas. Isso não equivale a repetir os scripts individuais anteriores. Uma instalação parcial sem registro de migration exige análise; o script não presume que pode substituir estruturas existentes. Nenhum serviço pago, nova chave privada ou senha é necessário.
 

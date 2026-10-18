@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.7.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque é informado manualmente em Importar Bases, conforme a orientação mais recente do usuário. A operação financeira completa ainda depende dos módulos pendentes e de homologação remota.
+Versão de desenvolvimento **0.7.1**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque é informado manualmente em Importar Bases, conforme a orientação mais recente do usuário. A operação financeira completa ainda depende dos módulos pendentes e de homologação remota.
+
+## Modelo do relatório CP — 0.7.1
+
+Importação reconhece o modelo confirmado com `Plano cp - Conta: nome`, `Plano cc - Conta: nome`, `Emissão: valor do lançamento`, `Emissão: data`, `Vencimento: data`, `Filial` e `Situação`. As datas ERP aceitam horário válido sem alterar o dia civil. A análise mostra prévia dos títulos antes da classificação e conclusão. Atualizar a função existente `payables-import` e o site; esta correção não exige nova migration. Detalhes: [modelo de importação](docs/modelo-importacao-contas-pagar.md).
 
 ## Contas a Pagar — 0.7.0
 

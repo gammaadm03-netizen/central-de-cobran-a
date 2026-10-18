@@ -16,6 +16,7 @@ const SAFE_MESSAGES = new Set([
   'Fórmula não permitida. Salve uma cópia apenas com valores.',
   'Conteúdo interpretável como fórmula. Salve somente valores.',
   'Célula com conteúdo não suportado. Use somente valores.', 'Campo obrigatório vazio.',
+  'Data Excel inválida.', 'Horário inválido. Use hh:mm ou hh:mm:ss, entre 00:00:00 e 23:59:59.',
   'Data inválida.', 'A data contém horário. Informe somente a data civil.', 'Data Excel inválida ou contém horário.',
   'Use dd/mm/aaaa ou aaaa-mm-dd; datas abreviadas são ambíguas.', 'Ano fora do intervalo de 1900 a 2199.', 'Data inexistente.',
   'Informe um valor numérico positivo.', 'O valor deve ter no máximo duas casas decimais.', 'Valor obrigatório.',

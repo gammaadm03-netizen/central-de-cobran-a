@@ -213,3 +213,36 @@ test('CORS matches exact origins and only allows approved preflight headers and 
   const method = await app.handle(new Request(BASE, { method: 'GET', headers: { Origin: ORIGIN } }));
   assert.equal(method.status, 405);
 });
+
+
+test('ERP column names preserve account, cost plan and civil dates when the original XLSX includes hours', async () => {
+  const workbook = new ExcelJS.Workbook(); const sheet = workbook.addWorksheet('CP');
+  sheet.addRow(['Lançamento', 'Histórico', 'Plano cp - Conta: nome', 'Plano cc - Conta: nome', 'Emissão: valor do lançamento', 'Emissão: data', 'Vencimento: data', 'Filial', 'Situação']);
+  sheet.addRow(['ERP-TESTE-1', 'Fornecedor exclusivamente sintético', 'PLANO DO TESTE', 'CONTA BANCÁRIA DO TESTE', 123.45, new Date('2026-10-01T15:03:00Z'), new Date('2026-10-17T00:00:00Z'), 'FILIAL TESTE', 'CHEQUE']);
+  sheet.addRow(['ERP-TESTE-2', 'Outro fornecedor sintético', 'PLANO DO TESTE', 'OUTRA CONTA SINTÉTICA', 50, new Date('2026-10-02T23:59:00Z'), new Date('2026-10-18T00:00:00Z'), 'OUTRA FILIAL TESTE', 'ABERTO']);
+  sheet.getRow(3).hidden = true;
+  for (const address of ['F2', 'G2', 'F3', 'G3']) sheet.getCell(address).numFmt = 'dd/mm/yyyy hh:mm';
+  const bytes = await workbook.xlsx.writeBuffer(); const app = setup();
+  const response = await app.send(body('commit', { file_name: 'modelo-erp.xlsx', file_base64: encode(bytes), mappings: { 'PLANO DO TESTE': 'FIXO' } }));
+  assert.equal(response.status, 200);
+  assert.equal(app.calls.at(-1).data.p_rows.length, 2);
+  assert.equal(app.calls.at(-1).data.p_rows[1].branch, 'OUTRA FILIAL TESTE');
+  assert.equal(app.calls.at(-1).data.p_rows[1].issued_on, '2026-10-02');
+  const derived = app.calls.at(-1).data.p_rows[0];
+  assert.deepEqual(derived, { entry_number: 'ERP-TESTE-1', description: 'Fornecedor exclusivamente sintético', plan: 'PLANO DO TESTE', bank_account: 'CONTA BANCÁRIA DO TESTE', amount_cents: 12345, issued_on: '2026-10-01', due_date: '2026-10-17', branch: 'FILIAL TESTE', source_status: 'CHEQUE' });
+  assert.equal(app.calls.at(-1).data.p_file_base64, encode(bytes));
+  assert.equal(app.calls.at(-1).data.p_file_sha256, createHash('sha256').update(bytes).digest('hex'));
+});
+
+test('malformed ERP timestamps and missing branch reject all rows before a financial RPC', async () => {
+  const headings = 'Lançamento;Histórico;Plano cp - Conta: nome;Plano cc - Conta: nome;Emissão: valor do lançamento;Emissão: data;Vencimento: data;Filial;Situação';
+  const valid = 'ERP-TESTE-1;Fornecedor sintético;PLANO;CONTA TESTE;123,45;01/10/2026 15:03;17/10/2026 00:00;FILIAL TESTE;ABERTO';
+  for (const invalid of [valid.replace('15:03', '24:03'), valid.replace('17/10/2026', '31/02/2026')]) {
+    const app = setup(); const response = await app.send(body('commit', { file_base64: encode(headings + '\r\n' + valid + '\r\n' + invalid.replace('ERP-TESTE-1', 'ERP-TESTE-2')) }));
+    assert.equal(response.status, 422); const payload = await response.json();
+    assert.equal(payload.errors[0].line, 3); assert(payload.errors[0].problem.includes('inválido') || payload.errors[0].problem.includes('inexistente')); assert.equal(app.calls.length, 2);
+  }
+  const app = setup(); const noBranch = headings.replace(';Filial', '') + '\r\n' + valid.replace(';FILIAL TESTE', '');
+  const response = await app.send(body('commit', { file_base64: encode(noBranch) }));
+  assert.equal(response.status, 422); assert.equal((await response.json()).errors.find(error => error.column === 'Filial').problem, 'Coluna obrigatória ausente.'); assert.equal(app.calls.length, 2);
+});

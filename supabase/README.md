@@ -2,6 +2,10 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
+## Formato do relatório CP — 0.7.1
+
+O parser aceita o modelo ERP confirmado, incluindo `Plano cp - Conta: nome`, `Plano cc - Conta: nome`, `Emissão: valor do lançamento` e datas ERP com horário válido. Atualizar somente o código da função existente `payables-import` com `dashboard/payables-import.ts`, além do frontend 0.7.1. Nenhuma nova migration. Procedimento e mapeamento: [modelo do relatório CP](../docs/modelo-importacao-contas-pagar.md).
+
 ## Contas a Pagar — 0.7.0
 
 No projeto existente, usar `dashboard/ativar-contas-pagar.sql`. O script exige a base já instalada e aplica somente as migrations faltantes de 012 a 018 numa transação, sem recriar dados. Inclui previsões, ledger imutável de pagamentos/estornos, identificação estável por filial+número, revisão exclusiva de títulos totalmente pagos, correções auditadas e fechamento mensal com snapshots imutáveis. Valores realizados seguem data efetiva; reclassificações preservam o macro original e registram a alocação corrigida.

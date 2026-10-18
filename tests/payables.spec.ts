@@ -77,7 +77,7 @@ test('XLSX real com data Excel e valor numérico passa análise isolada e manté
   const bytes=await workbook.xlsx.writeBuffer();await page.getByRole('navigation').getByRole('button',{name:'Importar Bases',exact:true}).click();
   await page.getByLabel('Relatório completo de Contas a Pagar',{exact:true}).setInputFiles({name:'cp.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:Buffer.from(bytes)});
   await page.getByRole('checkbox').check();await page.getByRole('button',{name:'Analisar arquivo',exact:true}).click();
-  await expect(page.getByRole('heading',{name:'Conferência antes da importação'})).toBeVisible();await expect(page.getByRole('cell',{name:'R$ 1.234,56',exact:true})).toBeVisible();expect(seen.previews).toHaveLength(1);
+  await expect(page.getByRole('heading',{name:'Conferência antes da importação'})).toBeVisible();await expect(page.getByRole('table',{name:/Prévia dos títulos/}).getByRole('cell',{name:'R$ 1.234,56',exact:true})).toBeVisible();expect(seen.previews).toHaveLength(1);
   expect(await page.evaluate(()=>({local:Object.keys(localStorage),session:Object.keys(sessionStorage)}))).toEqual({local:[],session:[]});
 });
 test('base alterada desde preview exige reanálise e não mostra sucesso',async({page})=>{
@@ -96,4 +96,28 @@ test('moeda mantém centavo extremo e CSV exportado protege fórmulas sem perder
   await expect(page.getByRole('cell',{name:'R$ 90.071.992.547.409,91',exact:true})).toBeVisible();
   const pending=page.waitForEvent('download');await page.getByRole('button',{name:'Baixar CSV dos filtros'}).click();const download=await pending;const path=await download.path();expect(path).not.toBeNull();
   const contents=await readFile(path!,'utf8');expect(contents).toContain('"90071992547409,91"');expect(contents).toContain('"\'=SYNTHETIC()"');
+});
+
+
+test('ERP XLSX maps account separately from cost plan and previews the original civil dates before classification', async ({ page }) => {
+  const seen = await setup(page); const workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet('CP');
+  sheet.addRow(['Lançamento', 'Histórico', 'Plano cp - Conta: nome', 'Plano cc - Conta: nome', 'Emissão: valor do lançamento', 'Emissão: data', 'Vencimento: data', 'Filial', 'Situação']);
+  sheet.addRow(['ERP-TESTE-1', 'Fornecedor sintético do modelo', 'PLANO ERP SINTÉTICO', 'BANCO CONTA SINTÉTICA', 123.45, new Date('2026-10-01T15:03:00Z'), new Date('2026-10-17T00:00:00Z'), 'FILIAL SINTÉTICA', 'CHEQUE']);
+  sheet.getCell('F2').numFmt = 'dd/mm/yyyy hh:mm'; sheet.getCell('G2').numFmt = 'dd/mm/yyyy hh:mm';
+  const bytes = await workbook.xlsx.writeBuffer();
+  await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click();
+  await page.getByLabel('Relatório completo de Contas a Pagar', { exact: true }).setInputFiles({ name: 'modelo-erp.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from(bytes) });
+  await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Analisar arquivo', exact: true }).click();
+  const preview = page.getByRole('table', { name: /Prévia dos títulos/ });
+  await expect(preview.getByRole('cell', { name: 'BANCO CONTA SINTÉTICA', exact: true })).toBeVisible();
+  await expect(preview.getByRole('cell', { name: 'PLANO ERP SINTÉTICO', exact: true })).toBeVisible();
+  await expect(preview.getByRole('cell', { name: '01/10/2026', exact: true })).toBeVisible();
+  await expect(preview.getByRole('cell', { name: '17/10/2026', exact: true })).toBeVisible();
+  await expect(preview.getByRole('cell', { name: 'R$ 123,45', exact: true })).toBeVisible();
+  await expect(preview.getByRole('cell', { name: 'CHEQUE', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Concluir importação completa' })).toBeDisabled();
+  await page.getByLabel('Macro para PLANO ERP SINTÉTICO').selectOption('FIXO');
+  await expect(page.getByRole('button', { name: 'Concluir importação completa' })).toBeEnabled();
+  expect(seen.previews).toHaveLength(1); expect(seen.commits).toHaveLength(0);
+  expect(seen.previews[0]).not.toHaveProperty('rows');
 });

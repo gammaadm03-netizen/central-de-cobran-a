@@ -6,15 +6,18 @@ const normalize = value => String(value ?? '').normalize('NFD').replace(/\p{M}/g
 const ALIASES = {
   entry_number: ['LANCAMENTO', 'NLANCAMENTO', 'NOLANCAMENTO', 'NUMEROLANCAMENTO', 'NUMERODOLANCAMENTO', 'NUMEROLANC', 'NROLANCAMENTO'],
   description: ['HISTORICO', 'DESCRICAO', 'HISTORICOFAVORECIDO', 'FAVORECIDO'],
-  due_date: ['VENCIMENTO', 'DATAVENCIMENTO', 'DTVENCIMENTO'],
-  amount_cents: ['VALOR', 'VALORTITULO', 'VALORORIGINAL'],
-  plan: ['PLANODECONTAS', 'PLANOCONTAS'],
+  due_date: ['VENCIMENTO', 'DATAVENCIMENTO', 'DTVENCIMENTO', 'VENCIMENTODATA'],
+  amount_cents: ['VALOR', 'VALORTITULO', 'VALORORIGINAL', 'EMISSAOVALORDOLANCAMENTO'],
+  plan: ['PLANODECONTAS', 'PLANOCONTAS', 'PLANOCPCONTANOME'],
   branch: ['FILIAL', 'CODFILIAL'],
-  bank_account: ['BANCO', 'CONTA', 'BANCOCONTA'],
-  issued_on: ['EMISSAO', 'DATAEMISSAO', 'DTEMISSAO'],
+  bank_account: ['BANCO', 'CONTA', 'BANCOCONTA', 'PLANOCCCONTANOME'],
+  issued_on: ['EMISSAO', 'DATAEMISSAO', 'DTEMISSAO', 'EMISSAODATA'],
   source_status: ['STATUS', 'SITUACAO'],
 };
 const headerMap = new Map(Object.entries(ALIASES).flatMap(([key, aliases]) => aliases.map(alias => [alias, key])));
+// This ERP exports civil dates with a clock component. Only these explicit CP
+// columns permit times; the shared date-only parser used by CR remains strict.
+const ERP_TIMESTAMP_HEADERS = new Set(['EMISSAODATA', 'VENCIMENTODATA']);
 
 // Date-only values stay civil dates. No UTC/local conversion is applied to user input.
 export function parseCivilDate(value, excel1904 = false) {
@@ -34,6 +37,23 @@ export function parseCivilDate(value, excel1904 = false) {
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
   if (!br && !iso) throw new Error('Use dd/mm/aaaa ou aaaa-mm-dd; datas abreviadas são ambíguas.');
   return br ? civil(+br[3], +br[2], +br[1]) : civil(+iso[1], +iso[2], +iso[3]);
+}
+function parsePayableErpDate(value, excel1904) {
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) throw new Error('Data inválida.');
+    // ExcelJS represents an Excel serial as UTC fields. Preserve those fields,
+    // including dates close to midnight, rather than converting to a time zone.
+    return civil(value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate());
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value < 1 || value > 2958465) throw new Error('Data Excel inválida.');
+    return parseCivilDate(Math.floor(value), excel1904);
+  }
+  const text = String(value ?? '').trim();
+  const timestamp = /^(\d{2}\/\d{2}\/\d{4}) +(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text);
+  if (!timestamp) return parseCivilDate(value, excel1904);
+  if (+timestamp[2] > 23 || +timestamp[3] > 59 || +(timestamp[4] ?? 0) > 59) throw new Error('Horário inválido. Use hh:mm ou hh:mm:ss, entre 00:00:00 e 23:59:59.');
+  return parseCivilDate(timestamp[1], excel1904);
 }
 function civil(year, month, day) {
   if (year < 1900 || year > 2199) throw new Error('Ano fora do intervalo de 1900 a 2199.');
@@ -159,10 +179,14 @@ function scalar(value) {
 export function validatePayableRows(matrix, { excel1904 = false } = {}) {
   const errors = [], rows = [];
   if (!matrix.length) return { rows, errors: [{ line: 1, column: 'Arquivo', problem: 'Arquivo vazio.', correction: 'Exporte o relatório completo com os cabeçalhos.' }] };
-  const columns = new Map();
+  const columns = new Map(), timestampColumns = new Set();
   matrix[0].forEach((value, index) => {
     let key;
-    try { key = headerMap.get(normalize(scalar(value))); } catch { errors.push({ line: 1, column: 'Cabeçalho', problem: 'Cabeçalho inválido.', correction: 'Use nomes de colunas sem fórmulas.' }); return; }
+    try {
+      const normalizedHeader = normalize(scalar(value));
+      key = headerMap.get(normalizedHeader);
+      if (ERP_TIMESTAMP_HEADERS.has(normalizedHeader)) timestampColumns.add(index);
+    } catch { errors.push({ line: 1, column: 'Cabeçalho', problem: 'Cabeçalho inválido.', correction: 'Use nomes de colunas sem fórmulas.' }); return; }
     if (key && columns.has(key)) errors.push({ line: 1, column: COLUMN_LABELS[key], problem: 'Coluna duplicada ou ambígua.', correction: 'Mantenha uma única coluna para este campo.' });
     else if (key) columns.set(key, index);
   });
@@ -182,8 +206,8 @@ export function validatePayableRows(matrix, { excel1904 = false } = {}) {
       try {
         const value = scalar(source[column]);
         if (key === 'amount_cents') row[key] = parseMoneyCents(value);
-        else if (key === 'due_date') row[key] = parseCivilDate(value, excel1904);
-        else if (key === 'issued_on') row[key] = String(value).trim() ? parseCivilDate(value, excel1904) : null;
+        else if (key === 'due_date') row[key] = timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904);
+        else if (key === 'issued_on') row[key] = String(value).trim() ? (timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904)) : null;
         else {
           row[key] = String(value ?? '').trim().replace(/\s+/g, ' ');
           if (REQUIRED.includes(key) && !row[key]) throw new Error('Campo obrigatório vazio.');

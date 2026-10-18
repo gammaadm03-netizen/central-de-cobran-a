@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.7.0
+# Publicação e ativação — 0.7.1
+
+Para a correção atual **0.7.1**, seguir [modelo-importacao-contas-pagar.md](modelo-importacao-contas-pagar.md): atualizar a função existente `payables-import` e aguardar o site 0.7.1. Reconhece os cabeçalhos confirmados do relatório e datas com horário; não exige novo SQL. A ativação 0.7.0 abaixo continua necessária apenas se ainda não foi concluída.
 
 Para a atualização **0.7.0**, seguir [ativacao-contas-pagar.md](ativacao-contas-pagar.md). Executar o novo combinado condicional de CP (aplica somente 012..018 que faltarem), atualizar a função existente `payables-import` e aguardar a publicação da branch `main`. Conferir a versão 0.7.0 no mesmo endereço. Não repetir a instalação inicial ou publicar outra Central. Os procedimentos de versões anteriores abaixo permanecem como histórico.
 
