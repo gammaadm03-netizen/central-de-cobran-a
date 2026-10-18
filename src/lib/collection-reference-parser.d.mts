@@ -1,0 +1,17 @@
+export type CollectionReferenceMode = 'contacts' | 'descriptions';
+export type CollectionReferenceProblem = { source_line: number; code: string; field: string; message: string };
+export type CollectionReferenceContact = { source_line: number; client_name: string; client_document: null; emails: string[]; phones: string[]; notes: null };
+export type CollectionReferenceDescription = { source_line: number; document: string; branch: string; client_name: string; client_document: null; description: string; contract: string | null };
+export type CollectionReferenceStats = { source_rows: number; nonblank_rows: number; blank_rows: number; duplicate_rows: number; emitted_rows: number; chunk_count: number; problem_count: number; warning_count: number; quarantined_rows: number; source_line_max: number; header_source_line: number; extra_column_rows: number; extra_cells: number; shared_string_bytes: number };
+export type CollectionReferenceProgress = CollectionReferenceStats & { phase: 'rows' | 'complete' };
+export type ReferenceCsvChunk = { sequence: number; csv: Uint8Array<ArrayBuffer>; sha256: string; rowCount: number; firstSourceLine: number; lastSourceLine: number };
+export type CollectionReferenceChunk = ReferenceCsvChunk & { runId: string };
+export type ReferenceStreamOptions = { signal?: AbortSignal; onChunk: (chunk: ReferenceCsvChunk) => Promise<void>; onProgress?: (progress: CollectionReferenceProgress) => void };
+export const REFERENCE_LIMITS: Readonly<{ fileBytes: number; expandedBytes: number; sharedStringBytes: number; rows: number; chunkRows: number; chunkBytes: number; entries: number; cellBytes: number }>;
+export const REFERENCE_HEADERS: Readonly<Record<CollectionReferenceMode, string[]>>;
+export function referenceCsvRow(cells: unknown[]): string;
+export function safeReferenceExportCell(value: unknown): string;
+export function parseReferenceCsv(input: Uint8Array | string, mode: CollectionReferenceMode): { rows: (CollectionReferenceContact | CollectionReferenceDescription)[]; problems: CollectionReferenceProblem[]; stats: { rows: number; problem_count: number; warning_count: number; quarantined_rows: number } };
+export function inspectReferenceZip(bytes: Uint8Array): Map<string, { name: string; method: number; crc: number; compressed: number; uncompressed: number; dataStart: number }>;
+export function referenceSha256(bytes: Uint8Array<ArrayBuffer>): Promise<string>;
+export function streamReferenceWorkbook(bytes: Uint8Array<ArrayBuffer>, mode: CollectionReferenceMode, options: ReferenceStreamOptions): Promise<{ sourceSha256: string; stats: CollectionReferenceStats }>;

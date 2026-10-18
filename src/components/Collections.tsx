@@ -3,6 +3,7 @@ import CollectionOverview, { type CollectionSelection } from './CollectionOvervi
 import CollectionDesk from './CollectionDesk';
 import CollectionValidation from './CollectionValidation';
 import CollectionWorkTime from './CollectionWorkTime';
+import CollectionContactsReport from './CollectionContactsReport';
 import '../collection-central.css';
 
 const tabs = [
@@ -10,6 +11,7 @@ const tabs = [
   { id: 'titles', label: 'Títulos' },
   { id: 'validation', label: 'Validação financeira' },
   { id: 'time', label: 'Tempo de trabalho' },
+  { id: 'contacts', label: 'Contatos' },
 ] as const;
 type Tab = typeof tabs[number]['id'];
 
@@ -20,6 +22,7 @@ export default function Collections({ canWrite, canManage, canReadFinance = fals
   const [active, setActive] = useState<Tab>('overview');
   const [visited, setVisited] = useState<Set<Tab>>(() => new Set(['overview']));
   const [revision, setRevision] = useState(0);
+  const [contactsRevision, setContactsRevision] = useState(0);
   const [selection, setSelection] = useState<(CollectionSelection & { requestId: number }) | undefined>();
   const requestId = useRef(0), tabButtons = useRef<(HTMLButtonElement | null)[]>([]);
   const unbound = isCollector && !collectorId;
@@ -43,9 +46,10 @@ export default function Collections({ canWrite, canManage, canReadFinance = fals
     {tabs.map(tab => <div key={tab.id} className="collections-central-panel" role="tabpanel" id={`collections-panel-${tab.id}`} aria-labelledby={`collections-tab-${tab.id}`} hidden={active !== tab.id}>
       {!unbound && visited.has(tab.id) && <>
         {tab.id === 'overview' && <CollectionOverview isCollector={isCollector} collectorId={collectorId} refreshKey={revision} onDetails={details} onRefresh={changed} />}
-        {tab.id === 'titles' && <CollectionDesk canWrite={canWrite} canManage={canManage} collectorId={collectorId} isCollector={isCollector} selection={selection} refreshKey={revision} onChange={changed} onFinish={paid => { if (paid) show('validation'); }} />}
+        {tab.id === 'titles' && <CollectionDesk canWrite={canWrite} canManage={canManage} collectorId={collectorId} isCollector={isCollector} selection={selection} refreshKey={revision} contactsRefreshKey={contactsRevision} onContactsChange={() => setContactsRevision(value => value + 1)} onChange={changed} onFinish={paid => { if (paid) show('validation'); }} />}
         {tab.id === 'validation' && <CollectionValidation canRead canReadFinance={canReadFinance} canWrite={canManage} canValidate={canValidate} isCollector={isCollector} collectorId={collectorId} refreshKey={revision} onChange={changed} />}
         {tab.id === 'time' && <CollectionWorkTime isCollector={isCollector} collectorId={collectorId} refreshKey={revision} />}
+        {tab.id === 'contacts' && <CollectionContactsReport isCollector={isCollector} collectorId={collectorId} refreshKey={revision + contactsRevision} />}
       </>}
     </div>)}
   </div>;

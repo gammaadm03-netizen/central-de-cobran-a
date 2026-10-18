@@ -2,6 +2,12 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
+## Contatos e descrições de Cobrança — 0.11.0
+
+O combinado atual `dashboard/ativar-recebiveis-operacao.sql` inclui **022..028**, pulando versões registradas. A 027 acrescenta contatos compartilhados, alterações auditadas, relatórios e contexto autorizado exclusivamente para títulos vencidos ativos da Cobrança. A 028 acrescenta importações de apoio com original no bucket privado `collection-reference-files`, CSVs privados validados no servidor, prévia e publicação transacional. Não altera identidades financeiras, valores ou recebimentos; contatos mantidos manualmente são preservados em novas importações.
+
+Publicar também a nova função **collection-reference-import** a partir de `dashboard/collection-reference-import.ts`, com verificação JWT legada desligada e autorização própria no código, e o frontend 0.11.0. Manter as funções anteriores. Descrições não aparecem em Contas a Receber, Comissões ou quitados. [Guia atual](../docs/cobranca-contatos-descricoes.md).
+
 ## Central de Cobrança operacional — 0.10.0
 
 O combinado `dashboard/ativar-recebiveis-operacao.sql` foi ampliado para **022..026**, aplicando somente versões faltantes. A nova **026** mantém estado operacional separado do financeiro, intervalos de trabalho com horários do servidor, comandos auditados e consultas autorizadas para as quatro abas da central. Não reescreve as migrations 001..025, recibos ou bases existentes. Não exige outra Edge Function; `receivables-import` continua sendo a versão da 0.9.0. [Guia atual](../docs/central-cobranca-operacao.md).

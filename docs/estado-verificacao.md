@@ -2,7 +2,7 @@
 
 18/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.10.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.11.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -251,3 +251,42 @@ Verificações locais desta entrega:
 - As migrations **001..025 permanecem inalteradas**. A 026 acrescenta somente operação/tempo; não muda regras financeiras, taxas de comissão, senhas, saldos ou recibos. Nenhuma dependência nova; lockfile altera somente a versão.
 
 Ativação remota ainda necessária: executar o combinado atualizado **ativar-recebiveis-operacao.sql** e aguardar o frontend **0.10.0**. Quem já instalou 0.9 recebe somente a nova 026; a função `receivables-import` permanece a mesma. Guia: [central-cobranca-operacao.md](central-cobranca-operacao.md). Não foi executado SQL no provedor nem verificado o término do deploy por este agente. Não há novos dados operacionais de demonstração ou tempos históricos presumidos. Permanecem as homologações remotas e os demais módulos/requisitos de produção ainda pendentes.
+
+## Atualização 0.11.0 — contatos e descrições exclusivos da Cobrança
+
+A orientação final do usuário restringe as descrições ao atendimento da Cobrança. A base de apoio pode conter abertos vencidos e a vencer, mas contexto e RLS só permitem consultar referências de títulos ativos estritamente vencidos na carteira autorizada, inclusive para a Diretoria. Contas a Receber e Comissões não receberam esses campos. Notas/filiais iguais com clientes diferentes não são unidas.
+
+Implementados: contatos compartilhados por órgão, múltiplos canais, ausências explícitas, revisão manual, auditoria e diretório com exportação completa dos filtros. A identidade vem do título autorizado; alterações humanas, inclusive campos apagados, são preservadas nas importações seguintes. A lista inicial também cadastra contatos válidos sem dívida atual para uso por títulos futuros, mantendo-os invisíveis enquanto não houver cobrança autorizada. Nomes que possam corresponder a identidades com CNPJ ficam pendentes.
+
+Importar Bases recebe uma área autorizada para os dois arquivos de apoio. O original de até 16 MiB vai diretamente ao Storage privado; worker independente lê XLSX em streaming e prepara CSVs de até 500 linhas/256 KiB. O gateway valida a sessão antes do conteúdo, confere bytes/hash do original, interpreta os CSVs no servidor e preserva os artefatos privados. Essa evidência não equivale a reinterpretar o Excel original inteiro no Edge. A confirmação publica tudo em uma transação; repetições preservam o mesmo protocolo. Nenhuma importação de apoio cria ou altera dívidas, valores, recebimentos, responsáveis ou tempos.
+
+Verificação local desta entrega:
+
+- **196 testes Node aprovados**, incluindo 19 do parser e 26 do gateway dedicado, além das verificações anteriores.
+- **33 cenários SQL novos aprovados** nas migrations 027/028, com RLS, sessão, propriedade dos arquivos, original obrigatório, lotes e linhas canônicas idempotentes, revisões, rollback, variantes, limite agregado de canais, proteção humana e herança dos contatos por títulos posteriores.
+- **17 cenários do ativador combinado** verificam instalação incremental, preservação de dados/casos/cronômetros, falha 028 com rollback das políticas/bucket e repetição sem refazer cadastros ou proveniência.
+- **327 cenários distintos de navegador aprovados.** A execução integrada aprovou 325; dois testes antigos interromperam por falta de resposta simulada para a nova consulta opcional. Após acrescentar a resposta de banco anterior, os 22 cenários de recebíveis foram repetidos e aprovados. As 32 verificações novas cobrem atendimento, permissões, rascunhos, revisão concorrente, CSV, arquivo superior a 2 MiB/5 mil linhas, retomada e confirmação incerta.
+- TypeScript e build de produção aprovados. O worker de apoio possui 16,68 kB; não carrega ExcelJS. Asset principal: `index-CMjI3Xbz.js`.
+- Os dois anexos reais foram processados somente nesta máquina, com original e dados fora do Git. Também foi usado PostgreSQL local descartável para medir o caminho completo sobre a base grande, sem chamadas aos provedores nem persistência de dados reais no repositório. Resultados finais de capacidade e hashes constam abaixo.
+
+O combinado condicional agora inclui 022..028; versões existentes permanecem intactas. Em uma base 0.10.0, instala somente 027/028. A função nova é **collection-reference-import**. O [guia de ativação](cobranca-contatos-descricoes.md) separa SQL Editor, Edge Functions e importação no sistema.
+
+A verificação usa Auth/Storage simulados e PostgreSQL PGlite local. Não comprova desempenho do plano hospedado nem ativação remota. Publicação no Git não aplica SQL ou publica funções no Supabase. Os arquivos reais ainda precisam de importação confirmada na Central após a ativação; nenhum dado do chat foi carregado em produção pelo agente.
+
+Capacidade medida com os dois anexos, em PGlite descartável e sem tráfego remoto:
+
+| Operação | Descrições (~64 mil registros únicos, 128 lotes) | Contatos (9 lotes) |
+| --- | ---: | ---: |
+| Leitura e preparação dos lotes | 29,22 s | — |
+| Análise oficial | 3,55 s | 0,31 s |
+| Publicação transacional | 3,24 s | 0,63 s |
+| Nova análise | 3,13 s | 0,27 s |
+
+O tempo de preparação dos contatos não foi incluído nesta comparação final. A otimização recalcula o vínculo atual e grava somente classificações alteradas; não usa um resultado antigo para dispensar a conferência financeira ou a proteção manual. A análise anterior regravava todos os registros e levava cerca de 9–10 s. O experimento local demonstra capacidade da implementação, sem garantir os mesmos tempos no plano Supabase. Nenhuma dívida/revisão financeira foi alterada pela importação de apoio.
+
+Hashes SHA256 dos artefatos finais:
+
+- Migration 027: `9f8492031c86d95c439deb986499cd0595e1c1903a3975cc50c29b6df410a709`.
+- Migration 028: `76b86bd4c2a086fc56a7c3a4405f214dd0d862e9ca9c6d72526e4ca384b098d0`.
+- Combinado 022..028: `4279adc5a03be12d24a9848f7e76df1ba2a3b13678637e2657c285b3be2c82cf`.
+- Gateway único: `827d45692ac9f455382ee339dd2e37b509200b735f898843e8c6cf15e0e4ac97`.

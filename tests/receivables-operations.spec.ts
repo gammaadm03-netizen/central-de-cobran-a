@@ -50,6 +50,8 @@ async function setup(page: Page, options: Options = {}) {
     if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (url.pathname === '/rest/v1/rpc/collections_overdue_summary') return reply({ code: 'PGRST202' }, 404);
     if (url.pathname === '/rest/v1/rpc/current_access') return reply(access);
+    // Optional context is unavailable on the previous database used by this fixture.
+    if (url.pathname === '/rest/v1/rpc/collection_customer_context') return reply({ code: 'PGRST202' }, 404);
     if (url.pathname === '/rest/v1/rpc/get_receivables_sync_revision') {
       seen.exportSnapshots++; return reply({ import_id: null, financial_revision: options.exportChange && seen.exportSnapshots > 1 ? 'revision-8' : 'revision-7' });
     }

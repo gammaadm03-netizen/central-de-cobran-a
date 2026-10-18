@@ -3,17 +3,18 @@ import { supabase } from '../lib/supabase';
 import { dateLabel, formatCents } from '../lib/payables';
 import { addCivilDays } from '../lib/financial-dates';
 import type { CollectionSelection } from './CollectionOverview';
+import CollectionCustomerContext, { type CollectionContactGuard } from './CollectionCustomerContext';
 import { COLLECTION_BANDS, COLLECTION_SORTS, COLLECTION_STATUSES, FINANCIAL_STATUSES, INITIAL_COLLECTION_FILTERS, collectionDateTime, collectionServerDay, collectionDate, collectionDraft, collectionDraftKey, collectionError, downloadCollectionCsv, readCollectionDetail, readCollectionWorkbench, validCollectionTimer, workTime, type CollectionAgent, type CollectionDetail, type CollectionDraft, type CollectionFilters, type CollectionRow, type CollectionSaveResult, type CollectionTimer, type CollectionWorkbench } from '../lib/collection-workbench';
 import '../collection-workbench.css';
 
-interface Props { canWrite: boolean; canManage: boolean; collectorId: string | null; isCollector: boolean; selection?: CollectionSelection & { requestId: number }; onChange?: () => void; onFinish?: (paid: boolean) => void; refreshKey?: number }
+interface Props { canWrite: boolean; canManage: boolean; collectorId: string | null; isCollector: boolean; selection?: CollectionSelection & { requestId: number }; onChange?: () => void; onFinish?: (paid: boolean) => void; refreshKey?: number; onContactsChange?: () => void; contactsRefreshKey?: number }
 interface FrozenRequest { rpc: 'save_collection_case' | 'collection_work_action'; body: Record<string, unknown>; kind: 'start' | 'pause' | 'save' | 'finish'; titleId: string; paid: boolean; nextId: string | null; globalPause?: boolean }
 const nextActions: Record<string, string> = { NONE: 'Sem próxima ação', CONTACT: 'Contato', NO_RESPONSE: 'Sem resposta', PROMISE: 'Promessa de pagamento', RETRY: 'Cobrar novamente', OTHER: 'Outra ação' };
 const actionLabels: Record<string, string> = { CONTACT: 'Contato realizado', NO_RESPONSE: 'Sem resposta', PROMISE: 'Promessa de pagamento', RETRY: 'Cobrar novamente', PAID: 'Pagamento informado à validação', NOT_LOCATED_CONTACT: 'Não localizado no contato', OTHER: 'Atendimento registrado', VALIDATE: 'Recebimento validado', PAYMENT_NOT_LOCATED: 'Pagamento não localizado', PAYMENT_DATE: 'Data de pagamento informada' };
 const emptyDraft: CollectionDraft = { status: 'NOVO TÍTULO - COBRAR', observation: '', nextAction: '', nextDate: '', paymentDate: '' };
 const errorCode = (error: unknown) => error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
 
-export default function CollectionDesk({ canWrite, canManage, collectorId, isCollector, selection, onChange, onFinish, refreshKey = 0 }: Props) {
+export default function CollectionDesk({ canWrite, canManage, collectorId, isCollector, selection, onChange, onFinish, refreshKey = 0, onContactsChange, contactsRefreshKey = 0 }: Props) {
   const [filters, setFilters] = useState<CollectionFilters>({ ...INITIAL_COLLECTION_FILTERS }), [search, setSearch] = useState(''), [page, setPage] = useState(0);
   const [list, setList] = useState<CollectionWorkbench | null>(null), [loading, setLoading] = useState(true), [listError, setListError] = useState(''), [refresh, setRefresh] = useState(0);
   const [agents, setAgents] = useState<CollectionAgent[]>([]), [agentError, setAgentError] = useState('');
@@ -21,6 +22,8 @@ export default function CollectionDesk({ canWrite, canManage, collectorId, isCol
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false), [blocked, setBlocked] = useState(false), [pending, setPending] = useState<FrozenRequest | null>(null), [notice, setNotice] = useState('');
   const [rebaseRequired, setRebaseRequired] = useState(false);
+  const [contactGuard, setContactGuard] = useState<CollectionContactGuard>({ dirty: false, pending: false }), [contactDiscard, setContactDiscard] = useState(0);
+  const [contactTarget, setContactTarget] = useState<{ titleId: string; customerKey: string } | null>(null);
   const [tick, setTick] = useState(0), [assignment, setAssignment] = useState(''), [assignmentReason, setAssignmentReason] = useState('');
   const [exporting, setExporting] = useState(false), [exportStatus, setExportStatus] = useState('');
   const [recovery, setRecovery] = useState<{ id: string; revision: number; timer: CollectionTimer } | null>(null);
@@ -82,7 +85,7 @@ export default function CollectionDesk({ canWrite, canManage, collectorId, isCol
       const previous = detailRef.current;
       const wasDirty = preserve && (previous?.title.id === result.title.id ? collectionDraftKey(draftRef.current) !== collectionDraftKey(collectionDraft(previous)) : collectionDraftKey(draftRef.current) !== collectionDraftKey(emptyDraft));
       const changedWithDraft = wasDirty && (!previous || previous.title.revision !== result.title.revision || previous.case.revision !== result.case.revision);
-      setDetail(result); setRecovery(null); setAssignment(result.title.collector_id ?? '');
+      setDetail(result); setContactTarget({ titleId: result.title.id, customerKey: result.title.customer_key }); setRecovery(null); setAssignment(result.title.collector_id ?? '');
       if (!preserve) { setDraft(collectionDraft(result)); setAssignmentReason(''); requireRebase(false); }
       else if (changedWithDraft) requireRebase(true);
       else if (!wasDirty && !rebaseRef.current) setDraft(collectionDraft(result));
@@ -96,9 +99,11 @@ export default function CollectionDesk({ canWrite, canManage, collectorId, isCol
   }
   function openTitle(id: string) {
     if (busy || id === detail?.title.id) return;
+    if (contactGuard.pending) { setDetailError('Resolva a confirmação dos contatos antes de trocar de título.'); return; }
+    if (contactGuard.dirty && !window.confirm('Há alterações não salvas nos contatos do órgão. Descartar essas alterações e abrir outro título?')) return;
     if (pendingRef.current) { setDetailError('Resolva a confirmação pendente antes de trocar de título.'); return; }
     if (dirty && !window.confirm('Há alterações não salvas neste atendimento. Descartar o rascunho e abrir outro título?')) return;
-    setDetail(null); setDraft(emptyDraft); setRecovery(null); setNotice(''); setBlocked(false); requireRebase(false); void loadDetail(id);
+    setDetail(null); setContactTarget(null); setDraft(emptyDraft); setRecovery(null); setNotice(''); setBlocked(false); requireRebase(false); void loadDetail(id);
     if (window.matchMedia('(max-width: 1050px)').matches) window.setTimeout(() => casePanel.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 0);
   }
   async function execute(request: FrozenRequest) {
@@ -132,12 +137,17 @@ export default function CollectionDesk({ canWrite, canManage, collectorId, isCol
   }
   function save(finish: boolean, event?: FormEvent) {
     event?.preventDefault(); if (!detail || !editable || busy || blocked || pending) return;
+    if (finish && contactGuard.pending) { setDetailError('Resolva a confirmação dos contatos antes de finalizar e trocar de atendimento.'); return; }
     const day = collectionServerDay(detail.timer.server_now);
     const paid = draft.status === 'TÍTULO PAGO';
     if (draft.observation.length > 5000 || draft.nextAction.length > 1000 || draft.nextDate && !collectionDate(draft.nextDate) || paid && (!collectionDate(draft.paymentDate) || draft.paymentDate > day || draft.paymentDate < '1900-01-01') || finish && (!detail.title.collector_id || !draft.observation.trim() || !paid && (!draft.nextAction.trim() || !collectionDate(draft.nextDate)))) {
       setDetailError(paid ? 'Informe observação e data do pagamento até hoje. A data não pode estar no futuro.' : 'Para finalizar, informe a cobradora responsável, observação, próxima ação e data.'); return;
     }
     if (finish && paid && !window.confirm(`Informar o pagamento do título ${detail.title.document} em ${dateLabel(draft.paymentDate)}?\n\nEle permanecerá na carteira até a validação financeira. O atendimento e o tempo serão registrados conjuntamente.`)) return;
+    if (finish && contactGuard.dirty) {
+      if (!window.confirm('Há alterações não salvas nos contatos do órgão. Descartar essas alterações e finalizar o atendimento?')) return;
+      setContactDiscard(value => value + 1);
+    }
     const index = list?.rows.findIndex(row => row.id === detail.title.id) ?? -1;
     void execute({ rpc: 'save_collection_case', body: { p_title_id: detail.title.id, p_status: draft.status, p_observation: draft.observation.trim(), p_next_action: draft.nextAction.trim() || null, p_next_date: draft.nextDate || null, p_expected_revision: detail.title.revision, p_expected_case_revision: detail.case.revision, p_payment_date: paid ? draft.paymentDate : null, p_finish: finish, p_request_id: crypto.randomUUID() }, kind: finish ? 'finish' : 'save', titleId: detail.title.id, paid, nextId: index >= 0 ? list?.rows[index + 1]?.id ?? null : null });
   }
@@ -192,12 +202,14 @@ export default function CollectionDesk({ canWrite, canManage, collectorId, isCol
     </div>
     {activeTimer && activeTimer.title_id !== detail?.title.id && canWrite && <div className="notice collection-active-timer"><p><strong>Existe um atendimento em andamento.</strong> O intervalo pertence ao seu login e pode ser pausado mesmo quando o título não está neste filtro ou foi atualizado pela importação.</p><button type="button" className="button secondary" disabled={busy || !!pending} onClick={() => void execute({ rpc: 'collection_work_action', body: { p_title_id: activeTimer.title_id, p_action: 'PAUSE', p_expected_revision: null, p_request_id: crypto.randomUUID() }, kind: 'pause', titleId: activeTimer.title_id, paid: false, nextId: null, globalPause: true })}>Pausar atendimento em andamento</button></div>}
     {!unbound && <div className="collection-desk-layout"><div className="panel collection-desk-list"><div className="table-wrap"><table className="data-table"><caption className="sr-only">Títulos vencidos da carteira de cobrança</caption><thead><tr><th>Cliente</th><th>Doc.</th><th>Empresa</th><th>Vencimento</th><th>Dias</th><th>Valor</th><th>Cobradora</th><th>Status</th><th>Abrir</th></tr></thead><tbody>{loading ? <tr><td colSpan={9} className="empty-state">Carregando títulos…</td></tr> : list?.rows.length ? list.rows.map(row => <tr key={row.id} className={row.id === detail?.title.id ? 'collection-row-selected' : ''}><td><strong>{row.client_name}</strong></td><td>{row.document}</td><td>{row.branch}</td><td>{dateLabel(row.due_date)}</td><td>{row.delay_days}</td><td className="collection-money">{formatCents(row.amount_cents)}</td><td>{row.collector_name || 'Sem cobradora definida'}</td><td><span className="collection-case-status">{row.operational_label || row.operational_status}</span>{row.status === 'PENDING_VALIDATION' && <small>Aguardando validação financeira</small>}{row.status === 'NOT_LOCATED' && <small>Pagamento não localizado — cobrar novamente</small>}{row.status === 'VALIDATED' && <small>Quitado — validado</small>}</td><td><button type="button" className="button secondary" aria-label={`Abrir título ${row.document}`} disabled={busy || detailLoading} onClick={() => openTitle(row.id)}>Abrir →</button></td></tr>) : <tr><td colSpan={9} className="empty-state">{listError ? 'Lista indisponível.' : 'Nenhum título vencido para os filtros selecionados.'}</td></tr>}</tbody></table></div><div className="pagination"><span>{list?.count ?? 0} título(s) · Página {page + 1} de {Math.max(1, Math.ceil((list?.count ?? 0) / 25))}</span><button type="button" className="button secondary" disabled={loading || page === 0} onClick={() => setPage(value => value - 1)}>Anterior</button><button type="button" className="button secondary" disabled={loading || (page + 1) * 25 >= (list?.count ?? 0)} onClick={() => setPage(value => value + 1)}>Próxima</button></div></div>
-      <aside ref={casePanel} className="panel collection-case-panel" role="region" aria-labelledby="collection-case-heading"><div className="panel-header"><h2 id="collection-case-heading">Atendimento do título</h2>{selectedId && <button type="button" className="button secondary" disabled={busy || detailLoading} onClick={() => void loadDetail(selectedId, true)}>Atualizar detalhe</button>}</div>
+      <aside ref={casePanel} className="panel collection-case-panel" role="region" aria-labelledby="collection-case-heading"><div className="panel-header"><h2 id="collection-case-heading">Atendimento do título</h2>{selectedId && <button type="button" className="button secondary" disabled={busy || detailLoading || contactGuard.pending} onClick={() => void loadDetail(selectedId, true)}>Atualizar detalhe</button>}</div>
         {detailLoading && <p className="help-text">Carregando atendimento…</p>}{detailError && <p className="notice error" role="alert">{detailError}</p>}
         {pending && <div className="notice"><p>A confirmação deste envio está pendente. O rascunho e o mesmo protocolo foram preservados; nenhum novo envio será criado.</p><button type="button" className="button secondary" disabled={busy} onClick={() => void execute(pending)}>Repetir confirmação pendente</button></div>}
         {!detail && !detailLoading && <p className="help-text">Selecione um título para trabalhar.</p>}
         {recovery && !detail && !activeTimer && canWrite && <div className="notice"><p>Os dados do título estão indisponíveis. Você ainda pode interromper seu próprio atendimento em andamento.</p><button type="button" className="button secondary" disabled={busy || !!pending} onClick={() => timerAction('PAUSE')}>Pausar atendimento em andamento</button></div>}
-        {detail && <><h3 className="collection-client-title">{detail.title.client_name}</h3><p className="collection-case-caption">Doc. {detail.title.document} · {detail.title.branch} · venc. {dateLabel(detail.title.due_date)} · <strong>{detail.title.delay_days} dias</strong> · {formatCents(detail.title.amount_cents)}</p>
+        {detail && <><h3 className="collection-client-title">{detail.title.client_name}</h3><p className="collection-case-caption">Doc. {detail.title.document} · {detail.title.branch} · venc. {dateLabel(detail.title.due_date)} · <strong>{detail.title.delay_days} dias</strong> · {formatCents(detail.title.amount_cents)}</p></>}
+        {contactTarget && <CollectionCustomerContext key={contactTarget.titleId} titleId={contactTarget.titleId} customerKey={contactTarget.customerKey} enabled={!!detail && detail.title.id === contactTarget.titleId && detail.title.status !== 'VALIDATED' && detail.title.due_date < collectionServerDay(detail.timer.server_now)} canEdit={canWrite || canManage} refreshKey={contactsRefreshKey} discardKey={contactDiscard} onGuardChange={setContactGuard} onChange={onContactsChange} />}
+        {detail && <>
           <div className={`collection-work-timer${detail.timer.running ? ' running' : ''}`}><span>{canWrite ? 'Seu tempo neste título' : 'Tempo de trabalho do título'}</span><strong role="timer" aria-label="Tempo do atendimento" aria-live="off">{workTime(mainTimer)}</strong><small>{detail.timer.running ? 'Atendimento em andamento' : 'Atendimento pausado / sem intervalo ativo'}</small></div>
           <p className="help-text">Tempo total do título: {workTime(detail.timer.total_seconds + (detail.timer.running ? tick : 0))} · {detail.title.collector_name || 'Sem cobradora definida'}</p>
           {!canWrite && <p className="notice">Consulta em modo de leitura. Somente perfis autorizados registram o atendimento.</p>}

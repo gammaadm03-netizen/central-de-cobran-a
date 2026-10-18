@@ -1,6 +1,14 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.10.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+Versão de desenvolvimento **0.11.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+
+## Contatos e descrições na Cobrança — 0.11.0
+
+O atendimento da **Cobrança** recebe contatos compartilhados por órgão, editáveis pelas cobradoras autorizadas, e descrições de contratos vinculadas por cliente, nota e filial. As descrições aparecem somente nessa aba, em títulos vencidos ativos; ficam fora de Contas a Receber, Comissões e quitados. Emails/telefones ausentes permanecem em branco, vários canais são preservados e atualizações manuais têm prioridade sobre a lista inicial. Relatórios acompanham cobertura e alterações.
+
+**Importar Bases → Contatos e descrições** prepara os dois arquivos de apoio em lotes, mantém o original privado e exige prévia/confirmação do servidor. A base de descrições pode abranger abertos vencidos e a vencer, sem criar títulos nem alterar valores financeiros. Conflitos e linhas sem vínculo ficam para conferência. A publicação oficial é transacional.
+
+Ativação: [guia de contatos e descrições](docs/cobranca-contatos-descricoes.md). O combinado atual inclui **022..028**; numa base 0.10.0 instala somente 027/028. Publicar a nova função **collection-reference-import** e o site; não substituir os gateways existentes. Os arquivos enviados no chat não foram importados remotamente pelo agente.
 
 ## Central de Cobrança operacional — 0.10.0
 
@@ -95,12 +103,15 @@ npm run test:receivable-sync-sql
 npm run test:receivable-received-import-sql
 npm run test:collections-management-sql
 npm run test:collection-workbench-sql
+npm run test:collection-context-sql
+npm run test:collection-reference-imports-sql
 npm run test:receivables-operations-sql
 npm run test:bank-import-sql
 npm run test:treasury-accounts-sql
 npm run test:director-report-sql
 npm run test:upgrade-sql
 npm run bundle:receivables-gateway
+npm run bundle:collection-reference-gateway
 npm run build
 npm run test:browser
 ```

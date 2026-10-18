@@ -10,3 +10,8 @@ verify_jwt = false
 
 [functions.receivables-import]
 verify_jwt = false
+
+# Reference originals are private; this gateway validates Auth, the approved
+# session and import permissions before reading or converting reference chunks.
+[functions.collection-reference-import]
+verify_jwt = false

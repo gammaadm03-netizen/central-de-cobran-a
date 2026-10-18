@@ -16,7 +16,7 @@ const baselineTables = ['auth.users', 'public.profiles', 'public.role_permission
   'public.bank_balance_positions', 'public.stock_positions', 'public.payable_imports', 'public.payable_titles', 'cf_private.payable_import_files',
   'public.payable_plan_mappings', 'public.management_messages', 'public.director_positions', 'public.receivable_imports',
   'public.receivable_titles', 'public.receivable_receipts', 'public.receivable_collection_events', 'cf_private.receivable_import_files',
-  'public.collection_agents', 'public.collector_bindings', 'public.audit_events'];
+  'public.collection_agents', 'public.collector_bindings', 'public.audit_events', 'storage.objects'];
 const databases = new Set();
 let passed = 0;
 const test = async (name, fn) => { await fn(); passed++; console.log('PASS', name); };
@@ -46,17 +46,27 @@ async function tableState(db, tables, ignoreAddedMetadata = false) {
 }
 async function allTableState(db) {
   await db.exec('RESET ROLE');
-  const tables = (await db.query("SELECT schemaname||'.'||tablename AS name FROM pg_tables WHERE schemaname IN ('public','cf_private','auth') ORDER BY schemaname,tablename")).rows.map(row => row.name);
+  const tables = (await db.query("SELECT schemaname||'.'||tablename AS name FROM pg_tables WHERE schemaname IN ('public','cf_private','auth','storage') ORDER BY schemaname,tablename")).rows.map(row => row.name);
   return tableState(db, tables);
 }
 async function schemaInventory(db) {
   await db.exec('RESET ROLE');
   return (await db.query(`SELECT 'relation' AS kind,n.nspname||'.'||c.relname AS name,c.relkind::text AS definition
-    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN('public','cf_private','auth')
+    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN('public','cf_private','auth','storage')
     UNION ALL SELECT 'function',n.nspname||'.'||p.proname||'('||pg_get_function_identity_arguments(p.oid)||')',pg_get_functiondef(p.oid)
-    FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname IN('public','cf_private','auth')
+    FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname IN('public','cf_private','auth','storage')
     UNION ALL SELECT 'policy',schemaname||'.'||tablename||'.'||policyname,coalesce(qual,'')||'/'||coalesce(with_check,'')
-    FROM pg_policies WHERE schemaname IN('public','cf_private','auth') ORDER BY kind,name`)).rows;
+    FROM pg_policies WHERE schemaname IN('public','cf_private','auth','storage') ORDER BY kind,name`)).rows;
+}
+async function assertExistingTablesPreserved(db, before, ignored = ['public.central_schema_migrations']) {
+  const names = Object.keys(before).filter(name => !ignored.includes(name));
+  const after = await tableState(db, names);
+  for (const name of names) {
+    if (name === 'storage.buckets') {
+      // The new private import bucket is additive; prior buckets stay byte-identical.
+      for (const row of before[name]) assert.deepEqual(after[name].find(current => current.id === row.id), row);
+    } else assert.deepEqual(after[name], before[name], name);
+  }
 }
 async function close(db) { await db.close(); databases.delete(db); }
 async function importArgs(db, label, rows, received = false, confirm = false) {
@@ -68,6 +78,28 @@ async function importArgs(db, label, rows, received = false, confirm = false) {
   return received ? [...args, confirm] : args;
 }
 const title = (db, document) => scalar(db, 'SELECT to_jsonb(t) AS r FROM public.receivable_titles t WHERE document=$1', [document]);
+async function referenceGateway(db, name, args) {
+  const parameters = [people.gerente_geral.id, people.gerente_geral.session, ...args];
+  return gateway(db, `SELECT public.${name}(${parameters.map((_, i) => `$${i + 1}`).join(',')}) AS r`, parameters);
+}
+const csvRecord = values => values.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(';') + '\r\n';
+async function prepareReferenceJob(db, mode, label, row) {
+  const headers = mode === 'CONTACTS' ? ['Entidade: nome', 'Endereço: email', 'T. 1: ddd', 'T. 1: número'] : ['CLIENTE', 'CONTRATO', 'NOTA FISCAL', 'DESCRIÇÃO', 'FILIAL'];
+  const values = mode === 'CONTACTS' ? [row.client_name, row.emails.join(';'), '11', '999999999'] : [row.client_name, row.contract, row.document, row.description, row.branch];
+  const original = Buffer.from(csvRecord(headers) + csvRecord(values));
+  const sourceHash = createHash('sha256').update(original).digest('hex');
+  const beginArgs = [mode, `${label}.csv`, original.length, sourceHash];
+  const job = await referenceGateway(db, 'begin_collection_reference_import_from_gateway', beginArgs);
+  await actor(db);
+  await db.query('INSERT INTO storage.objects(bucket_id,name,metadata) VALUES($1,$2,$3::jsonb)',
+    [job.bucket, job.storage_path, JSON.stringify({ size: original.length, mimetype: 'text/csv' })]);
+  await referenceGateway(db, 'verify_collection_reference_original_from_gateway', [job.job_id, sourceHash, original.length]);
+  const artifact = Buffer.from(csvRecord(['source_line', ...headers]) + csvRecord([row.source_line, ...values]));
+  const stageArgs = [job.job_id, 0, createHash('sha256').update(artifact).digest('hex'), artifact.toString('base64'), JSON.stringify([row]), '[]'];
+  await referenceGateway(db, 'stage_collection_reference_chunk_from_gateway', stageArgs);
+  await referenceGateway(db, 'finish_collection_reference_prepare_from_gateway', [job.job_id, 1]);
+  return { job, beginArgs, stageArgs, artifact, original };
+}
 
 async function fixture() {
   const db = new PGlite(); databases.add(db);
@@ -75,7 +107,16 @@ async function fixture() {
     CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text,banned_until timestamptz,deleted_at timestamptz);
     CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
     CREATE FUNCTION auth.jwt() RETURNS jsonb LANGUAGE sql STABLE AS $$SELECT coalesce(nullif(current_setting('request.jwt.claims',true),'')::jsonb,'{}'::jsonb)$$;
-    GRANT USAGE ON SCHEMA auth TO anon,authenticated,service_role;GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO anon,authenticated,service_role;`);
+    GRANT USAGE ON SCHEMA auth TO anon,authenticated,service_role;GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO anon,authenticated,service_role;
+    -- Local Storage emulator only; production Storage is managed by Supabase.
+    CREATE SCHEMA storage;
+    CREATE TABLE storage.buckets(id text PRIMARY KEY,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
+    CREATE TABLE storage.objects(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),bucket_id text,name text,metadata jsonb DEFAULT '{}',UNIQUE(bucket_id,name));
+    ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+    GRANT USAGE ON SCHEMA storage TO authenticated,service_role;
+    GRANT SELECT,INSERT,UPDATE,DELETE ON storage.objects TO authenticated,service_role;
+    INSERT INTO storage.buckets VALUES('synthetic-existing','synthetic-existing',false,1024,ARRAY['text/plain']);
+    INSERT INTO storage.objects(bucket_id,name,metadata) VALUES('synthetic-existing','synthetic-preserved.txt','{"size":123}');`);
   for (const name of baseMigrations) await db.exec(await source(name));
   for (const [name, person] of Object.entries(people)) {
     await db.query('INSERT INTO auth.users(id,email) VALUES($1,$2)', [person.id, `${name}@example.invalid`]);
@@ -118,7 +159,10 @@ async function assertUpgradeAbsent(db) {
   for (const relation of ['public.collection_overdue_titles', 'public.receivable_sync_imports', 'cf_private.receivable_parcel_aliases',
     'cf_private.receivables_sync_state', 'public.effective_receivable_receipts', 'public.receivable_receipt_adjustments', 'public.receivable_received_import_rows',
     'public.collection_cases', 'public.collection_case_events', 'public.collection_work_sessions', 'public.collection_work_requests',
-    'cf_private.collection_workbench_state']) {
+    'cf_private.collection_workbench_state','public.collection_customer_contacts','public.collection_contact_events',
+    'public.collection_description_references','cf_private.collection_contact_requests','cf_private.collection_context_state',
+    'cf_private.collection_reference_jobs','cf_private.collection_reference_chunks','cf_private.collection_reference_rows',
+    'cf_private.collection_reference_publish_requests']) {
     assert.equal(await scalar(db, 'SELECT to_regclass($1)::text AS r', [relation]), null, relation);
   }
   assert.equal(await scalar(db, "SELECT to_regprocedure('public.collections_overdue_summary()')::text AS r"), null);
@@ -128,7 +172,8 @@ async function assertUpgradeAbsent(db) {
 
 try {
   const bundle = await buildReceivablesOperationsSql();
-  await test('generated CR activation contains all five ordered, conditional migrations in one current artifact and transaction', async () => {
+  await test('generated CR activation contains all seven ordered, conditional migrations in one current artifact and transaction', async () => {
+    assert.equal(RECEIVABLES_OPERATION_MIGRATIONS.length, 7);
     await writeReceivablesOperationsBundle();
     assert.equal(await readFile(new URL('../supabase/dashboard/ativar-recebiveis-operacao.sql', import.meta.url), 'utf8'), bundle);
     assert.equal((bundle.match(/^BEGIN;$/gm) ?? []).length, 1);
@@ -202,13 +247,24 @@ try {
     await assertUpgradeAbsent(db); await close(db);
   });
 
-  await test('an existing 0.9 installation upgrades only 026 while preserving original financial corrections, receipts, files and registry timestamps', async () => {
+  await test('failure in final 028 rolls back every upgrade, private import bucket, Storage policy and registry entry', async () => {
+    const { db } = await fixture();
+    const before = await allTableState(db), schemaBefore = await schemaInventory(db);
+    const marker = '-- END SOURCE BODY: 028_collection_reference_imports.sql'; assert.equal(bundle.split(marker).length, 2);
+    const failing = bundle.replace(marker, `SELECT cf_private.synthetic_cr_activation_028_failure();\n${marker}`);
+    await assert.rejects(db.exec(failing), error => error.code === '42883' && error.message.includes('synthetic_cr_activation_028_failure'));
+    await db.exec('ROLLBACK');
+    assert.deepEqual(await allTableState(db), before); assert.deepEqual(await schemaInventory(db), schemaBefore);
+    assert.equal(await scalar(db, "SELECT count(*)::integer AS r FROM storage.buckets WHERE id='collection-reference-files'"), 0);
+    await assertUpgradeAbsent(db); await close(db);
+  });
+
+  await test('an existing 0.9 installation adds 026 through 028 while preserving original financial corrections, receipts, files and registry timestamps', async () => {
     const { db, dates, rows } = await fixture();
     for (const migration of RECEIVABLES_OPERATION_MIGRATIONS.slice(0, 4)) await db.exec(await source(migration));
     await gateway(db, receivedSql, await importArgs(db, 'before-workbench-received', [{ ...rows[0], received_on: dates.today, received_amount_cents: 8500 }], true));
     await gateway(db, receivedSql, await importArgs(db, 'before-workbench-corrected', [{ ...rows[0], received_on: dates.yesterday, received_amount_cents: 9000 }], true, true));
     const before = await allTableState(db);
-    const oldTables = Object.keys(before).filter(name => name !== 'public.central_schema_migrations');
     const beforeSchema = await schemaInventory(db);
     const marker = '-- END SOURCE BODY: 026_collection_workbench.sql';
     const failing = bundle.replace(marker, `SELECT cf_private.synthetic_cr_09_upgrade_failure();\n${marker}`);
@@ -216,12 +272,38 @@ try {
     await db.exec('ROLLBACK');
     assert.deepEqual(await allTableState(db), before); assert.deepEqual(await schemaInventory(db), beforeSchema);
     await db.exec(bundle);
-    assert.deepEqual(await tableState(db, oldTables), Object.fromEntries(oldTables.map(name => [name, before[name]])));
-    const registry = await scalar(db, "SELECT jsonb_agg(to_jsonb(m) ORDER BY to_jsonb(m)::text) AS r FROM public.central_schema_migrations m WHERE version<>'026_collection_workbench'");
+    await assertExistingTablesPreserved(db, before);
+    const registry = await scalar(db, "SELECT jsonb_agg(to_jsonb(m) ORDER BY to_jsonb(m)::text) AS r FROM public.central_schema_migrations m WHERE version<'026'");
     assert.deepEqual(registry, before['public.central_schema_migrations']);
     assert.equal(await scalar(db, "SELECT count(*)::integer AS r FROM public.central_schema_migrations WHERE version='026_collection_workbench'"), 1);
     const effective = await scalar(db, 'SELECT to_jsonb(r) AS r FROM public.effective_receivable_receipts r JOIN public.receivable_titles t ON t.id=r.title_id WHERE t.document=$1', [rows[0].document]);
     assert.equal(effective.amount_cents, 9000); assert.equal(effective.original_received_amount_cents, 8500); assert.equal(effective.receipt_revision, 1);
+    const upgraded = await allTableState(db); await db.exec(bundle); assert.deepEqual(await allTableState(db), upgraded);
+    await close(db);
+  });
+
+  await test('0.10 upgrades only 027 and 028, preserving a running timer, saved case, receipts, cash and every previous audit event', async () => {
+    const { db, dates } = await fixture();
+    for (const migration of RECEIVABLES_OPERATION_MIGRATIONS.slice(0, 5)) await db.exec(await source(migration));
+    await actor(db, 'cobradora_1');
+    const item = await title(db, 'LEGACY-OPEN');
+    await scalar(db, 'SELECT public.collection_work_action($1,$2,$3,$4) AS r', [item.id, 'START', item.revision, randomUUID()]);
+    await scalar(db, 'SELECT public.save_collection_case($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS r',
+      [item.id, 'AGUARDANDO RETORNO', 'Caso sintético anterior aos contatos', 'Retorno sintético agendado', dates.future, item.revision, 0, null, false, randomUUID()]);
+    const before = await allTableState(db), schemaBefore = await schemaInventory(db);
+    const marker = '-- END SOURCE BODY: 028_collection_reference_imports.sql'; assert.equal(bundle.split(marker).length, 2);
+    const failing = bundle.replace(marker, `SELECT cf_private.synthetic_cr_010_reference_failure();\n${marker}`);
+    await assert.rejects(db.exec(failing), error => error.code === '42883' && error.message.includes('synthetic_cr_010_reference_failure'));
+    await db.exec('ROLLBACK');
+    assert.deepEqual(await allTableState(db), before); assert.deepEqual(await schemaInventory(db), schemaBefore);
+    await db.exec(bundle); await assertExistingTablesPreserved(db, before);
+    const registry = await scalar(db, "SELECT jsonb_agg(to_jsonb(m) ORDER BY to_jsonb(m)::text) AS r FROM public.central_schema_migrations m WHERE version<'027'");
+    assert.deepEqual(registry, before['public.central_schema_migrations']);
+    const bucket = await scalar(db, "SELECT to_jsonb(b) AS r FROM storage.buckets b WHERE id='collection-reference-files'");
+    assert.equal(bucket.public, false);
+    assert.equal(await scalar(db, 'SELECT count(*)::integer AS r FROM public.collection_customer_contacts'), 0);
+    assert.equal(await scalar(db, 'SELECT count(*)::integer AS r FROM public.collection_description_references'), 0);
+    assert.equal(await scalar(db, 'SELECT count(*)::integer AS r FROM public.collection_work_sessions WHERE ended_at IS NULL'), 1);
     const upgraded = await allTableState(db); await db.exec(bundle); assert.deepEqual(await allTableState(db), upgraded);
     await close(db);
   });
@@ -334,6 +416,70 @@ try {
     const beforeRead = await allTableState(db); await actor(db, 'diretor');
     await scalar(db, 'SELECT public.collection_work_summary($1,$1) AS r', [dates.today]);
     assert.deepEqual(await allTableState(db), beforeRead);
+  });
+
+  await test('verified contact jobs publish privately and all retries preserve manual corrections, raw artifacts and original provenance', async () => {
+    const financialTables = ['public.receivable_titles', 'public.receivable_receipts', 'public.receivable_receipt_adjustments', 'public.payable_titles', 'public.bank_balance_positions'];
+    const financialBefore = await tableState(db, financialTables); await actor(db);
+    const item = await title(db, 'LEGACY-OPEN');
+    const prepared = await prepareReferenceJob(db, 'CONTACTS', 'synthetic-contacts', {
+      source_line: 2, client_name: item.client_name, client_document: null, emails: ['synthetic-reference@example.invalid'], phones: ['11999999999'], notes: null,
+    });
+    const preview = await referenceGateway(db, 'preview_collection_reference_import_from_gateway', [prepared.job.job_id]);
+    assert.equal(preview.eligible_count, 1); assert.equal(preview.quarantine_count, 0);
+    const publishArgs = [prepared.job.job_id, preview.financial_revision, false, randomUUID()];
+    const published = await referenceGateway(db, 'publish_collection_reference_import_from_gateway', publishArgs);
+    assert.equal(published.status, 'PUBLISHED'); assert.equal(published.published_rows, 1);
+    let card = await scalar(db, 'SELECT to_jsonb(c) AS r FROM public.collection_customer_contacts c WHERE customer_key=$1', [item.customer_key]);
+    assert.equal(card.source_job_id, prepared.job.job_id); assert.deepEqual(card.emails, ['synthetic-reference@example.invalid']);
+    await actor(db, 'cobradora_1');
+    const context = await scalar(db, 'SELECT public.collection_customer_context($1) AS r', [item.id]);
+    const saveSql = 'SELECT public.save_collection_customer_contacts($1,$2::jsonb,$3::jsonb,$4,$5,$6) AS r';
+    const saveArgs = [item.id, JSON.stringify(['synthetic-manual@example.invalid']), JSON.stringify(['11988888888']), 'Conferência sintética após importação', context.contact.revision, randomUUID()];
+    const saved = await scalar(db, saveSql, saveArgs);
+    const beforeReplay = await allTableState(db);
+    await actor(db, 'cobradora_1'); assert.deepEqual(await scalar(db, saveSql, saveArgs), saved);
+    assert.equal((await referenceGateway(db, 'begin_collection_reference_import_from_gateway', prepared.beginArgs)).job_id, prepared.job.job_id);
+    assert.equal((await referenceGateway(db, 'stage_collection_reference_chunk_from_gateway', prepared.stageArgs)).duplicate, true);
+    assert.deepEqual(await referenceGateway(db, 'publish_collection_reference_import_from_gateway', publishArgs), published);
+    assert.deepEqual(await allTableState(db), beforeReplay);
+    card = await scalar(db, 'SELECT to_jsonb(c) AS r FROM public.collection_customer_contacts c WHERE customer_key=$1', [item.customer_key]);
+    assert.equal(card.manually_edited, true); assert.deepEqual(card.emails, ['synthetic-manual@example.invalid']); assert.equal(card.source_job_id, prepared.job.job_id);
+    assert.equal(await scalar(db, 'SELECT encode(artifact,\'hex\') AS r FROM cf_private.collection_reference_chunks WHERE job_id=$1 AND chunk_index=0', [prepared.job.job_id]), prepared.artifact.toString('hex'));
+    assert.equal(await scalar(db, 'SELECT count(*)::integer AS r FROM storage.objects WHERE bucket_id=$1 AND name=$2', [prepared.job.bucket, prepared.job.storage_path]), 1);
+    assert.equal(await scalar(db, 'SELECT count(*)::integer AS r FROM public.collection_contact_events WHERE customer_key=$1', [item.customer_key]), 1);
+    assert.deepEqual(await tableState(db, financialTables), financialBefore);
+  });
+
+  await test('description jobs append variants with separate source identities while preserving title, timer, receipts and prior description history', async () => {
+    const row = { document: 'REFERENCE-NF', client_name: 'Cliente sintético de referência', client_document: null, branch: '2', issued_on: dates.issued, due_date: dates.overdue, amount_cents: 28000 };
+    await gateway(db, openSql, await importArgs(db, 'reference-title', [row]));
+    const item = await title(db, row.document);
+    await scalar(db, 'SELECT public.assign_receivable_collector($1,$2,$3) AS r', [item.customer_key, agents[0], 'Vínculo sintético de referência']);
+    const financialTables = ['public.receivable_titles', 'public.receivable_receipts', 'public.receivable_receipt_adjustments', 'public.collection_cases', 'public.collection_work_sessions', 'public.payable_titles', 'public.bank_balance_positions'];
+    const financialBefore = await tableState(db, financialTables);
+    const first = await prepareReferenceJob(db, 'DESCRIPTIONS', 'synthetic-description-one', {
+      source_line: 2, document: row.document, branch: row.branch, client_name: row.client_name, client_document: null, description: 'Descrição de contrato inteiramente sintética', contract: 'SYNTHETIC-CONTRACT',
+    });
+    const firstPreview = await referenceGateway(db, 'preview_collection_reference_import_from_gateway', [first.job.job_id]);
+    assert.equal(firstPreview.eligible_count, 1); assert.equal(firstPreview.quarantine_count, 0);
+    await referenceGateway(db, 'publish_collection_reference_import_from_gateway', [first.job.job_id, firstPreview.financial_revision, false, randomUUID()]);
+    await actor(db, 'cobradora_1');
+    const initial = await scalar(db, 'SELECT public.collection_customer_context($1) AS r', [item.id]);
+    assert.equal(initial.descriptions.state, 'AVAILABLE'); assert.equal(initial.descriptions.count, 1);
+    assert.equal(initial.descriptions.variants[0].source_import_id, first.job.job_id);
+    const second = await prepareReferenceJob(db, 'DESCRIPTIONS', 'synthetic-description-two', {
+      source_line: 2, document: row.document, branch: row.branch, client_name: row.client_name, client_document: null, description: 'Segunda variante sintética preservada', contract: 'SYNTHETIC-CONTRACT',
+    });
+    const nextPreview = await referenceGateway(db, 'preview_collection_reference_import_from_gateway', [second.job.job_id]);
+    assert.equal(nextPreview.variant_count, 1);
+    await referenceGateway(db, 'publish_collection_reference_import_from_gateway', [second.job.job_id, nextPreview.financial_revision, false, randomUUID()]);
+    await actor(db, 'cobradora_1');
+    const updated = await scalar(db, 'SELECT public.collection_customer_context($1) AS r', [item.id]);
+    assert.equal(updated.descriptions.state, 'PENDING_VARIANTS'); assert.equal(updated.descriptions.count, 2);
+    assert.deepEqual(updated.descriptions.variants.find(variant => variant.id === initial.descriptions.variants[0].id), initial.descriptions.variants[0]);
+    assert.deepEqual(new Set(updated.descriptions.variants.map(variant => variant.source_import_id)), new Set([first.job.job_id, second.job.job_id]));
+    assert.deepEqual(await tableState(db, financialTables), financialBefore);
   });
 
   await test('repeating complete activation preserves exact live receipts, correction history, file provenance, revision and registry timestamps', async () => {
