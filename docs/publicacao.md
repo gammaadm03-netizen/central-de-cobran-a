@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.13.4
+# Publicação e ativação — 0.13.5
+
+A atualização **0.13.5** exibe o Ativo Circulante com duas casas decimais no painel, histórico e Excel, mantendo o cálculo exato. Basta o deploy do site e atualizar a página; não exige mudança de banco, função ou importação.
 
 A atualização **0.13.4** reconhece a coluna Salário Folha e o rodapé final do modelo de RH, aceita resultados numéricos salvos de fórmulas financeiras e usa a coluna Total como fonte do Total geral. Folha total, salários de colaboradores e pró-labores têm indicadores separados. Aplicar **031..038**, atualizar a função existente **business-import**, conferir o site **0.13.4** e reimportar a planilha com a data original. A revisão 4 preserva os originais e as posições anteriores, sem duplicar totais. [Guia de ativação](corrigir-importacao-rh.md).
 

@@ -432,3 +432,11 @@ Validação local em 19/10/2026:
 - business-import.ts atualizado: SHA-256 `b082daa83678372e15d7df8941d32eceba2b20b7aa9c96a29b63924fd647d063`.
 
 O agente trabalhou com uma imagem do relatório real e arquivos sintéticos nos testes, sem promover nomes ou valores reais a fixtures ou dados iniciais públicos. Não aplicou SQL, publicou funções ou importou a folha no Supabase remoto; não comprovou o término do deploy Cloudflare. Para ativar: SQL combinado atual, código completo da função existente business-import e site 0.13.4; depois reimportar essa planilha com a data original, conferindo a prévia. Guia: [corrigir-importacao-rh.md](corrigir-importacao-rh.md).
+
+## Ativo Circulante com duas casas na apresentação — 0.13.5
+
+O usuário pediu duas casas após a vírgula. O formatador compartilhado agora arredonda somente a exibição em milhões, com centésimos calculados sobre a string decimal, sem conversão do cálculo para ponto flutuante. Painel, histórico e texto dos indicadores usam o mesmo formato. O Excel apresenta duas casas com numFmt, preservando o valor numérico exportado. Fórmula, valores oficiais, histórico persistido, precisão e limites de exportação permanecem preservados.
+
+Verificação local em 19/10/2026: quatro testes existentes de director-report aprovados, com expectativas de apresentação atualizadas; build TypeScript/Vite aprovado; 29 cenários existentes de treasury-dashboard aprovados, incluindo card, histórico, memória e valor original numérico no Excel. Nenhum teste falhou ou foi ignorado. O aviso de tamanho dos chunks permanece sem impedir o build.
+
+Esta alteração depende somente do site 0.13.5. Não exige SQL, atualização de Edge Function ou reimportação. O agente não confirmou o término do deploy Cloudflare.

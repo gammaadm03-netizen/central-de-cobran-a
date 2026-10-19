@@ -193,7 +193,7 @@ export default function ExecutiveDashboard({ canManage, canReadDirectorSummary =
     { label: 'Impostos do mês passado', cents: reportAmount(reportValues, 'previous_month_taxes_cents'), detail: `${taxesMonth} · ${manualSource}` },
     { label: `Contas a pagar ${scopeLabel}`, cents: report ? reportAmount(reportValues, 'payable_period_cents') : payablePeriod, detail: `Contas a Pagar · ${rangeLabel}` },
     { label: 'Caixa projetado', cents: report ? reportAmount(reportValues, 'projected_cash_cents') : projection, detail: 'Caixa + receber − pagar · valores previstos por vencimento' },
-    { label: 'Ativo circulante (milhões)', cents: null, millions: currentAssets, detail: currentAssets !== null ? 'Fórmula oficial · resultado em milhões de reais · sem arredondar as etapas' : 'Informe todos os componentes da fórmula oficial' },
+    { label: 'Ativo circulante (milhões)', cents: null, millions: currentAssets, detail: currentAssets !== null ? 'Fórmula oficial · resultado em milhões de reais' : 'Informe todos os componentes da fórmula oficial' },
   ];
 
   async function savePosition() {
@@ -234,7 +234,7 @@ export default function ExecutiveDashboard({ canManage, canReadDirectorSummary =
       sheet.addRow({ section: completeness, indicator: 'Data da posição de caixa', value: new Date(`${reportDate}T12:00:00Z`), source: 'Último saldo de cada conta até essa data.' }).getCell(3).numFmt = 'dd/mm/yyyy';
       const currencyFormat = '"R$" #,##0.00;[Red]-"R$" #,##0.00';
       const excelValue = (indicator: Indicator) => indicator.millions !== undefined ? indicator.millions === null ? 'CÁLCULO AGUARDANDO INFORMAÇÕES' : excelMillions(indicator.millions)! : indicator.percentageBps !== undefined ? indicator.percentageBps === null ? BASE_PENDING : indicator.percentageBps / 10000 : indicator.cents === null ? indicator.label === 'Caixa total' ? CASH_PENDING : indicator.label === 'Estoque total' ? STOCK_PENDING : BASE_PENDING : indicator.cents / 100;
-      const excelFormat = (indicator: Indicator) => indicator.millions !== undefined ? '0.00########" mi"' : indicator.percentageBps !== undefined ? '0.00%' : currencyFormat;
+      const excelFormat = (indicator: Indicator) => indicator.millions !== undefined ? '0.00" mi"' : indicator.percentageBps !== undefined ? '0.00%' : currencyFormat;
       for (const [section, indicators] of [['COMERCIAL', commercial], ['FINANCEIRO', financial], ['OBRIGAÇÕES', obligations]] as [string, Indicator[]][]) for (const indicator of indicators) {
         const row = sheet.addRow({ section, indicator: indicator.label, value: excelValue(indicator), source: indicator.detail });
         row.getCell(3).numFmt = excelFormat(indicator);

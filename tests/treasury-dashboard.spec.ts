@@ -6,7 +6,7 @@ test('the complete Director report renders the official sources, prior-month tax
   const summary = page.locator('.director-summary');
   await expect(summary.getByText('POSIÇÃO COMPLETA', { exact: true })).toBeVisible();
   await expect(summary.locator('.director-summary-column').nth(0)).toContainText('R$ 1.300,00');
-  await expect(summary.locator('.director-summary-column').nth(2)).toContainText('0,024368 mi');
+  await expect(summary.locator('.director-summary-column').nth(2)).toContainText('0,02 mi');
   await expect(summary.locator('.director-summary-column').nth(2)).toContainText('setembro de 2026');
   await summary.getByText('Memória do cálculo do Ativo Circulante', { exact: true }).click();
   await expect(summary.locator('.director-calculation').first()).toContainText('Faturamento geral × 14%');
@@ -25,12 +25,12 @@ test('missing stock blocks the assets calculation without becoming zero', async 
   await expect(summary.locator('.director-pending')).toContainText('Estoque aguardando atualização.');
 });
 
-test('zero and fractional-cent assets from the official backend remain exact on screen', async ({ page }) => {
+test('zero and fractional-cent assets display two decimals without changing the official backend result', async ({ page }) => {
   await setup(page, { report: 'zero', complete: true, expanded: true });
   await expect(page.locator('.director-summary-column').nth(2)).toContainText('0,00 mi');
   await page.unrouteAll({ behavior: 'wait' });
   await setup(page, { report: 'tiny', complete: true, expanded: true });
-  await expect(page.locator('.director-summary-column').nth(2)).toContainText('−0,0000000014 mi');
+  await expect(page.locator('.director-summary-column').nth(2)).toContainText('0,00 mi');
 });
 
 test('the daily Excel reproduces the description rows and 17 accounts with numeric amounts', async ({ page }) => {
@@ -44,7 +44,7 @@ test('the daily Excel reproduces the description rows and 17 accounts with numer
   expect(daily.getCell('B13').value).toBe(20000);
   expect(daily.getCell('B17').value).toBe(70);
   expect(daily.getCell('B18').value).toBe(0.024368);
-  expect(daily.getCell('B18').numFmt).toContain('mi');
+  expect(daily.getCell('B18').numFmt).toBe('0.00" mi"');
   expect(daily.getCell('A20').value).toBe('BRADESCO ECOPLAST');
   expect(daily.getCell('A36').value).toBe('CAIXA EASY CLEAN');
   expect(daily.getCell('B37').value).toBe(1700);
@@ -72,7 +72,7 @@ test('new saved positions show the preserved assets result and inputs in history
   page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Salvar posição', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Posição completa salva');
   await page.getByRole('button', { name: 'Histórico das posições', exact: true }).click();
-  await expect(page.locator('.director-history')).toContainText('0,024368 mi');
+  await expect(page.locator('.director-history')).toContainText('0,02 mi');
   await page.locator('.director-history').getByText('Ver indicadores', { exact: true }).click();
   await expect(page.locator('.director-snapshot-details')).toContainText('R$ 1.300,00');
   await expect(page.locator('.director-snapshot-details')).toContainText('BANCO CORA ECO PLAST');

@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.13.4",
+  "version": "0.13.5",
   "type": "module",
   "engines": {
     "node": ">=24 <25"

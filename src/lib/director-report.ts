@@ -25,9 +25,11 @@ export function exactMillions(value: unknown): string | null {
 }
 export function displayMillions(value: string): string {
   const [whole, decimals = ''] = value.split('.');
-  const negative = whole.startsWith('-');
-  const formatted = new Intl.NumberFormat('pt-BR').format(BigInt(whole.replace('-', '')));
-  return `${negative ? '−' : ''}${formatted},${decimals.replace(/0+$/, '').padEnd(2, '0')} mi`;
+  let hundredths = BigInt(whole.replace('-', '')) * 100n + BigInt(decimals.padEnd(2, '0').slice(0, 2));
+  if ((decimals[2] ?? '0') >= '5') hundredths += 1n;
+  const negative = whole.startsWith('-') && hundredths !== 0n;
+  const formatted = new Intl.NumberFormat('pt-BR').format(hundredths / 100n);
+  return `${negative ? '−' : ''}${formatted},${String(hundredths % 100n).padStart(2, '0')} mi`;
 }
 export function excelMillions(value: string): number | null {
   const significant = value.replace('-', '').replace('.', '').replace(/^0+/, '').replace(/0+$/, '');

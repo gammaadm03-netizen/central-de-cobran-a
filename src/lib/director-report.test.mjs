@@ -5,8 +5,11 @@ import { exactMillions, displayMillions, excelMillions, reportAmount, directorAc
 test('PostgreSQL decimal strings preserve zero, negative and fractional-cent results without rounding', () => {
   assert.equal(exactMillions('0.0000000000000000000000000000'), '0');
   assert.equal(exactMillions('-0.0000000014000000000000000000'), '-0.0000000014');
-  assert.equal(displayMillions('-0.0000000014'), '−0,0000000014 mi');
+  assert.equal(displayMillions('-0.0000000014'), '0,00 mi');
   assert.equal(displayMillions('1234.1200000000'), '1.234,12 mi');
+  assert.equal(displayMillions('12.3456'), '12,35 mi');
+  assert.equal(displayMillions('9.995'), '10,00 mi');
+  assert.equal(displayMillions('-1.235'), '−1,24 mi');
   assert.equal(displayMillions('0'), '0,00 mi');
   for (const invalid of [0, null, undefined, 'NaN', '<script>', '1e2', '1.00000000001']) assert.equal(exactMillions(invalid), null);
 });

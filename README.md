@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.13.4**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.13.5**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Ativo Circulante com duas casas — 0.13.5
+
+O Ativo Circulante aparece com duas casas decimais no painel, histórico e Excel. O cálculo e os valores preservados continuam exatos. Esta atualização depende apenas do site; não exige SQL, atualização de funções ou reimportação.
 
 ## Folha e totais do relatório de RH / DP — 0.13.4
 
