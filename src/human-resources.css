@@ -1,0 +1,22 @@
+.human-resources .hr-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
+.human-resources .hr-card { display: flex; flex-direction: column; gap: .55rem; margin: 0; }
+.human-resources .hr-card h3 { font-size: .78rem; text-transform: uppercase; color: var(--muted); margin: 0; }
+.human-resources .hr-card strong { font-size: clamp(1.35rem, 2vw, 1.9rem); line-height: 1.2; overflow-wrap: anywhere; }
+.human-resources .hr-card small { color: var(--muted); }
+.human-resources .hr-two-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.human-resources .hr-group { min-width: 0; margin: 0; }
+.human-resources .hr-group h3, .human-resources h4 { margin-top: 0; }
+.human-resources .hr-month { max-width: 17rem; }
+.human-resources .hr-month-buttons { display: flex; flex-wrap: wrap; gap: .45rem; margin: 1rem 0; }
+.human-resources .hr-month-buttons .button { padding: .45rem .65rem; min-height: 2.2rem; }
+.human-resources .hr-calendar-columns { margin-top: 1.25rem; }
+.human-resources .hr-quality { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem 1rem; }
+.human-resources .hr-quality p { display: flex; justify-content: space-between; gap: .75rem; padding: .55rem .75rem; margin: 0; border: 1px solid var(--line, #d6e6dc); border-radius: .6rem; }
+.human-resources .hr-filters { margin-bottom: 1rem; align-items: end; }
+.human-resources .table-wrap { max-width: 100%; }
+.human-resources td small { display: block; color: var(--muted); }
+.human-resources-import .hr-import-preview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; margin: 1rem 0; }
+.human-resources-import .hr-import-preview article { border: 1px solid var(--line, #d6e6dc); border-radius: .75rem; padding: 1rem; }
+.human-resources-import .hr-import-preview strong { display: block; margin-top: .4rem; font-size: 1.3rem; }
+@media (max-width: 1100px) { .human-resources .hr-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .human-resources .hr-cards, .human-resources .hr-two-columns, .human-resources .hr-quality, .human-resources-import .hr-import-preview { grid-template-columns: minmax(0, 1fr); } }

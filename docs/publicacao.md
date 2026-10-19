@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.12.2
+# Publicação e ativação — 0.13.0
+
+A atualização **0.13.0** recupera Comissões, Faturamento, Margens e RH/DP. Seguir [ativacao-demais-abas.md](ativacao-demais-abas.md): executar **ativar-demais-abas.sql** (031..034, versões já aplicadas são preservadas), publicar a nova função **business-import** e conferir o site 0.13.0. As funções anteriores permanecem. A Gerência importa as bases reais e vincula as pessoas às políticas de comissões com vigência; o código antigo não é publicado como HTML ou base atual.
 
 A atualização **0.12.2** deixa o perfil Diretor somente em consulta, com todas as abas exceto Importar Bases e Administração também em leitura. Seguir [acesso-diretoria.md](acesso-diretoria.md): aplicar o arquivo separado **ativar-acesso-diretoria.sql**, conferir o site 0.12.2 e criar/vincular a conta Auth se ainda não existir. O SQL não contém senha ou criação de usuário; nenhuma Edge Function precisa ser republicada.
 
@@ -81,6 +83,6 @@ Somente uma solicitação em **Esqueci minha senha** pede o email ao Supabase. D
 
 ## Limites e recuperação de falhas
 
-Faturamento, Margens, cálculo/pagamento de Comissões, RH/DP, conciliação automática de extratos bancários, backups operacionais e migração conferida do estado atual da Central antiga permanecem pendentes. A base efetivamente recebida para comissões está disponível na 0.9.0. Não considerar concluída a primeira versão de produção enquanto esses itens e os critérios de aceite não forem homologados. Fontes ausentes continuam pendentes, sem números fictícios.
+As quatro abas recuperadas dependem da ativação 0.13.0 e da conferência das bases reais. Pagamento de comissões, conciliação automática de extratos bancários, backups operacionais e migração conferida do estado atual da Central antiga permanecem pendentes. Não considerar concluída a primeira versão de produção enquanto esses itens e os critérios de aceite não forem homologados. Fontes ausentes continuam pendentes, sem números fictícios.
 
 Preservar banco, ZIP original e estado operacional anterior. Publicar código não substitui backup. Se houver falha, preservar a mensagem administrativa e investigar; não apagar dados, desativar permissões ou liberar acesso para contornar um erro. A restauração de produção ainda precisa ser implantada e testada. Não ativar billing para resolver cotas ou configuração sem autorização.

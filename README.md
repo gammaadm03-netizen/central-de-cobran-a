@@ -1,6 +1,14 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.12.2**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+Versão de desenvolvimento **0.13.0**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Quatro abas recuperadas da V75 — 0.13.0
+
+Faturamento e Margens consultam versões mensais do mesmo fechamento, com filtros, detalhes e Excel completo do filtro. RH/DP recupera quadro, folha, cesta e calendário, com os dois campos de salário preservados. Comissões apresenta cobradoras e vendedores, regras com vigência e apurações preservadas. A base da cobrança continua sendo o valor efetivamente recebido e validado em títulos trabalhados.
+
+O usuário confirmou os mínimos de Mateus e Kevyn: **10% em setembro/2026; 14% a partir de 01/10/2026**. A Gerência vincula as pessoas reais às políticas recuperadas; nenhuma carteira ou identidade de login é criada por nome. A Diretoria permanece somente em consulta.
+
+Ativação: [guia das quatro abas](docs/ativacao-demais-abas.md). Executar o combinado repetível **031..034**, publicar a nova função **business-import** e conferir o site **0.13.0**. Importar as bases atuais em **Fechamento / Faturamento** e **RH / DP**. O HTML e os registros embutidos do original não foram incluídos no site nem promovidos à posição atual.
 
 ## Diretoria somente para consulta — 0.12.2
 
@@ -56,9 +64,9 @@ O Painel preserva a organização e a marca da V75: Hoje/Semana/Mês, semana fin
 
 **Importar Bases** centraliza as áreas autorizadas. Em **Caixa / Bancos**, a Gerência informa data, saldos das **17 posições: 12 contas bancárias e 5 caixas das empresas**, e observação, confere o consolidado e salva a posição inteira em uma transação. O cadastro segue a lista atualizada do usuário, incluindo Cora Ecoplast e os caixas de Ecoplast, Limpe Fácil, Gamma, Fast Clean e Easy Clean. Zero exige preenchimento explícito; valores de datas anteriores não são copiados automaticamente para um novo dia. Extratos de até 2 MiB são guardados como apoio privado, com hash e auditoria, sem alterar saldos ou conciliar títulos. A consulta de Caixa/Bancos e o estoque de contingência permanecem disponíveis conforme as permissões.
 
-CP possui importação atômica de previsões e pagamentos, classificação obrigatória, histórico preservado, filtros, paginação, CSV e Excel. CR relê o arquivo no servidor e atualiza os títulos incrementalmente; ausência no relatório não baixa nem altera o título. A carteira é herdada da dívida ativa do cliente quando existe uma única atribuição oficial. Identificação ambígua exige conferência, sem união automática. Cobrança oferece carteira individual, contatos, retornos e pagamento informado; a validação manual permanece disponível, e o relatório de quitados confirma os recebimentos automaticamente. Registros validados preservam origem, cobradora e atraso; correções importadas acrescentam versões auditadas. Comissões consulta a base efetivamente recebida, com cálculo de taxas e pagamento ainda pendentes.
+CP possui importação atômica de previsões e pagamentos, classificação obrigatória, histórico preservado, filtros, paginação, CSV e Excel. CR relê o arquivo no servidor e atualiza os títulos incrementalmente; ausência no relatório não baixa nem altera o título. A carteira é herdada da dívida ativa do cliente quando existe uma única atribuição oficial. Identificação ambígua exige conferência, sem união automática. Cobrança oferece carteira individual, contatos, retornos e pagamento informado; a validação manual permanece disponível, e o relatório de quitados confirma os recebimentos automaticamente. Registros validados preservam origem, cobradora e atraso; correções importadas acrescentam versões auditadas. A 0.13.0 acrescenta a apuração versionada das comissões sobre essa base; não registra pagamento de comissão.
 
-Faturamento, Margens, cálculo/pagamento de Comissões, RH/DP, conciliação automática de extratos bancários, migração do estado operacional anterior e backups ainda estão pendentes. Também faltam criação completa de contas Auth, redefinição administrativa e troca obrigatória de senha. Não há valores fictícios nem bases V75 embutidas nos arquivos públicos.
+As telas e o cálculo de Comissões, Faturamento, Margens e RH/DP estão implementados na 0.13.0 e dependem da ativação e das bases reais descritas acima. Pagamento de comissão, conciliação automática de extratos bancários, migração do estado operacional anterior e backups ainda estão pendentes. Também faltam criação completa de contas Auth, redefinição administrativa e troca obrigatória de senha. Não há valores fictícios nem bases V75 embutidas nos arquivos públicos.
 
 ## Atualizar o projeto existente
 

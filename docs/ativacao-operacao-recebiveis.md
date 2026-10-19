@@ -1,5 +1,7 @@
 # Ativar Contas a Receber, Cobrança e base de comissões — 0.9.0
 
+A apuração de Comissões foi recuperada na **0.13.0**: [ativação das quatro abas](ativacao-demais-abas.md). As referências abaixo à ausência de taxas descrevem a entrega 0.9.0; os recebimentos e sua base efetiva permanecem preservados.
+
 **Atualização 0.10.0:** o SQL combinado foi ampliado para **022..026**, incluindo a Central de Cobrança operacional. Versões anteriores já registradas são preservadas. O código da função de importação permanece o mesmo da 0.9.0; seguir o [guia atual de Cobrança](central-cobranca-operacao.md). Os passos abaixo preservam a ativação dos recebíveis e continuam úteis quando a função ainda não foi publicada.
 
 Esta atualização preserva o endereço, usuários, permissões, títulos, responsáveis, contatos, recebimentos, saldos, arquivos e históricos existentes. O envio de código pelo Git não executa SQL ou publica funções no Supabase.

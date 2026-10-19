@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.12.2",
+  "version": "0.13.0",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -10,7 +10,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node --test supabase/functions/auth-gateway/*.test.mjs supabase/functions/payables-import/*.test.mjs supabase/functions/receivables-import/*.test.mjs config/*.test.mjs src/lib/*.test.mjs supabase/functions/collection-reference-import/*.test.mjs",
+    "test": "node --test supabase/functions/auth-gateway/*.test.mjs supabase/functions/payables-import/*.test.mjs supabase/functions/receivables-import/*.test.mjs config/*.test.mjs src/lib/*.test.mjs supabase/functions/collection-reference-import/*.test.mjs supabase/functions/business-import/*.test.mjs",
     "test:browser": "playwright test",
     "test:sql": "node scripts/test-sql.mjs",
     "test:auth-sql": "node scripts/test-auth-sql.mjs",
@@ -50,7 +50,13 @@
     "bundle:collection-reference-gateway": "node scripts/bundle-collection-reference-gateway.mjs",
     "test:collection-workflow-sql": "node scripts/test-collection-workflow-sql.mjs",
     "test:receivable-import-collectors-sql": "node scripts/test-receivable-import-collectors-sql.mjs",
-    "test:director-readonly-sql": "node scripts/test-director-readonly-sql.mjs"
+    "test:director-readonly-sql": "node scripts/test-director-readonly-sql.mjs",
+    "bundle:remaining-modules": "node scripts/bundle-remaining-modules.mjs",
+    "bundle:business-gateway": "node scripts/bundle-business-gateway.mjs",
+    "test:commercial-sql": "node scripts/test-commercial-sql.mjs",
+    "test:hr-sql": "node scripts/test-hr-sql.mjs",
+    "test:commissions-sql": "node scripts/test-commissions-sql.mjs",
+    "test:remaining-modules-sql": "node scripts/test-remaining-modules-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

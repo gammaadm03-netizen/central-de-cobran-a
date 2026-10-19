@@ -2,6 +2,12 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
+## Comissões, Faturamento, Margens e RH/DP — 0.13.0
+
+Aplicar **dashboard/ativar-demais-abas.sql**, combinado transacional repetível de **031..034**. A 032 mantém fechamentos mensais versionados, itens e originais privados; a 033 mantém posições privadas de RH e a política da V75; a 034 mantém regras de comissão por vigência e apurações imutáveis sobre fontes efetivas. Nenhuma base histórica ou pessoa real é inserida pela ativação. Usuários, saldos e títulos existentes são preservados.
+
+Publicar a nova **business-import** com **dashboard/business-import.ts**, verificação JWT legada desligada e `ALLOWED_ORIGINS` existente. A função valida sessão/permissões e relê o original em cada análise e confirmação; os commits são exclusivos do gateway e revalidam as permissões. A Diretoria continua somente em consulta. [Guia de ativação e uso](../docs/ativacao-demais-abas.md).
+
 ## Diretoria somente para consulta — 0.12.2
 
 Aplicar **dashboard/ativar-acesso-diretoria.sql**, correspondente à nova migration **031_director_readonly**. A atualização preserva as versões 001..030 e remove do perfil Diretor as antigas permissões de importação e escrita de mensagens. O bloqueio de mutações também é aplicado em `has_permission` e `current_access`, com consulta administrativa somente por SELECT, sessão aprovada e perfil ativo. Os RPCs administrativos continuam exclusivos da Gerência.

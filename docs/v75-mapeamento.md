@@ -168,9 +168,7 @@ devem ser publicadas ou migradas como senhas em texto.
 
 ## Divergências a resolver pela especificação mais recente
 
-1. As regras de comissão de Mateus e Kevyn no código antigo usam uma margem
-   mínima inferior à instrução atual. Usar a regra vigente, com tabela de
-   configuração e vigência; preservar os períodos históricos.
+1. As regras de comissão de Mateus e Kevyn no código antigo usam margem mínima de 10%. O usuário confirmou nesta recuperação: **10% em setembro de 2026 e 14% a partir de 01/10/2026**. A 0.13.0 preserva as duas vigências, sem aplicar outubro retroativamente a setembro.
 2. A recusa de pagamento em `renderValidation`, linha 1852, define uma próxima
    ação diferente de `COBRAR NOVAMENTE`. O fluxo atual exige devolução à mesma
    cobradora, sem comissão e sem redistribuição.
