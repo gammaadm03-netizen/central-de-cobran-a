@@ -1,6 +1,8 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.12.0**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+Versão de desenvolvimento **0.12.1**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+
+A correção **0.12.1** mantém Salvar andamento, Finalizar atendimento e Marcar como título pago visíveis para operadores autorizados quando há um título aberto no atendimento. Bloqueios mantêm os controles desabilitados com a explicação correspondente. A seção Gerenciar responsável foi retirada do atendimento; a cobradora aparece somente para consulta, conforme a importação. A correção chega pelo site e utiliza a mesma ativação de banco e importação da 0.12.0.
 
 ## Atendimento e responsáveis na importação — 0.12.0
 

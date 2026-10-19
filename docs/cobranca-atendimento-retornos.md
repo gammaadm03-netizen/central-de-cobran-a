@@ -1,6 +1,8 @@
-# Atendimento, retornos e responsáveis — 0.12.0
+# Atendimento, retornos e responsáveis — 0.12.1
 
 Esta atualização corrige os controles do atendimento e permite definir a cobradora na importação dos abertos. O site, o banco e a função de importação precisam estar atualizados para liberar o fluxo completo. A publicação pelo Git atualiza somente o site.
+
+A correção **0.12.1** mantém os botões de salvar, finalizar e marcar como pago visíveis para operadores ao abrir um título, inclusive quando há algum bloqueio. Nesse caso, ficam desabilitados e a tela explica o motivo. A seção **Gerenciar responsável** foi retirada do atendimento: a cobradora é exibida somente para consulta, com o vínculo definido na importação. Quem já ativou o banco e a função da **0.12.0** recebe essa correção pela atualização do site.
 
 ## 1. Atualizar o banco existente
 
@@ -22,7 +24,7 @@ Em **Settings**, manter **Verify JWT with legacy secret** desligado. O código c
 
 ## 3. Definir a responsável na importação
 
-Após o deploy, abrir a Central e conferir **Versão 0.12.0** no rodapé. Atualizar com **Ctrl + Shift + R** se necessário.
+Após o deploy, abrir a Central e conferir **Versão 0.12.1** no rodapé. Atualizar com **Ctrl + Shift + R** se necessário.
 
 1. Entrar como Gerência ou Contas a Receber com permissão de importação.
 2. Abrir **Importar Bases → Contas a Receber → Abertos e vencidos**.

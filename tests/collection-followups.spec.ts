@@ -109,7 +109,7 @@ test('voltar à visão geral e recuperar foco renova a agenda sem desmontar o ra
 });
 test('sem capacidade029 mantém leitura dos títulos e bloqueia iniciar/finalizar com orientação', async ({ page }) => {
   const seen = await setup(page, { missing: true }); await expect(agenda(page)).toContainText('agenda de retornos aguarda a atualização'); await enterTitles(page); await page.getByRole('button', { name: 'Abrir título NF-AGENDA-1', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Iniciar', exact: true })).toBeDisabled(); await expect(page.getByRole('button', { name: 'Finalizar atendimento', exact: true })).toHaveCount(0); expect(seen.writes).toHaveLength(0);
+  await expect(page.getByRole('button', { name: 'Iniciar', exact: true })).toBeDisabled(); for (const name of ['Salvar andamento', 'Finalizar atendimento', 'Marcar como título pago']) { const action = page.getByRole('button', { name, exact: true }); await expect(action).toBeVisible(); await expect(action).toBeDisabled(); } expect(seen.writes).toHaveLength(0);
 });
 test('escopo incompatível não exibe os dados de outra carteira', async ({ page }) => {
   await setup(page, { wrongScope: true }); await expect(agenda(page)).toContainText('Não foi possível consultar os retornos'); await expect(agenda(page)).not.toContainText('Outro escopo não pode aparecer'); await expect(agenda(page).getByRole('button', { name: /^Abrir retorno / })).toHaveCount(0);

@@ -71,7 +71,7 @@ function validWorkflowRow(row: CollectionRow, day: string) {
 export function collectionStartReason(reason: CollectionStartBlock | null | undefined) {
   return reason === 'RETURN_PRIORITY' ? 'Atenda primeiro os retornos devidos desta carteira, com data até hoje.'
     : reason === 'ALREADY_RUNNING' ? 'Já existe um atendimento em andamento. Pause ou finalize esse atendimento antes de iniciar outro.'
-    : reason === 'UNASSIGNED' ? 'Este título está sem responsável definida. Acesse Importar Bases → Contas a Receber para definir as responsáveis na importação. A Gerência Geral também pode conferir a atribuição excepcional.'
+    : reason === 'UNASSIGNED' ? 'Este título está sem responsável definida. Acesse Importar Bases → Contas a Receber para definir as responsáveis na importação.'
     : reason === 'PENDING_VALIDATION' ? 'Pagamento informado aguarda validação de Contas a Receber. Este título está em leitura.'
     : reason === 'SETTLED' ? 'Recebimento já validado. O título está disponível somente no histórico.'
     : reason === 'READ_ONLY' ? 'Seu perfil permite somente leitura; não pode iniciar ou alterar este atendimento.' : '';

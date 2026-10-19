@@ -162,7 +162,7 @@ test('carteira mostra contagem e soma integrais, pagina no servidor e pesquisa c
   expect(rows).toHaveLength(31); expect(writes(calls)).toHaveLength(0);
 });
 
-test('filtros de status, responsável, atraso e ordenação enviam critérios explícitos ao servidor', async ({ page }) => {
+test('filtros de carteira são oficiais e a gerência consulta a responsável sem redistribuir dentro do atendimento', async ({ page }) => {
   const { calls } = await setup(page, { manager: true });
   await page.getByRole('combobox', { name: 'Status da cobrança', exact: true }).selectOption(statuses[0]);
   await page.getByRole('combobox', { name: 'Cobradora', exact: true }).selectOption(other);
@@ -170,6 +170,14 @@ test('filtros de status, responsável, atraso e ordenação enviam critérios ex
   await page.getByRole('combobox', { name: 'Ordenar carteira', exact: true }).selectOption('amount_desc');
   await expect.poll(() => listCalls(calls).at(-1)?.body).toMatchObject({ p_status: statuses[0], p_collector_id: other, p_band: '181_365', p_sort: 'amount_desc', p_offset: 0 });
   await expect(page.getByRole('button', { name: /^Abrir título NF-/ })).toHaveCount(1); await expect(page.getByRole('button', { name: 'Abrir título NF-3', exact: true })).toBeVisible();
+  await open(page, 'NF-3');
+  const owner = sidebar(page).getByRole('textbox', { name: 'Cobradora responsável', exact: true });
+  await expect(owner).toHaveValue('Responsável B'); await expect(owner).toHaveAttribute('readonly', '');
+  await expect(sidebar(page).getByText('Gerenciar responsável', { exact: true })).toHaveCount(0);
+  await expect(sidebar(page).getByRole('combobox', { name: 'Nova cobradora', exact: true })).toHaveCount(0);
+  await expect(sidebar(page).getByRole('textbox', { name: 'Motivo da atribuição', exact: true })).toHaveCount(0);
+  await expect(sidebar(page).getByRole('button', { name: 'Atribuir cobradora', exact: true })).toHaveCount(0);
+  expect(calls.filter(call => call.name === 'assign_receivable_collector')).toHaveLength(0); expect(writes(calls)).toHaveLength(0);
 });
 
 test('iniciar e pausar persistem o cronômetro; pausa congela o tempo e reabertura não perde o atendimento', async ({ page }) => {
@@ -188,8 +196,9 @@ test('iniciar e pausar persistem o cronômetro; pausa congela o tempo e reabertu
 test('título sem cobradora explica por que Iniciar está indisponível sem enviar uma operação', async ({ page }) => {
   const seen = await setup(page, { manager: true, unassigned: true }); await open(page);
   await expect(sidebar(page).getByRole('button', { name: 'Iniciar', exact: true })).toBeDisabled();
-  await expect(sidebar(page)).toContainText('Este título está sem responsável definida.'); await expect(sidebar(page)).toContainText('Importar Bases → Contas a Receber'); await expect(sidebar(page)).toContainText('A Gerência Geral também pode conferir a atribuição excepcional.');
-  await expect(sidebar(page).getByRole('textbox', { name: 'Observações', exact: true })).toBeDisabled(); await expect(sidebar(page).getByRole('button', { name: 'Finalizar atendimento', exact: true })).toHaveCount(0); expect(writes(seen.calls)).toHaveLength(0);
+  await expect(sidebar(page)).toContainText('Este título está sem responsável definida.'); await expect(sidebar(page)).toContainText('Importar Bases → Contas a Receber'); await expect(sidebar(page)).not.toContainText('A Gerência Geral também pode conferir a atribuição excepcional.');
+  await expect(sidebar(page).getByText('Gerenciar responsável', { exact: true })).toHaveCount(0); expect(seen.calls.filter(call => call.name === 'assign_receivable_collector')).toHaveLength(0);
+  await expect(sidebar(page).getByRole('textbox', { name: 'Observações', exact: true })).toBeDisabled(); for (const name of ['Salvar andamento', 'Finalizar atendimento', 'Marcar como título pago']) { const action = sidebar(page).getByRole('button', { name, exact: true }); await expect(action).toBeVisible(); await expect(action).toBeDisabled(); } expect(writes(seen.calls)).toHaveLength(0);
 });
 
 test('reabrir um atendimento em execução usa o início persistido pelo servidor sem criar outra sessão', async ({ page }) => {

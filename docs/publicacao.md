@@ -1,6 +1,8 @@
-# Publicação e ativação — 0.12.0
+# Publicação e ativação — 0.12.1
 
-A atualização atual **0.12.0** corrige o atendimento, a prioridade dos retornos e a validação financeira e acrescenta a escolha da cobradora na importação dos abertos. Seguir [cobranca-atendimento-retornos.md](cobranca-atendimento-retornos.md): executar o combinado **022..030**, atualizar a função existente **receivables-import** e conferir o site **0.12.0**. Numa base 0.11.0 completa, somente 029/030 são instaladas. Depois, reimportar o relatório de abertos para completar responsáveis ausentes sem duplicar os títulos. Não repetir a instalação inicial.
+A correção **0.12.1** mantém as ações do atendimento visíveis para os operadores autorizados, desabilitadas com explicação quando necessário. É uma atualização do site e usa a mesma ativação Supabase da 0.12.0. Conferir **Versão 0.12.1** no rodapé após o deploy.
+
+A atualização base **0.12.0** corrige o atendimento, a prioridade dos retornos e a validação financeira e acrescenta a escolha da cobradora na importação dos abertos. Seguir [cobranca-atendimento-retornos.md](cobranca-atendimento-retornos.md): executar o combinado **022..030**, atualizar a função existente **receivables-import** e conferir o site **0.12.0**. Numa base 0.11.0 completa, somente 029/030 são instaladas. Depois, reimportar o relatório de abertos para completar responsáveis ausentes sem duplicar os títulos. Não repetir a instalação inicial.
 
 A atualização anterior **0.11.0** acrescenta contatos e descrições exclusivamente ao atendimento de **Cobrança**, com importação dos arquivos de apoio e relatórios de contatos. Seguir [cobranca-contatos-descricoes.md](cobranca-contatos-descricoes.md): executar o combinado condicional **022..028**, publicar a nova função **collection-reference-import** e conferir o site 0.11.0 no mesmo endereço. Em uma base 0.10.0 completa, só 027/028 são instaladas. Não repetir a instalação inicial, nem substituir as funções anteriores. A importação dos arquivos reais é um passo posterior no sistema.
 

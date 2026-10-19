@@ -2,7 +2,7 @@
 
 18/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.12.0 ao final; pendências antigas não substituem os relatos posteriores do usuário.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.12.1 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -315,3 +315,14 @@ Hashes SHA256:
 - Combinado 022..030: `2071e417b7193d31531cfd98569aefbbbf6492ededb3b7952034ca9cc3b34660`.
 
 Ativação remota necessária: executar **ativar-recebiveis-operacao.sql**, atualizar a função existente **receivables-import** e conferir o site **0.12.0**. Depois, reimportar o relatório de abertos e escolher as responsáveis ausentes. [Guia de ativação e uso](cobranca-atendimento-retornos.md). Não foi executado SQL, importado arquivo real ou publicado gateway no Supabase pelo agente. Não há novas credenciais, nomes presumidos ou alterações financeiras de demonstração em produção. Os demais módulos e critérios de homologação pendentes continuam registrados nas seções anteriores.
+
+
+## Atualização 0.12.1 — ações visíveis e responsável somente para consulta
+
+O usuário relatou que Finalizar atendimento e Marcar como título pago haviam desaparecido. A condição de renderização dependia de o título estar editável; por isso os controles sumiam quando faltava a ativação 029, não havia responsável ou o título estava em leitura financeira. As ações agora permanecem visíveis para operadores autorizados ao abrir o título, desabilitadas com explicação enquanto houver bloqueio. O motivo também está associado aos botões para leitores de tela. Os acessos de consulta continuam sem comandos de escrita e as guardas existentes continuam exigindo o ciclo iniciado e os demais requisitos.
+
+A pedido do usuário, Gerenciar responsável foi retirado de dentro do atendimento, junto com seu formulário, estado e chamada de atribuição. A responsável oficial permanece visível em campo somente de leitura, conforme o vínculo definido na importação. A orientação de título sem responsável passa a indicar somente Importar Bases. A operação de importação e os cadastros fora desse atendimento permanecem com os contratos existentes.
+
+Build de produção/TypeScript e **46 cenários de navegador** aprovados na fonte final. As regressões conferem controles visíveis e desabilitados nos casos sem atualização, sem responsável ou em validação, conclusão após início/pausa, pagamento, acesso de Diretoria, carteira oficial somente para consulta e ausência de formulário/chamada de atribuição dentro do atendimento. Os dados e serviços são sintéticos locais.
+
+É uma correção do site que utiliza as mesmas migrations 029/030 e o mesmo gateway da 0.12.0. Não foi criado novo SQL ou alterado dado financeiro em produção. A publicação Git aciona o deploy da Cloudflare; o agente não aplicou atualizações no Supabase nem confirmou o término do deploy público.
