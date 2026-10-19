@@ -473,3 +473,24 @@ Validação local em 19/10/2026:
 - Nenhuma regra de valor, data, identidade, parcela, responsável, recebimento ou comissão foi alterada. Parser, gateway e migrations permanecem inalterados. Esta versão depende somente do site.
 
 A causa do arquivo atual continua pendente do erro específico ou dos relatórios atuais. Não há evidência para afrouxar validações financeiras nem para afirmar que a importação foi corrigida. O agente não executou importações no Supabase remoto nem confirmou o término do deploy Cloudflare.
+
+
+## Revalidação junto às escolhas de parcelas — 0.14.2
+
+O usuário informou que Nova parcela não eliminava o aviso de ambiguidade. A captura indicou seis posições: 11, 12, 16, 17, 18 e 33. A mensagem genérica copiada depois corresponde ao texto substituído na versão 0.14.1; a versão efetivamente carregada e a função publicada não puderam ser verificadas remotamente. A resposta do usuário não confirmou se os seletores permanecem preenchidos após nova análise.
+
+O resolvedor SQL023 e a prévia SQL024 foram ensaiados em PGlite com 35 títulos sintéticos e as mesmas seis posições. Sem escolhas, há seis ambiguidades. Com NEW nas chaves ordinais correspondentes, há zero erros, resultado HISTORICAL e can_commit=true. O gateway atual encaminha os vínculos e conserva as linhas oficiais. Não foi reproduzido erro de ordinal ou escolha ignorada no código atual; os ensaios não comprovam qual resposta ocorreu no ambiente do usuário.
+
+Foi corrigida uma dificuldade concreta de apresentação: após editar uma escolha, o diagnóstico anterior continuava parecendo um resultado atualizado e a reanálise ficava no alto da página. Agora a seção de parcelas oferece **Validar escolhas de parcelas**, usando a mesma prévia, sem confirmar o arquivo. Enquanto houver edições, o aviso fica neutro e a tabela é identificada como Análise anterior. Arquivo, bytes originais e escolhas continuam preservados; a confirmação exige uma nova prévia aprovada.
+
+Cada análise guarda o mapa de parcelas efetivamente enviado. Se a mesma linha retornar AMBIGUOUS apesar de ter recebido escolha explícita naquela análise, o sistema informa que a função não aplicou os vínculos. Há bloqueio próprio tanto no botão quanto no handler de confirmação, inclusive se uma resposta incoerente trouxer errors vazio e can_commit=true. CONFLICT conserva sua explicação financeira e não é tratado como escolha ignorada. Não há inferência de nova parcela, mudança de recebimento, alteração de carteira ou liberação automática.
+
+Verificação local em 19/10/2026:
+
+- Build TypeScript/Vite aprovado na versão 0.14.2; permanece somente o aviso existente de tamanho dos chunks.
+- **37 testes Node do gateway de recebíveis aprovados**, conferindo contratos, encaminhamento dos vínculos, originais, autorização e bloqueios.
+- **47 cenários de navegador aprovados**, incluindo oito novos de revalidação. Cobrem as seis posições nos dois modos, mesmos bytes e mapas na prévia/commit, confirmação separada, edição parcial, resposta que ignora escolhas, resposta incoerente sem erros, conflito financeiro legítimo e troca de arquivo. Nenhuma falha ou cenário ignorado.
+- Fixture de navegador ampliada para posições não iniciais, respostas que ignoram vínculos e conflitos; inclui preview.rows e contagem de conflitos coerentes com as linhas. Dados exclusivamente sintéticos.
+- Revisão independente conferiu snapshot, geração, cancelamento, bloqueios, preservação das escolhas e tratamento de conflitos. git diff --check aprovado.
+
+A melhoria depende somente do site. Não foram alterados gateway, migrations ou dados persistidos. O [guia de revalidação](revalidar-parcelas-recebiveis.md) inclui a atualização da função existente com o código completo já publicado caso o serviço remoto esteja divergente. O agente não publicou funções, executou SQL ou importou arquivos no Supabase remoto e não comprovou o término do deploy Cloudflare. A causa remota exata continua pendente; a versão não deve ser descrita como confirmação de importação de produção corrigida.

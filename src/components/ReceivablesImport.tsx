@@ -15,12 +15,14 @@ interface Preview {
   conflict_count: number; can_commit: boolean; errors?: ImportProblem[];
   collector_assignment_version?: string; customer_collector_assignments?: Assignment[]; missing_collector_count?: number;
 }
-interface Analysis { file: File; mode: Mode; base64: string; rows: PreviewRow[]; preview: Preview; nominalTotal: number; receivedTotal: number }
+interface Analysis { file: File; mode: Mode; base64: string; rows: PreviewRow[]; preview: Preview; nominalTotal: number; receivedTotal: number; titleMappings: Record<string, string> }
 interface ServerPreview { rows: PreviewRow[]; preview: Preview; file_sha256: string }
 const uuid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 const countFields = ['new_count', 'open_count', 'changed_count', 'pending_count', 'validated_in_source_count', 'received_count', 'matched_count', 'correction_count', 'historical_count', 'conflict_count'] as const;
 const outcomes: Record<string, string> = { NEW: 'Nova parcela', UPDATE: 'Atualizar título', MATCHED: 'Já identificado', AMBIGUOUS: 'Escolher vínculo da parcela', CONFLICT: 'Conflito a conferir', NEW_RECEIPT: 'Confirmar recebimento', CORRECTION: 'Corrigir recebimento importado', HISTORICAL: 'Incluir quitado do histórico' };
 function ambiguous(row: PreviewRow) { return row.outcome === 'AMBIGUOUS' || row.identity_outcome === 'AMBIGUOUS'; }
+function unappliedTitleMappings(analysis: Analysis) { return analysis.rows.some(row => row.outcome !== 'CONFLICT' && ambiguous(row) && Object.hasOwn(analysis.titleMappings, String(row.line))); }
+const unappliedMappingsMessage = 'A função de importação não aplicou os vínculos selecionados. Atualize a função receivables-import e analise novamente.';
 function safeProblems(value: unknown): ImportProblem[] {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 100).filter((item): item is ImportProblem => item && Number.isSafeInteger(item.line) && typeof item.column === 'string' && typeof item.problem === 'string' && typeof item.correction === 'string').map(item => ({ line: item.line, column: item.column.slice(0, 300), problem: item.problem.slice(0, 700), correction: item.correction.slice(0, 700) }));
@@ -118,8 +120,8 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
     if (busy || uncertain || next === mode) return;
     resetAnalysis(); setMode(next); setFile(null); setComplete(false); setMappings({}); setCollectorMappings({}); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); if (inputRef.current) inputRef.current.value = '';
   }
-  async function analyze(event: FormEvent) {
-    event.preventDefault();
+  async function analyze(event?: FormEvent) {
+    event?.preventDefault();
     if (!supabase || !file || !complete || !canImport || busy) return;
     const current = ++generation.current;
     controller.current?.abort(); const abort = new AbortController(); controller.current = abort;
@@ -145,7 +147,8 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
       }
       if (current !== generation.current) return;
       const totals = validatePreview(canonical, mode, parsed.hash);
-      setAnalysis({ file, mode, base64: parsed.base64, rows: canonical.rows, preview: canonical.preview, ...totals });
+      const nextAnalysis: Analysis = { file, mode, base64: parsed.base64, rows: canonical.rows, preview: canonical.preview, titleMappings: { ...mappings }, ...totals };
+      setAnalysis(nextAnalysis);
       // SQL preview identifies each financial item from 1; the header occupies
       // Excel row 1. Parser and HTTP 422 errors already use physical rows.
       const nextProblems = safeProblems(canonical.preview.errors).map(problem => ({ ...problem, line: problem.line > 0 ? problem.line + 1 : problem.line }));
@@ -157,7 +160,7 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
     } } finally { if (current === generation.current) setBusy(null); }
   }
   async function commit() {
-    if (!analysis || !complete || !canImport || busy || mappingsDirty || !analysis.preview.can_commit || problems.length) return;
+    if (!analysis || !complete || !canImport || busy || mappingsDirty || unappliedTitleMappings(analysis) || !analysis.preview.can_commit || problems.length) return;
     const p = analysis.preview, corrections = p.correction_count ?? 0;
     const message = analysis.mode === 'received'
       ? `Confirmar o relatório de TÍTULOS QUITADOS?\n\n${p.row_count} títulos; recebido efetivo ${formatCents(analysis.receivedTotal)}.\n${p.new_count} novos títulos; ${p.matched_count ?? 0} recebimentos já registrados; ${corrections} correções de recebimentos importados; ${p.historical_count ?? 0} quitados do histórico.\n\nOs recebimentos conferidos pelo arquivo sairão da carteira ativa e alimentarão a base de apuração de comissões. Correções preservam os registros anteriores. Esta importação não paga comissões.`
@@ -190,6 +193,8 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
   if (!canImport) return <p className="notice">Seu perfil não permite importar bases de Contas a Receber.</p>;
   const mappingRows = analysis?.rows.filter(row => ambiguous(row) || Object.hasOwn(mappings, String(row.line))) ?? [];
   const unresolved = mappingRows.filter(row => ambiguous(row) && !mappings[String(row.line)]);
+  const previousProblems = mappingsDirty && analysis !== null;
+  const mappingsNotApplied = !!analysis && !mappingsDirty && unappliedTitleMappings(analysis);
   const assignments = analysis?.preview.customer_collector_assignments ?? [];
   const filteredCustomers = assignments.filter(item => `${item.client_name} ${item.client_document ?? ''}`.toLocaleLowerCase('pt-BR').includes(customerSearch.toLocaleLowerCase('pt-BR')));
   const pages = Math.max(1, Math.ceil(filteredCustomers.length / 20)), currentPage = Math.min(customerPage, pages);
@@ -209,13 +214,16 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
         <div className="inline-actions"><button type="submit" className="button" disabled={!file || !complete || busy !== null || historyLoading}>{busy === 'analyzing' ? 'Analisando cópia…' : 'Analisar arquivo'}</button>{busy === 'analyzing' && !uncertain && <button type="button" className="button secondary" onClick={resetAnalysis}>Cancelar análise</button>}</div>
       </form>
       {problems.length > 0 && <div ref={problemsRef} tabIndex={-1} role="region" aria-label="Problemas encontrados na importação">
-        <div className="notice error" role="alert">
-          <p><strong>Importação bloqueada.</strong> Nenhum dado foi alterado. {problems.length} problema(s) encontrado(s) nesta análise.</p>
-          <p><strong>{problems[0].line > 0 ? `Linha ${problems[0].line} · ` : ''}{problems[0].column}:</strong> {problems[0].problem}</p>
-          <p><strong>Como corrigir:</strong> {problems[0].correction}</p>
-          <p>Confira os detalhes abaixo e analise o arquivo novamente.</p>
+        <div className={`notice${previousProblems ? '' : ' error'}`} role={previousProblems ? 'status' : 'alert'}>
+          {previousProblems ? <><p><strong>Escolhas alteradas.</strong> Valide as escolhas abaixo para atualizar a análise.</p><p>A tabela mostra os problemas da análise anterior. Nenhum dado foi alterado.</p></> : <>
+            <p><strong>Importação bloqueada.</strong> Nenhum dado foi alterado. {problems.length} problema(s) encontrado(s) nesta análise.</p>
+            {mappingsNotApplied && <p><strong>{unappliedMappingsMessage}</strong></p>}
+            <p><strong>{problems[0].line > 0 ? `Linha ${problems[0].line} · ` : ''}{problems[0].column}:</strong> {problems[0].problem}</p>
+            <p><strong>Como corrigir:</strong> {problems[0].correction}</p>
+            <p>Confira os detalhes abaixo e analise o arquivo novamente.</p>
+          </>}
         </div>
-        <div className="table-wrap"><table><caption>Problemas encontrados · até 100 erros por análise</caption><thead><tr><th>Linha</th><th>Coluna</th><th>Problema</th><th>Como corrigir</th></tr></thead><tbody>{problems.map((problem, index) => <tr key={index}><td>{problem.line || '—'}</td><td>{problem.column}</td><td>{problem.problem}</td><td>{problem.correction}</td></tr>)}</tbody></table></div>
+        <div className="table-wrap"><table><caption>{previousProblems ? 'Análise anterior · problemas encontrados · até 100 erros por análise' : 'Problemas encontrados · até 100 erros por análise'}</caption><thead><tr><th>Linha</th><th>Coluna</th><th>Problema</th><th>Como corrigir</th></tr></thead><tbody>{problems.map((problem, index) => <tr key={index}><td>{problem.line || '—'}</td><td>{problem.column}</td><td>{problem.problem}</td><td>{problem.correction}</td></tr>)}</tbody></table></div>
       </div>}
       {mode === 'open' && analysis && <section className="stack" aria-labelledby="import-collectors-title"><h3 id="import-collectors-title">Cobradoras responsáveis pela carteira</h3>
         <p className="help-text">A responsável é vinculada ao cliente e acompanha seus títulos. Os vínculos existentes ficam preservados. Você também pode reimportar o mesmo arquivo para completar carteiras sem responsável, sem duplicar os títulos.</p>
@@ -234,14 +242,16 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
       {mappingRows.length > 0 && <div className="stack"><h3>Conferir parcelas do mesmo documento</h3><p className="help-text">Escolha um título existente somente quando a linha for uma atualização daquela parcela. Se for outra parcela, escolha Nova parcela. Nenhum vínculo é presumido pelo número da NF.</p>
         {unresolved.length > 0 && <button type="button" className="button secondary" disabled={busy !== null || uncertain} onClick={() => { setMappings(previous => ({ ...previous, ...Object.fromEntries(unresolved.map(row => [String(row.line), 'NEW'])) })); setMappingsDirty(true); }}>Marcar {unresolved.length} linha(s) como novas parcelas</button>}
         <div className="table-wrap"><table><caption>Vínculo das parcelas antes da importação</caption><thead><tr><th>Linha</th><th>Cliente / NF</th><th>Vencimento / Valor original</th><th>Vínculo confirmado</th></tr></thead><tbody>{mappingRows.map(row => <tr key={row.line}><td>{row.line + 1}</td><td>{row.client_name} · {row.document} · Filial {row.branch}</td><td>{dateLabel(row.due_date)} · {formatCents(row.amount_cents)}</td><td><label className="field">Vínculo da linha {row.line + 1}<select aria-label={`Vínculo da linha ${row.line + 1}`} value={mappings[String(row.line)] ?? ''} disabled={busy !== null || uncertain} onChange={event => mapTitle(row.line, event.target.value)}><option value="">Selecione a parcela</option><option value="NEW">Nova parcela</option>{row.candidates?.map(candidate => <option key={candidate.id} value={candidate.id}>{dateLabel(candidate.due_date)} · {formatCents(candidate.amount_cents)} · {candidate.status === 'VALIDATED' ? 'Quitado' : 'Em aberto'}</option>)}</select></label></td></tr>)}</tbody></table></div>
-        {mappingsDirty && <p className="notice">Vínculos alterados. Clique em Analisar arquivo novamente para conferir o resultado antes de concluir.</p>}
+        {mappingsDirty && <p className="notice">Vínculos alterados. Valide as escolhas de parcelas para conferir o resultado antes de concluir.</p>}
+        <div className="inline-actions"><button type="button" className="button secondary" disabled={!file || !complete || busy !== null || historyLoading || uncertain} onClick={() => void analyze()}>{busy === 'analyzing' ? 'Validando escolhas…' : 'Validar escolhas de parcelas'}</button></div>
+        {mappingsNotApplied && !problems.length && <p className="notice error" role="alert">{unappliedMappingsMessage}</p>}
       </div>}
       {analysis && <div className="stack"><h3>Conferência de Contas a Receber</h3><p>{analysis.preview.row_count} títulos · total original {formatCents(analysis.nominalTotal)} · {analysis.preview.new_count} novos títulos.</p>
         {mode === 'received' ? <><p><strong>Total recebido efetivo: {formatCents(analysis.receivedTotal)}</strong></p><p>{analysis.preview.received_count ?? 0} recebimentos novos · {analysis.preview.matched_count ?? 0} já registrados · {analysis.preview.correction_count ?? 0} correções · {analysis.preview.historical_count ?? 0} quitados do histórico.</p><p className="notice">A confirmação deste arquivo valida os recebimentos conferidos. A apuração de comissões usa o valor efetivamente recebido; importar não significa pagar comissão.</p></> : <p className="notice">{analysis.preview.changed_count ?? 0} títulos com alterações. Ausências permanecem como estão; nenhum recebimento será confirmado.</p>}
         {(analysis.preview.validated_in_source_count ?? 0) > 0 && <p className="notice">{analysis.preview.validated_in_source_count} título(s) já quitado(s) reaparecem no relatório. A importação não reabre esses títulos.</p>}
         <div className="table-wrap"><table><caption>Conferência das primeiras {Math.min(10, analysis.rows.length)} linhas oficiais</caption><thead><tr><th>Cliente / NF</th><th>Filial</th><th>Vencimento original</th><th>Valor original</th>{mode === 'received' && <><th>Recebido em</th><th>Valor recebido</th></>}<th>Resultado</th></tr></thead><tbody>{analysis.rows.slice(0, 10).map(row => <tr key={row.line}><td>{row.client_name} · {row.document}</td><td>{row.branch}</td><td>{dateLabel(row.due_date)}</td><td>{formatCents(row.amount_cents)}</td>{mode === 'received' && <><td>{dateLabel(row.received_on ?? null)}</td><td>{formatCents(row.received_amount_cents ?? 0)}</td></>}<td>{outcomes[row.outcome]}</td></tr>)}</tbody></table></div>
         {!analysis.preview.can_commit && !problems.length && <p className="notice error" role="alert">Este arquivo ainda precisa de conferência. Resolva os vínculos ou conflitos e analise novamente.</p>}
-        <button className="button" type="button" disabled={busy !== null || !complete || mappingsDirty || !analysis.preview.can_commit || problems.length > 0} onClick={() => void commit()}>{busy === 'saving' ? 'Concluindo importação…' : mode === 'received' ? 'Confirmar importação de títulos quitados' : 'Concluir importação de abertos e vencidos'}</button>
+        <button className="button" type="button" disabled={busy !== null || !complete || mappingsDirty || unappliedTitleMappings(analysis) || !analysis.preview.can_commit || problems.length > 0} onClick={() => void commit()}>{busy === 'saving' ? 'Concluindo importação…' : mode === 'received' ? 'Confirmar importação de títulos quitados' : 'Concluir importação de abertos e vencidos'}</button>
       </div>}
     </section>
     <section className="panel" aria-labelledby="receivable-import-history"><div className="panel-header"><div><h2 id="receivable-import-history">Histórico de importações de Contas a Receber</h2><p className="muted">20 arquivos mais recentes. Os contadores descrevem cada lote e não substituem o saldo atual.</p></div><button className="button secondary" type="button" disabled={busy !== null || historyLoading} onClick={() => setRefresh(value => value + 1)}>Atualizar histórico de CR</button></div>

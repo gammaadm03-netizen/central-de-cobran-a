@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.14.1**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.14.2**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Revalidar escolhas de parcelas — 0.14.2
+
+A seção de parcelas agora tem **Validar escolhas de parcelas** junto aos vínculos. Ao alterar uma escolha, a tela identifica os problemas como resultado da análise anterior até a revalidação. A confirmação continua separada e exige a prévia oficial sem impedimentos. Se a mesma análise enviar um vínculo explícito e a função devolver aquela linha como ambígua, a tela informa que a função não aplicou a escolha, preserva o arquivo e bloqueia a conclusão. O [guia de revalidação](docs/revalidar-parcelas-recebiveis.md) explica o fluxo e a atualização da função existente quando necessária.
 
 ## Diagnóstico da importação de Contas a Receber — 0.14.1
 

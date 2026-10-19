@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.14.1
+# Publicação e ativação — 0.14.2
+
+A atualização **0.14.2** acrescenta **Validar escolhas de parcelas** junto às escolhas e distingue o resultado anterior da análise atual. Também bloqueia explicitamente uma resposta que continue ambígua para um vínculo já enviado. Esta melhoria depende somente do site. Caso a função remota não aplique as escolhas, o [guia específico](revalidar-parcelas-recebiveis.md) orienta atualizar a função existente `receivables-import` com o código completo já disponível; não há nova migration ou função adicional.
 
 A atualização **0.14.1** apresenta o primeiro erro detalhado da importação de Contas a Receber perto do botão de análise, com foco automático e tabela completa preservada. Depende somente do site, sem mudança de banco ou função. A causa do novo arquivo informado pelo usuário depende de receber o erro específico ou as planilhas atuais.
 

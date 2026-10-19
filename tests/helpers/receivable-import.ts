@@ -11,7 +11,7 @@ export const collectorA = '60000000-0000-4000-8000-000000000001';
 export const collectorB = '60000000-0000-4000-8000-000000000002';
 export const collectorNames = { [collectorA]: 'Responsável sintética A', [collectorB]: 'Responsável sintética B' };
 export function receivableCustomerKey(row: { client_document: string | null; client_name: string }) { return row.client_document ? `cnpj:${row.client_document}` : `name:${row.client_name.trim().replace(/\s+/g, ' ').toUpperCase()}`; }
-export interface FixtureOptions { stale?: boolean; serverInvalid?: boolean; validatedPresent?: boolean; ambiguous?: number; correction?: boolean; matched?: boolean; historical?: boolean; conflict?: boolean; activationMissing?: boolean; uncertainCommit?: boolean; deferCommit?: boolean; legacyPreview?: boolean; tamperHash?: boolean; unassignedCustomers?: 'all' | string[]; missingCollectorMetadata?: boolean; agentsEmpty?: boolean; agentsFailure?: boolean; collectorOwners?: Record<string, string>; paidAfterUncertainCommit?: boolean; inactiveAfterUncertainCommit?: boolean }
+export interface FixtureOptions { stale?: boolean; serverInvalid?: boolean; validatedPresent?: boolean; ambiguous?: number; ambiguousLines?: number[]; ignoreTitleMappings?: boolean; mappingConflict?: boolean; invalidMappedPreview?: boolean; correction?: boolean; matched?: boolean; historical?: boolean; conflict?: boolean; activationMissing?: boolean; uncertainCommit?: boolean; deferCommit?: boolean; legacyPreview?: boolean; tamperHash?: boolean; unassignedCustomers?: 'all' | string[]; missingCollectorMetadata?: boolean; agentsEmpty?: boolean; agentsFailure?: boolean; collectorOwners?: Record<string, string>; paidAfterUncertainCommit?: boolean; inactiveAfterUncertainCommit?: boolean }
 export async function setupReceivableImport(page: Page, options: FixtureOptions = {}) {
   const id = '10000000-0000-4000-8000-000000000001';
   const access = { profile: { id, username: 'UsuarioTeste', display_name: 'Pessoa Teste', role_key: 'contas_receber', enabled: true }, permissions: [{ resource: 'painel', action: 'read' }, { resource: 'contas_receber', action: 'read' }, { resource: 'contas_receber', action: 'import' }, { resource: 'importar_bases', action: 'read' }], collector_id: null };
@@ -61,12 +61,13 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
         const parsed = body.mode === 'received' ? validateReceivablePaidRows(matrix) : validateReceivableRows(matrix);
         if (parsed.errors.length) return reply({ errors: parsed.errors }, 422);
         const rows = parsed.rows.map((row, index) => {
-          const line = index + 1, ambiguous = index < (options.ambiguous ?? 0) && !body.title_mappings?.[String(line)];
-          const outcome = options.conflict ? 'CONFLICT' : ambiguous ? 'AMBIGUOUS' : body.mode === 'received' ? options.correction ? 'CORRECTION' : options.historical || body.title_mappings?.[String(line)] === 'NEW' ? 'HISTORICAL' : options.matched || imported ? 'MATCHED' : 'NEW_RECEIPT' : options.validatedPresent || imported ? 'MATCHED' : body.title_mappings?.[String(line)] && body.title_mappings[String(line)] !== 'NEW' ? 'UPDATE' : 'NEW';
-          return { ...row, customer_key: receivableCustomerKey(row), line, title_id: outcome === 'NEW' || outcome === 'HISTORICAL' ? null : candidateId, outcome, candidates: index < (options.ambiguous ?? 0) ? [{ id: candidateId, due_date: '2026-10-15', amount_cents: row.amount_cents, status: 'OPEN', collector_id: null }] : [] };
+          const line = index + 1, hasCandidate = options.ambiguousLines?.includes(line) ?? index < (options.ambiguous ?? 0);
+          const ambiguous = hasCandidate && (options.ignoreTitleMappings || !body.title_mappings?.[String(line)]);
+          const outcome = options.conflict || options.mappingConflict && body.title_mappings?.[String(line)] ? 'CONFLICT' : ambiguous ? 'AMBIGUOUS' : body.mode === 'received' ? options.correction ? 'CORRECTION' : options.historical || body.title_mappings?.[String(line)] === 'NEW' ? 'HISTORICAL' : options.matched || imported ? 'MATCHED' : 'NEW_RECEIPT' : options.validatedPresent || imported ? 'MATCHED' : body.title_mappings?.[String(line)] && body.title_mappings[String(line)] !== 'NEW' ? 'UPDATE' : 'NEW';
+          return { ...row, customer_key: receivableCustomerKey(row), line, title_id: outcome === 'NEW' || outcome === 'HISTORICAL' ? null : candidateId, outcome, candidates: hasCandidate ? [{ id: candidateId, due_date: '2026-10-15', amount_cents: row.amount_cents, status: 'OPEN', collector_id: null }] : [] };
         });
         const ambiguous = rows.filter(row => row.outcome === 'AMBIGUOUS').length;
-        const conflict = options.conflict ? rows.length : 0;
+        const conflict = rows.filter(row => row.outcome === 'CONFLICT').length;
         const preview: any = { mode: body.mode, previous_import_id: imported ? '40000000-0000-4000-8000-000000000001' : null, financial_revision: imported ? '18' : '17', row_count: rows.length,
           new_count: body.mode === 'received' ? rows.filter(row => row.outcome === 'HISTORICAL').length : rows.filter(row => row.outcome === 'NEW').length,
           open_count: options.validatedPresent || scenario.paid ? 0 : rows.filter(row => row.outcome === 'UPDATE' || row.outcome === 'MATCHED').length, changed_count: rows.filter(row => row.outcome === 'UPDATE').length,
@@ -74,6 +75,7 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
           received_count: rows.filter(row => ['NEW_RECEIPT', 'HISTORICAL'].includes(row.outcome)).length, matched_count: rows.filter(row => row.outcome === 'MATCHED').length,
           correction_count: rows.filter(row => row.outcome === 'CORRECTION').length, historical_count: rows.filter(row => row.outcome === 'HISTORICAL').length,
           conflict_count: conflict, can_commit: ambiguous === 0 && conflict === 0,
+          rows,
           errors: rows.filter(row => row.outcome === 'AMBIGUOUS' || row.outcome === 'CONFLICT').map(row => ({ line: row.line, column: 'Documento / NF', problem: row.outcome === 'AMBIGUOUS' ? 'Escolha o vínculo da parcela antes de importar.' : 'Recebimento manual divergente. Nenhum registro será substituído.', correction: row.outcome === 'AMBIGUOUS' ? 'Selecione a parcela existente ou Nova parcela e analise novamente.' : 'Confira o recebimento com o financeiro.' })),
         };
         if (body.mode === 'open' && !options.missingCollectorMetadata) {
@@ -91,6 +93,7 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
           preview.missing_collector_count = assignments.filter(item => item.requires_selection && !item.collector_id).length;
           preview.can_commit = preview.can_commit && preview.missing_collector_count === 0;
         }
+        if (options.invalidMappedPreview && Object.keys(body.title_mappings ?? {}).length) { preview.errors = []; preview.can_commit = true; }
         lastCount = rows.length; lastMode = body.mode;
         return reply({ rows, file_sha256: options.tamperHash ? '0'.repeat(64) : createHash('sha256').update(bytes).digest('hex'), preview: options.legacyPreview ? { previous_import_id: null, row_count: rows.length, new_count: rows.length, open_count: 0, pending_count: 2, validated_in_source_count: 0 } : preview });
       }
