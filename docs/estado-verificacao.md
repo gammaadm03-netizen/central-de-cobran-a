@@ -392,3 +392,22 @@ Validação local em 19/10/2026:
 - Função business-import de arquivo único: SHA-256 `fb15fa35be80b51e0f1133fdc3f63fde69e376ce8839303c7ac87f8e937edbac`.
 
 O agente não executou SQL, atualizou funções ou importou RH no projeto remoto; não comprovou o término do deploy Cloudflare. Ativação: combinado 031..036, função existente business-import e site 0.13.2; depois reimportar a mesma planilha com a data original. Guia: [corrigir-importacao-rh.md](corrigir-importacao-rh.md).
+
+## Sócios apresentados como pró-labores — 0.13.3
+
+O usuário determinou que os sócios apareçam em soma separada e sejam classificados como pró-labores. A nova migration 037 deriva a classificação do setor SÓCIO, preservando os 13 campos importados, arquivos originais, posições e auditorias. Não altera o formato 3, a função business-import ou o valor numérico do Total de cinco componentes.
+
+Os indicadores Salário Folha e Salário recebido agora abrangem somente colaboradores. Há indicadores separados de Pró-labore sem descontos e Pró-labore recebido, além dos subtotais de colaboradores e sócios no Total geral. A projeção identifica o tipo de remuneração em cada pessoa e nos calendários. Quadros por filial e setor separam salários de pró-labores. Campos de API existentes com valores globais são preservados para compatibilidade, mas não são usados como salários na interface atualizada.
+
+Prévia e Excel seguem a classificação. O Excel utiliza cabeçalhos neutros de remuneração e identifica cada registro como Salário ou Pró-labore; seus subtotais são calculados somente sobre as pessoas filtradas. Na consulta anterior à 037, a interface separa os grupos a partir das linhas existentes, usando centavos exatos e preservando dados desconhecidos. A ausência de informação num grupo não invalida o subtotal conhecido do outro. A Diretoria permanece somente em consulta.
+
+Validação local em 19/10/2026:
+
+- Build TypeScript/Vite aprovado, sem dependências novas. O aviso de tamanho dos chunks permanece sem impedir a geração.
+- **19 testes Node de RH e business-import aprovados**, verificando os modelos de origem, valores canônicos e fluxo do gateway existente.
+- **14 testes SQL aprovados**: dez da classificação 037 e quatro do combinado repetível. Cobrem gross/net separados, Total inalterado, grupos/calendários, valores desconhecidos e grupos vazios, precisão, original privado, histórico/auditoria preservados, repetição e permissões.
+- **19 cenários de navegador aprovados**: 13 de RH e seis da Diretoria. Conferidos cards, prévia, classificação do sócio no Excel, subtotais do filtro, leitura antiga, dados ausentes, importação canônica e controles somente para consulta. Nenhum teste falhou ou foi ignorado.
+- Combinado 031..037 com recarga do schema: SHA-256 `754e9290fe71dbcfd8d9537ff14a9aaca37634dd4e0d7b1c562d2cfc6f1e1c7a`.
+- business-import.ts permanece inalterado: SHA-256 `fb15fa35be80b51e0f1133fdc3f63fde69e376ce8839303c7ac87f8e937edbac`. Migrations publicadas 001..036 também permanecem inalteradas.
+
+O agente não aplicou SQL no Supabase remoto nem comprovou o término do deploy Cloudflare. Para quem já ativou 0.13.2, basta executar o combinado atual e atualizar a consulta no site 0.13.3. Essa classificação não exige reimportação ou nova publicação da função. O guia mantém os passos anteriores para quem ainda não concluiu o reconhecimento das colunas: [corrigir-importacao-rh.md](corrigir-importacao-rh.md).

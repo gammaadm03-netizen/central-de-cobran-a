@@ -1,12 +1,12 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.13.2**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.13.3**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
 
-## Salários e Total de RH / DP — 0.13.2
+## Salários e pró-labores em RH / DP — 0.13.3
 
-**Salário Folha — colaboradores** usa a coluna Salário Folha / Base, sem descontos e sem sócios. **Salário recebido** usa o valor com descontos e inclui sócios. O Total segue a soma explicitamente definida: **Salário Base + VT total + Salário recebido + Adiantamento + Ajuda de Custo**. Prévia, tela e Excel usam o cálculo do banco; o TOTAL original fica separado. Benefícios vazios nas colunas presentes valem zero; dados ausentes continuam desconhecidos.
+Os valores do setor **SÓCIO** passam a ser apresentados separadamente como **Pró-labore sem descontos** e **Pró-labore recebido**. Os dois indicadores de salários abrangem somente colaboradores. Quadro por filial/setor, prévia e Excel distinguem a remuneração dos sócios. O Total geral mantém os cinco componentes definidos pela operação, com subtotais de colaboradores e sócios separados; o TOTAL original permanece apenas para conferência.
 
-Ativação: [salários e importação de RH](docs/corrigir-importacao-rh.md). Executar o combinado **031..036**, atualizar a função existente **business-import**, conferir o site **0.13.2** e reimportar a mesma base com a data da posição original. A revisão corrigida preserva o histórico e não duplica os totais.
+Ativação: [salários e pró-labores de RH](docs/corrigir-importacao-rh.md). Executar o combinado **031..037** e conferir o site **0.13.3**. Para quem já ativou a 0.13.2, esta classificação usa a base existente e dispensa nova importação ou atualização da função. Os passos anteriores de reconhecimento das colunas continuam descritos no guia para quem ainda não os concluiu.
 
 ## Quatro abas recuperadas da V75 — 0.13.0
 

@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.13.2
+# Publicação e ativação — 0.13.3
+
+A atualização **0.13.3** separa a remuneração dos registros com setor SÓCIO como **Pró-labore**, retirando-os dos indicadores de salários dos colaboradores. A prévia, o Excel, os quadros por filial/setor e os subtotais seguem a mesma classificação. Aplicar o combinado atual **031..037**, conferir o site **0.13.3** e atualizar a consulta de RH. Quem já ativou a 0.13.2 não precisa reimportar a planilha nem republicar business-import para essa separação. As bases e os valores originais permanecem preservados. [Guia](corrigir-importacao-rh.md).
 
 A atualização **0.13.2** separa **Salário Folha** (sem descontos, colaboradores sem sócios) de **Salário recebido** (com descontos, incluindo sócios) e calcula o Total dos cinco campos definidos pela operação. Seguir [corrigir-importacao-rh.md](corrigir-importacao-rh.md): executar o combinado atual **031..036**, atualizar a função existente **business-import** e conferir o site **0.13.2**. Reimportar a mesma planilha com a data original corrige os vínculos e preserva o histórico, sem duplicar pessoas ou totais. A publicação pelo Git não executa o SQL nem publica a função no Supabase.
 
