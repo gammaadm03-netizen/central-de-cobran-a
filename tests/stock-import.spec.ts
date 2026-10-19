@@ -53,7 +53,7 @@ async function setup(page: Page, options: Options = {}) {
   await page.goto('/'); await page.getByLabel('Usuário', { exact: true }).fill('GestoraTeste'); await page.getByLabel('Senha', { exact: true }).fill('synthetic-password'); await page.getByRole('button', { name: 'Entrar na Central' }).click();
   await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeVisible();
   await expect(page.getByText('Carregando indicadores…')).toHaveCount(0);
-  await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click();
+  if (role !== 'diretor') await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click();
   if (role === 'gerente_geral' && !options.noWrite) { await page.getByRole('tab', { name: 'Estoque', exact: true }).click(); await expect(page.getByText('Carregando histórico de estoque…')).toHaveCount(0); }
   return { rows, calls };
 }
@@ -173,6 +173,7 @@ test('a failed history page never shows the previous page records under the new 
 
 for (const role of ['contas_pagar', 'contas_receber', 'diretor'] as const) test(`${role} has no stock import entry and makes no stock-history or stock-write requests`, async ({ page }) => {
   const { calls } = await setup(page, { role });
+  if (role === 'diretor') await expect(page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true })).toHaveCount(0);
   await expect(page.getByRole('tab', { name: 'Estoque', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Salvar posição de estoque', exact: true })).toHaveCount(0);
   expect(calls.some(call => call.name === 'stock_positions' || call.name === 'save_manual_stock')).toBe(false);

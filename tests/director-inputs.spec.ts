@@ -56,7 +56,7 @@ async function setup(page: Page, options: Options = {}) {
   await page.goto('/'); await page.getByLabel('Usuário', { exact: true }).fill('GestoraTeste'); await page.getByLabel('Senha', { exact: true }).fill('synthetic-password'); await page.getByRole('button', { name: 'Entrar na Central' }).click();
   await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeVisible();
   await expect(page.getByText('Carregando indicadores…')).toHaveCount(0);
-  await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click();
+  if (role !== 'diretor') await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click();
   if (role === 'gerente_geral' && !options.noWrite) {
     await page.getByRole('tab', { name: 'Resumo da Diretoria', exact: true }).click();
     await expect(page.getByText('Carregando indicadores da data selecionada…')).toHaveCount(0);
@@ -226,6 +226,7 @@ test('saved observations are escaped and the dashboard action returns to the exe
 
 for (const role of ['contas_pagar', 'contas_receber', 'diretor'] as const) test(`${role} cannot open the supplemental report input card or query its management RPC`, async ({ page }) => {
   const { calls } = await setup(page, { role });
+  if (role === 'diretor') await expect(page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true })).toHaveCount(0);
   await expect(page.getByRole('tab', { name: 'Resumo da Diretoria', exact: true })).toHaveCount(0);
   await expect(submit(page)).toHaveCount(0);
   expect(calls.some(call => ['save_director_inputs', 'read_director_inputs'].includes(call.name))).toBe(false);

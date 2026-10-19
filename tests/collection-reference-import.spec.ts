@@ -98,7 +98,8 @@ async function setup(page: Page, options: Options = {}) {
     throw new Error('Unexpected reference action ' + body.action);
   });
   await page.goto('/'); await page.getByLabel('Usuário', { exact: true }).fill('TesteReferencias'); await page.getByLabel('Senha', { exact: true }).fill('synthetic-password'); await page.getByRole('button', { name: 'Entrar na Central', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeVisible(); await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeVisible();
+  if (role !== 'diretor') await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click();
   return { calls, uploads, staged, published, releaseStage: release, job: () => job };
 }
 async function openReferences(page: Page) { await page.getByRole('tab', { name: 'Contatos e descrições', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Contatos e descrições da Cobrança' })).toBeVisible(); }
@@ -177,7 +178,9 @@ test('explains the open-titles-first order and preserves future descriptions exc
 
 for (const role of ['diretor', 'contas_pagar', 'rh_dp', 'cobradora_1']) {
   test('reference import is hidden from role ' + role + ' even when financial permissions are present', async ({ page }) => {
-    const seen = await setup(page, { role }); await expect(page.getByRole('tab', { name: 'Contatos e descrições', exact: true })).toHaveCount(0); expect(seen.calls).toHaveLength(0); expect(seen.uploads).toHaveLength(0);
+    const seen = await setup(page, { role });
+    if (role === 'diretor') await expect(page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: 'Contatos e descrições', exact: true })).toHaveCount(0); expect(seen.calls).toHaveLength(0); expect(seen.uploads).toHaveLength(0);
   });
 }
 test('CR needs all official import permissions and does not gain the area from a read-only grant', async ({ page }) => {

@@ -2,6 +2,12 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
+## Diretoria somente para consulta — 0.12.2
+
+Aplicar **dashboard/ativar-acesso-diretoria.sql**, correspondente à nova migration **031_director_readonly**. A atualização preserva as versões 001..030 e remove do perfil Diretor as antigas permissões de importação e escrita de mensagens. O bloqueio de mutações também é aplicado em `has_permission` e `current_access`, com consulta administrativa somente por SELECT, sessão aprovada e perfil ativo. Os RPCs administrativos continuam exclusivos da Gerência.
+
+A conta de autenticação precisa ser criada em **Authentication → Users** e vinculada em **Administração → Usuários**. A senha é definida somente no Authentication; não há criação de conta ou senha no SQL. Não exige nova Edge Function. [Guia de ativação e cadastro](../docs/acesso-diretoria.md).
+
 ## Atendimento e responsáveis na importação — 0.12.0
 
 O combinado atual `dashboard/ativar-recebiveis-operacao.sql` inclui **022..030**, pulando versões registradas. A 029 acrescenta ciclo de atendimento, pausa, rascunho, finalização e prioridade de retornos oficiais por carteira; integra pendência financeira e devolução à mesma responsável. A 030 permite atribuição explícita de clientes sem carteira durante a importação de abertos e a complementação idempotente de um arquivo já importado. Preserva carteiras existentes, recebimentos e logs anteriores.

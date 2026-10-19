@@ -2,7 +2,7 @@
 
 18/10/2026. Estado de desenvolvimento e homologação; módulos financeiros ainda pendentes.
 
-As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.12.1 ao final; pendências antigas não substituem os relatos posteriores do usuário.
+As seções iniciais preservam o histórico das versões anteriores. O estado mais recente está na seção de atualização 0.12.2 ao final; pendências antigas não substituem os relatos posteriores do usuário.
 
 ## Concluído nesta máquina
 
@@ -326,3 +326,18 @@ A pedido do usuário, Gerenciar responsável foi retirado de dentro do atendimen
 Build de produção/TypeScript e **46 cenários de navegador** aprovados na fonte final. As regressões conferem controles visíveis e desabilitados nos casos sem atualização, sem responsável ou em validação, conclusão após início/pausa, pagamento, acesso de Diretoria, carteira oficial somente para consulta e ausência de formulário/chamada de atribuição dentro do atendimento. Os dados e serviços são sintéticos locais.
 
 É uma correção do site que utiliza as mesmas migrations 029/030 e o mesmo gateway da 0.12.0. Não foi criado novo SQL ou alterado dado financeiro em produção. A publicação Git aciona o deploy da Cloudflare; o agente não aplicou atualizações no Supabase nem confirmou o término do deploy público.
+
+
+## Atualização 0.12.2 — Diretoria somente para consulta
+
+O usuário solicitou novo acesso da Diretoria, com todas as abas exceto Importar Bases e nenhuma alteração de informações. Confirmou que a conta ainda não foi criada em Authentication. O cadastro remoto não foi executado pelo agente: não há conector nem credencial administrativa disponível neste ambiente. A senha solicitada não foi incluída em arquivos, SQL, testes ou commits. O guia orienta criar a conta pelo Supabase Auth e vincular o User UID em Administração, com perfil Diretor ativo; o login depende dessas etapas.
+
+A 031 remove a antiga exceção de escrita em mensagens e o acesso a Importar Bases, preserva consultas/exportações financeiras e permite leitura de usuários, cobradoras e auditoria. O bloqueio de ações além de read/export e de qualquer acesso à importação também é aplicado em has_permission e current_access, mesmo diante de concessões antigas reinseridas. Novas políticas administrativas concedem somente SELECT ao perfil oficial ativo, com sessão aprovada. RPCs de administração continuam exclusivos da Gerência.
+
+O frontend usa a mesma barreira no helper de permissões. A Diretoria pode navegar e consultar todas as abas, incluindo a Administração, sem formulários ou comandos de alteração. A Gerência mantém cadastro, vínculos e envio de mensagens. Filtros, consultas e exportações continuam disponíveis. O novo acesso não torna funcionais os módulos que permanecem em preparação.
+
+Validação: build de produção/TypeScript, 206 testes Node e 14 cenários SQL da 031 aprovados. A suíte SQL aplica 001..030 antes da 031 em PostgreSQL local descartável, comprova preservação dos dados/auth/perfis e dos demais acessos, bloqueia mutações e concessões antigas, verifica sessões ausentes, expiradas, revogadas e perfis desabilitados e confirma repetição sem alterações extras. Revisão independente não encontrou bloqueadores de autorização ou recursão de RLS.
+
+No navegador, foram verificados os dez casos de acesso e seis novos de Diretoria. A primeira execução teve 15 aprovados e um seletor que apontava para o cronômetro oculto de outra aba; foi corrigido e o caso passou. A bateria de 50 cenários relacionados à Diretoria teve 47 aprovados e três helpers antigos que ainda tentavam navegar para Importar Bases, agora corretamente indisponível. Os helpers foram atualizados sem remover as verificações de ausência de gravações/importações. A execução final focada de **13 casos passou**, incluindo esses três casos, as outras funções nos mesmos fluxos e uma importação autorizada de CP. Os seis novos casos confirmam as nove abas e a Administração em leitura, bloqueios mesmo com concessões antigas, mensagens, pagamentos, validação, contatos e tempo de trabalho. Nenhuma falha permanece pendente; a suíte inteira não foi repetida após esses ajustes de testes.
+
+A migration e o ativador avulso têm o mesmo SHA256: 8688fe40812728185c54848b879463cadce87800bd709b8edf44846d30cf4d32. As migrations 001..030 e o combinado anterior permanecem intactos. Ativação separada por dashboard/ativar-acesso-diretoria.sql; não exige nova Edge Function. [Guia de ativação e cadastro](acesso-diretoria.md). Publicação Git, aplicação SQL, criação Auth, vínculo do perfil e conferência do login são etapas distintas; o agente não confirmou execução remota delas.

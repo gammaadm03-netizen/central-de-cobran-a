@@ -74,7 +74,7 @@ function Pagination({ page, count, busy, onPage }: {
   </div>;
 }
 
-function Users({ onAccessChanged }: { onAccessChanged: () => Promise<void> }) {
+function Users({ onAccessChanged, canManage }: { onAccessChanged: () => Promise<void>; canManage: boolean }) {
   const [rows, setRows] = useState<ProfileRow[]>([]);
   const [page, setPage] = useState(0);
   const [count, setCount] = useState(0);
@@ -118,6 +118,7 @@ function Users({ onAccessChanged }: { onAccessChanged: () => Promise<void> }) {
   }, [page, revision]);
 
   function openEditor(profile: ProfileRow | null) {
+    if (!canManage || saving) return;
     setEditing(profile);
     setCreating(profile === null);
     setUid(profile?.id ?? '');
@@ -131,7 +132,7 @@ function Users({ onAccessChanged }: { onAccessChanged: () => Promise<void> }) {
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (saving) return;
+    if (!canManage || saving) return;
     setError('');
     setSuccess('');
     if (!/^[A-Za-z0-9._-]{3,64}$/.test(username.trim()) || !name.trim() || name.trim().length > 150) {
@@ -168,12 +169,12 @@ function Users({ onAccessChanged }: { onAccessChanged: () => Promise<void> }) {
       <div><h2>Usuários e permissões</h2><p className="muted">Contas individuais com autorização validada no banco.</p></div>
       <div className="inline-actions">
         <button className="button button-secondary" disabled={loading || saving} onClick={() => setRevision(value => value + 1)}>Atualizar</button>
-        <button className="button" disabled={saving} onClick={() => openEditor(null)}>Vincular conta existente</button>
+        {canManage && <button className="button" disabled={saving} onClick={() => openEditor(null)}>Vincular conta existente</button>}
       </div>
     </div>
     <Feedback error={error} success={success} />
     <p className="muted">A criação de contas e a redefinição de senha permanecem no painel seguro de autenticação. Esta tela não recebe nem exibe senhas.</p>
-    {(editing || creating) && <form className="panel stack" onSubmit={event => { void save(event); }}>
+    {canManage && (editing || creating) && <form className="panel stack" onSubmit={event => { void save(event); }}>
       <h3>{creating ? 'Vincular conta de autenticação' : `Editar ${editing?.username}`}</h3>
       <fieldset disabled={saving}>
         <div className="field-grid">
@@ -191,19 +192,19 @@ function Users({ onAccessChanged }: { onAccessChanged: () => Promise<void> }) {
     </form>}
     {loading ? <p role="status">Carregando usuários…</p> : <>
       <div className="table-scroll"><table>
-        <thead><tr><th>Usuário</th><th>Nome</th><th>Perfil</th><th>Status</th><th>Atualizado em</th><th>Ação</th></tr></thead>
+        <thead><tr><th>Usuário</th><th>Nome</th><th>Perfil</th><th>Status</th><th>Atualizado em</th>{canManage && <th>Ação</th>}</tr></thead>
         <tbody>{rows.map(row => <tr key={row.id}>
           <td>{row.username}</td><td>{row.display_name}</td><td>{roles[row.role_key]}</td>
           <td><span className="badge">{row.enabled ? 'Ativo' : 'Bloqueado'}</span></td>
-          <td>{localDate(row.updated_at)}</td><td><button className="button button-secondary" disabled={saving} onClick={() => openEditor(row)}>Editar</button></td>
-        </tr>)}{rows.length === 0 && <tr><td colSpan={6}>Nenhum usuário encontrado.</td></tr>}</tbody>
+          <td>{localDate(row.updated_at)}</td>{canManage && <td><button className="button button-secondary" disabled={saving} onClick={() => openEditor(row)}>Editar</button></td>}
+        </tr>)}{rows.length === 0 && <tr><td colSpan={canManage ? 6 : 5}>Nenhum usuário encontrado.</td></tr>}</tbody>
       </table></div>
       <Pagination page={page} count={count} busy={saving} onPage={setPage} />
     </>}
   </div>;
 }
 
-function Collectors() {
+function Collectors({ canManage }: { canManage: boolean }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [logins, setLogins] = useState<ProfileRow[]>([]);
   const [bindings, setBindings] = useState<Binding[]>([]);
@@ -256,7 +257,7 @@ function Collectors() {
 
   async function saveAgent(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (saving) return;
+    if (!canManage || saving) return;
     setError(''); setSuccess('');
     if (!name.trim() || name.trim().length > 150) { setError('Informe o nome da pessoa responsável, com até 150 caracteres.'); return; }
     if (!window.confirm(`Confirmar ${editing ? 'alteração' : 'cadastro'} da cobradora ${name.trim()}?\nStatus: ${enabled ? 'Ativa' : 'Inativa'}\n\nUma cobradora inativa não acessará a carteira vinculada.`)) return;
@@ -277,7 +278,7 @@ function Collectors() {
 
   async function saveBinding(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (saving) return;
+    if (!canManage || saving) return;
     setError(''); setSuccess('');
     const login = logins.find(row => row.id === userId);
     const agent = agents.find(row => row.id === agentId);
@@ -296,19 +297,24 @@ function Collectors() {
     finally { setSaving(false); }
   }
 
+  function openEditor(agent: Agent) {
+    if (!canManage || saving) return;
+    setEditing(agent); setName(agent.display_name); setEnabled(agent.enabled); setError(''); setSuccess('');
+  }
+
   return <div className="stack">
     <div className="panel-heading"><div><h2>Cobradoras e carteiras</h2><p className="muted">A Gerência define quem utiliza cada login. Nenhuma associação é presumida.</p></div><button className="button button-secondary" disabled={saving || loading} onClick={() => setRevision(value => value + 1)}>Atualizar</button></div>
     <Feedback error={error} success={success} />
     {loading ? <p role="status">Carregando cobradoras e vínculos…</p> : <>
       <div className="table-scroll"><table>
-        <thead><tr><th>Pessoa responsável</th><th>Status</th><th>Login vinculado</th><th>Ação</th></tr></thead>
+        <thead><tr><th>Pessoa responsável</th><th>Status</th><th>Login vinculado</th>{canManage && <th>Ação</th>}</tr></thead>
         <tbody>{agents.map(agent => {
           const binding = bindings.find(row => row.agent_id === agent.id);
           const login = logins.find(row => row.id === binding?.user_id);
-          return <tr key={agent.id}><td>{agent.display_name}</td><td>{agent.enabled ? 'Ativa' : 'Inativa'}</td><td>{login?.username ?? 'Sem vínculo'}</td><td><button className="button button-secondary" disabled={saving} onClick={() => { setEditing(agent); setName(agent.display_name); setEnabled(agent.enabled); setError(''); setSuccess(''); }}>Editar</button></td></tr>;
-        })}{agents.length === 0 && <tr><td colSpan={4}>Nenhuma cobradora cadastrada.</td></tr>}</tbody>
+          return <tr key={agent.id}><td>{agent.display_name}</td><td>{agent.enabled ? 'Ativa' : 'Inativa'}</td><td>{login?.username ?? 'Sem vínculo'}</td>{canManage && <td><button className="button button-secondary" disabled={saving} onClick={() => openEditor(agent)}>Editar</button></td>}</tr>;
+        })}{agents.length === 0 && <tr><td colSpan={canManage ? 4 : 3}>Nenhuma cobradora cadastrada.</td></tr>}</tbody>
       </table></div>
-      <form className="panel stack" onSubmit={event => { void saveAgent(event); }}>
+      {canManage && <form className="panel stack" onSubmit={event => { void saveAgent(event); }}>
         <h3>{editing ? 'Editar cobradora' : 'Cadastrar pessoa responsável'}</h3>
         <fieldset disabled={saving || loadFailed}>
           <div className="field-grid">
@@ -317,8 +323,8 @@ function Collectors() {
           </div>
           <div className="inline-actions"><button className="button" type="submit">{saving ? 'Salvando…' : 'Revisar e salvar cobradora'}</button>{editing && <button className="button button-secondary" type="button" onClick={() => { setEditing(null); setName(''); setEnabled(true); }}>Cancelar edição</button>}</div>
         </fieldset>
-      </form>
-      <form className="panel stack" onSubmit={event => { void saveBinding(event); }}>
+      </form>}
+      {canManage && <form className="panel stack" onSubmit={event => { void saveBinding(event); }}>
         <h3>Vincular login à pessoa responsável</h3>
         <p className="muted">Sem vínculo, o acesso de cobradora permanece sem carteira. Alterar o vínculo não redistribui títulos.</p>
         <fieldset disabled={saving || logins.length === 0}>
@@ -332,7 +338,7 @@ function Collectors() {
           <button className="button" type="submit">{saving ? 'Salvando…' : 'Revisar e salvar vínculo'}</button>
         </fieldset>
         {logins.length === 0 && <p className="muted">Cadastre primeiro os perfis de acesso das cobradoras na aba Usuários.</p>}
-      </form>
+      </form>}
     </>}
   </div>;
 }
@@ -378,16 +384,17 @@ function AuditLog() {
   </div>;
 }
 
-export default function Administration({ onAccessChanged }: { onAccessChanged: () => Promise<void> }) {
+export default function Administration({ onAccessChanged, canManage = false }: { onAccessChanged: () => Promise<void>; canManage?: boolean }) {
   const [tab, setTab] = useState<'users' | 'collectors' | 'audit'>('users');
   return <section className="panel stack" aria-label="Administração da Central Financeira">
+    {!canManage && <p className="notice" role="status">Acesso somente para consulta. Usuários, cobradoras e auditoria estão disponíveis para leitura.</p>}
     <div className="inline-actions" role="group" aria-label="Áreas administrativas">
       <button className={`button${tab === 'users' ? '' : ' button-secondary'}`} aria-pressed={tab === 'users'} onClick={() => setTab('users')}>Usuários</button>
       <button className={`button${tab === 'collectors' ? '' : ' button-secondary'}`} aria-pressed={tab === 'collectors'} onClick={() => setTab('collectors')}>Cobradoras</button>
       <button className={`button${tab === 'audit' ? '' : ' button-secondary'}`} aria-pressed={tab === 'audit'} onClick={() => setTab('audit')}>Auditoria</button>
     </div>
-    {tab === 'users' && <Users onAccessChanged={onAccessChanged} />}
-    {tab === 'collectors' && <Collectors />}
+    {tab === 'users' && <Users onAccessChanged={onAccessChanged} canManage={canManage} />}
+    {tab === 'collectors' && <Collectors canManage={canManage} />}
     {tab === 'audit' && <AuditLog />}
   </section>;
 }

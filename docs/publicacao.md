@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.12.1
+# Publicação e ativação — 0.12.2
+
+A atualização **0.12.2** deixa o perfil Diretor somente em consulta, com todas as abas exceto Importar Bases e Administração também em leitura. Seguir [acesso-diretoria.md](acesso-diretoria.md): aplicar o arquivo separado **ativar-acesso-diretoria.sql**, conferir o site 0.12.2 e criar/vincular a conta Auth se ainda não existir. O SQL não contém senha ou criação de usuário; nenhuma Edge Function precisa ser republicada.
 
 A correção **0.12.1** mantém as ações do atendimento visíveis para os operadores autorizados, desabilitadas com explicação quando necessário. É uma atualização do site e usa a mesma ativação Supabase da 0.12.0. Conferir **Versão 0.12.1** no rodapé após o deploy.
 

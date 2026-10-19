@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.12.1**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+Versão de desenvolvimento **0.12.2**. Painel, Caixa/Bancos, Contas a Pagar, Contas a Receber e Cobrança utilizam o banco central. O estoque permanece manual em Importar Bases. A operação completa ainda depende dos módulos pendentes e da homologação remota.
+
+## Diretoria somente para consulta — 0.12.2
+
+O perfil Diretor consulta todas as abas, incluindo a Administração em leitura, e não acessa Importar Bases. Os controles e as funções do banco bloqueiam alterações, validações, importações e envio/alteração de mensagens. A atualização utiliza a migration **031**, separada do combinado de recebíveis. A criação da conta Auth e seu vínculo com o login permanecem no cadastro autorizado; nenhuma senha é incluída no código. [Guia de ativação e cadastro](docs/acesso-diretoria.md).
 
 A correção **0.12.1** mantém Salvar andamento, Finalizar atendimento e Marcar como título pago visíveis para operadores autorizados quando há um título aberto no atendimento. Bloqueios mantêm os controles desabilitados com a explicação correspondente. A seção Gerenciar responsável foi retirada do atendimento; a cobradora aparece somente para consulta, conforme a importação. A correção chega pelo site e utiliza a mesma ativação de banco e importação da 0.12.0.
 
@@ -94,6 +98,7 @@ Sem as funções publicadas, as operações correspondentes ficam indisponíveis
 npm test
 npm run test:sql
 npm run test:auth-sql
+npm run test:director-readonly-sql
 npm run test:payables-sql
 npm run test:payables-forecast-sql
 npm run test:payable-payments-sql

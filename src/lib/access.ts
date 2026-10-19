@@ -20,5 +20,6 @@ export function isAccess(value: unknown): value is Access {
   return !!access.profile?.enabled && !!access.profile.id && access.profile.role_key in roleNames && Array.isArray(access.permissions) && access.permissions.every(permission => typeof permission.resource === 'string' && typeof permission.action === 'string');
 }
 export function permits(access: Access, resource: string, action = 'read') {
+  if (access.profile.role_key === 'diretor' && (resource === 'importar_bases' || !['read', 'export'].includes(action))) return false;
   return access.permissions.some(permission => permission.resource === resource && permission.action === action);
 }

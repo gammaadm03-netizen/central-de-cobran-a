@@ -4,10 +4,12 @@ const project='https://sjimddcqgrsauzvffcol.supabase.co';
 const modules=['painel','caixa','contas_pagar','contas_receber','cobranca','comissoes','faturamento','margens','rh_dp','importar_bases'];
 function fixture(role='gerente_geral') {
   const id='10000000-0000-4000-8000-000000000001';
-  const visible=role==='cobradora_1'?['cobranca']:role==='rh_dp'?['faturamento','rh_dp','importar_bases']:modules;
+  const visible=role==='cobradora_1'?['cobranca']:role==='rh_dp'?['faturamento','rh_dp','importar_bases']:role==='diretor'?modules.filter(resource=>resource!=='importar_bases'):modules;
   const permissions=visible.map(resource=>({resource,action:'read'}));
   if(role==='gerente_geral') permissions.push({resource:'usuarios',action:'admin'},{resource:'configuracoes',action:'admin'},{resource:'auditoria',action:'read'});
-  if(['gerente_geral','diretor'].includes(role)) permissions.push({resource:'mensagens_cp',action:'read'},{resource:'mensagens_cp',action:'write'});
+  if(['gerente_geral','diretor'].includes(role)) permissions.push({resource:'mensagens_cp',action:'read'});
+  if(role==='gerente_geral') permissions.push({resource:'mensagens_cp',action:'write'});
+  if(role==='diretor') permissions.push({resource:'usuarios',action:'read'},{resource:'configuracoes',action:'read'},{resource:'auditoria',action:'read'});
   const access={profile:{id,username:'UsuarioTeste',display_name:'Pessoa Teste',role_key:role,enabled:true},permissions,collector_id:null};
   const claims={sub:id,session_id:'20000000-0000-4000-8000-000000000001',exp:Math.floor(Date.now()/1000)+3600,iat:Math.floor(Date.now()/1000),role:'authenticated'};
   const token=[Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url'),Buffer.from(JSON.stringify(claims)).toString('base64url'),'synthetic-test-only'].join('.');
@@ -77,8 +79,14 @@ test('manager session loads official permissions and administration list',async(
  await page.getByRole('button',{name:'Administração',exact:false}).click();await expect(page.getByRole('heading',{name:'Usuários e permissões'})).toBeVisible();await expect(page.getByRole('cell',{name:'UsuarioTeste'})).toBeVisible();
  await page.screenshot({path:'/tmp/central-administration.png',fullPage:true});
 });
-test('director cannot see administration and can send a CP board message',async({page})=>{
- await setup(page,'diretor');await login(page);await expect(page.getByRole('button',{name:'Administração',exact:false})).toHaveCount(0);
+test('director can consult administration and CP messages without writing or importing',async({page})=>{
+ await setup(page,'diretor');await login(page);await expect(page.getByRole('button',{name:'Importar Bases',exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Administração',exact:false}).click();await expect(page.getByRole('heading',{name:'Usuários e permissões'})).toBeVisible();await expect(page.getByRole('button',{name:'Editar',exact:true})).toHaveCount(0);
+ await page.getByRole('navigation').getByRole('button',{name:'Contas a Pagar',exact:true}).click();await expect(page.getByRole('heading',{name:'Mensagens da Diretoria e Gerência'})).toBeVisible();
+ await expect(page.getByRole('textbox',{name:'Mensagem',exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'Enviar mensagem',exact:true})).toHaveCount(0);
+});
+test('manager retains CP board message creation and safely displays its text',async({page})=>{
+ await setup(page,'gerente_geral');await login(page);
  await page.getByRole('navigation').getByRole('button',{name:'Contas a Pagar',exact:true}).click();await expect(page.getByRole('heading',{name:'Mensagens da Diretoria e Gerência'})).toBeVisible();
  page.on('dialog',dialog=>dialog.accept());await page.getByLabel('Mensagem',{exact:true}).fill('<script>synthetic markup stays text</script>');await page.getByRole('button',{name:'Enviar mensagem'}).click();
  await expect(page.getByRole('status')).toContainText('Mensagem registrada');await expect(page.getByText('<script>synthetic markup stays text</script>',{exact:true})).toBeVisible();

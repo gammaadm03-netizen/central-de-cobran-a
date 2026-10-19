@@ -80,8 +80,8 @@ async function setup(page: Page, options: Options = {}) {
     throw new Error(`Unexpected offline fixture request ${name}`);
   });
   await page.goto('/'); await page.getByLabel('Usuário', { exact: true }).fill('ImportadorTeste'); await page.getByLabel('Senha', { exact: true }).fill('synthetic-password'); await page.getByRole('button', { name: 'Entrar na Central', exact: true }).click(); await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeVisible();
-  await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click();
-  if (!options.director) { await page.getByRole('button', { name: 'Pagamentos realizados', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Importar títulos pagos', exact: true })).toBeVisible(); }
+  if (options.director) await expect(page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true })).toHaveCount(0);
+  else { await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click(); await page.getByRole('button', { name: 'Pagamentos realizados', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Importar títulos pagos', exact: true })).toBeVisible(); }
   return { calls, previews, commits, accounts, ledgerCount: () => ledgerCount };
 }
 async function selectCsv(page: Page, contents = csv, filename = 'pagos.csv') { await page.getByLabel('Relatório de títulos pagos', { exact: true }).setInputFiles({ name: filename, mimeType: 'text/csv', buffer: Buffer.from(contents) }); await page.getByRole('checkbox', { name: /Confirmo que todos os títulos deste arquivo/ }).check(); }
