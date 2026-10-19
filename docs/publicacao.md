@@ -1,6 +1,6 @@
-# Publicação e ativação — 0.13.1
+# Publicação e ativação — 0.13.2
 
-A correção **0.13.1** reconhece o modelo real de RH com Salário Base, Salário e Ajuda de Custo. Seguir [corrigir-importacao-rh.md](corrigir-importacao-rh.md): executar o combinado atual **031..035**, atualizar a função existente **business-import** e conferir o site 0.13.1. Reimportar a mesma planilha preserva posições anteriores e completa os campos novos, sem duplicar os totais. Não criar outra função nem alterar os demais gateways.
+A atualização **0.13.2** separa **Salário Folha** (sem descontos, colaboradores sem sócios) de **Salário recebido** (com descontos, incluindo sócios) e calcula o Total dos cinco campos definidos pela operação. Seguir [corrigir-importacao-rh.md](corrigir-importacao-rh.md): executar o combinado atual **031..036**, atualizar a função existente **business-import** e conferir o site **0.13.2**. Reimportar a mesma planilha com a data original corrige os vínculos e preserva o histórico, sem duplicar pessoas ou totais. A publicação pelo Git não executa o SQL nem publica a função no Supabase.
 
 A atualização **0.13.0** recupera Comissões, Faturamento, Margens e RH/DP. Seguir [ativacao-demais-abas.md](ativacao-demais-abas.md): executar **ativar-demais-abas.sql** (031..034, versões já aplicadas são preservadas), publicar a nova função **business-import** e conferir o site 0.13.0. As funções anteriores permanecem. A Gerência importa as bases reais e vincula as pessoas às políticas de comissões com vigência; o código antigo não é publicado como HTML ou base atual.
 

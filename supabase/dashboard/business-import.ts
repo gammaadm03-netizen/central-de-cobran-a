@@ -289,8 +289,8 @@ function validateCommercialRows(matrix, { excel1904 = false } = {}) {
 
 // src/lib/hr-parser.mjs
 var normalize = (value) => String(value ?? "").normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-var LABELS = { branch: "Filial", employee: "Funcion\xE1rio", sector: "Setor", admitted_on: "Admiss\xE3o", birthday_on: "Anivers\xE1rio", salary_base_cents: "Sal\xE1rio Base", payroll_salary_cents: "Sal\xE1rio da folha", transport_cents: "VT TOTAL", advance_cents: "Adiantamento", cost_allowance_cents: "Ajuda de Custo", total_cents: "Total", count_label: "Contagem" };
-var HEADERS = { FILIAL: "branch", FUNCIONARIO: "employee", SETOR: "sector", ADMISSAO: "admitted_on", ANIVERSARIO: "birthday_on", VTTOTAL: "transport_cents", VT: "transport_cents", ADIANTAMENTO: "advance_cents", AJUDADECUSTO: "cost_allowance_cents", AJUDACUSTO: "cost_allowance_cents", TOTAL: "total_cents", CONTAGEM: "count_label", SALARIOBASE: "salary_base_cents", SALARIODAFOLHA: "payroll_salary_cents", SALARIOFOLHA: "payroll_salary_cents" };
+var LABELS = { branch: "Filial", employee: "Funcion\xE1rio", sector: "Setor", admitted_on: "Admiss\xE3o", birthday_on: "Anivers\xE1rio", salary_base_cents: "Sal\xE1rio Folha / Base, sem descontos", payroll_salary_cents: "Sal\xE1rio recebido, com descontos", transport_cents: "VT TOTAL", advance_cents: "Adiantamento", cost_allowance_cents: "Ajuda de Custo", total_cents: "Total informado na origem", count_label: "Contagem" };
+var HEADERS = { FILIAL: "branch", FUNCIONARIO: "employee", SETOR: "sector", ADMISSAO: "admitted_on", ANIVERSARIO: "birthday_on", VTTOTAL: "transport_cents", VT: "transport_cents", ADIANTAMENTO: "advance_cents", AJUDADECUSTO: "cost_allowance_cents", AJUDACUSTO: "cost_allowance_cents", TOTAL: "total_cents", CONTAGEM: "count_label", SALARIOBASE: "salary_base_cents", SALARIODAFOLHA: "salary_base_cents", SALARIOFOLHA: "salary_base_cents", SALARIORECEBIDO: "payroll_salary_cents", SALARIOLIQUIDO: "payroll_salary_cents" };
 var MONEY = ["salary_base_cents", "payroll_salary_cents", "transport_cents", "advance_cents", "cost_allowance_cents", "total_cents"];
 var BLANK_IS_ZERO = /* @__PURE__ */ new Set(["transport_cents", "advance_cents", "cost_allowance_cents"]);
 var blank = (value) => value === null || value === void 0 || typeof value === "string" && !value.trim();
@@ -339,7 +339,7 @@ function validateHrRows(matrix, { excel1904 = false } = {}) {
     }
     if (head2.includes("FILIAL") && head2.includes("FUNCIONARIO") && head2.includes("SETOR")) candidates.push({ line, head: head2 });
   }
-  if (!candidates.length) return { rows, errors: [{ line: 1, column: "Cabe\xE7alho", problem: "N\xE3o encontrei FILIAL, SETOR e FUNCION\xC1RIO na mesma linha.", correction: "Inclua os tr\xEAs cabe\xE7alhos. Use Sal\xE1rio Base e Sal\xE1rio, ou dois SAL\xC1RIO na ordem base e folha." }] };
+  if (!candidates.length) return { rows, errors: [{ line: 1, column: "Cabe\xE7alho", problem: "N\xE3o encontrei FILIAL, SETOR e FUNCION\xC1RIO na mesma linha.", correction: "Inclua os tr\xEAs cabe\xE7alhos. Use Sal\xE1rio Folha (ou Base) e Sal\xE1rio recebido, ou dois SAL\xC1RIO na ordem sem descontos e recebido." }] };
   const { line: headerLine, head } = candidates[0];
   if (head.length > 100) problem(headerLine + 1, "Cabe\xE7alho", "A base excede 100 colunas.");
   const columns = /* @__PURE__ */ new Map(), unnamedSalaries = [];
@@ -570,12 +570,15 @@ function createBusinessGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
       const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
       const referenceArgument = commercial ? { p_month: reference } : { p_reference_date: reference };
       if (body.action === "preview") {
-        const preview = await call(`/rest/v1/rpc/${commercial ? "preview_commercial_import" : "preview_hr_report_import"}`, { data: { p_rows: parsed.rows, ...referenceArgument } });
+        const preview = await call(`/rest/v1/rpc/${commercial ? "preview_commercial_import" : "preview_hr_total_import"}`, { data: { p_rows: parsed.rows, ...referenceArgument } });
         if (!preview.ok) return fail(preview);
         if (preview.payload?.row_count !== parsed.rows.length || !(preview.payload.previous_import_id === null || UUID.test(preview.payload.previous_import_id ?? ""))) throw Error("preview");
-        return respond(200, { rows: parsed.rows, preview: preview.payload, file_sha256: hash });
+        const rows = commercial ? parsed.rows : preview.payload.rows;
+        if (!Array.isArray(rows) || rows.length !== parsed.rows.length || !commercial && preview.payload.summary?.total_formula_version !== "rh-five-fields-v1") throw Error("preview");
+        const { rows: projectedRows, ...details } = preview.payload;
+        return respond(200, { rows, preview: commercial ? preview.payload : details, file_sha256: hash, ...commercial ? {} : { format_version: 3 } });
       }
-      const committed = await call(`/rest/v1/rpc/${commercial ? "commit_commercial_import_from_gateway" : "commit_hr_report_import_from_gateway"}`, { service: true, data: { p_user_id: auth.payload.id, p_session_id: verifiedSession, p_file_name: body.file_name, p_file_sha256: hash, p_file_base64: body.file_base64, p_rows: parsed.rows, ...referenceArgument, p_previous_import_id: body.previous_import_id } });
+      const committed = await call(`/rest/v1/rpc/${commercial ? "commit_commercial_import_from_gateway" : "commit_hr_total_import_from_gateway"}`, { service: true, data: { p_user_id: auth.payload.id, p_session_id: verifiedSession, p_file_name: body.file_name, p_file_sha256: hash, p_file_base64: body.file_base64, p_rows: parsed.rows, ...referenceArgument, p_previous_import_id: body.previous_import_id } });
       if (!committed.ok) return fail(committed);
       if (!UUID.test(committed.payload?.import_id ?? "") || committed.payload.row_count !== parsed.rows.length) throw Error("commit");
       return respond(200, committed.payload);

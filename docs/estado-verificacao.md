@@ -373,3 +373,22 @@ A migration 035 preserva as posições e originais da 033, acrescenta a revisão
 Validação local em 19/10/2026: build TypeScript/Vite aprovado; **235 testes Node**, incluindo um arquivo XLSX sintético real com os dez cabeçalhos, datas e formatação contábil; **13 testes SQL da evolução de RH + quatro do combinado repetível**; **24 testes de navegador**, sendo nove RH, nove comerciais e seis da Diretoria. Campos individuais, valores zero/ausentes, prévia, Excel, leitura legada e permissões foram conferidos. Nenhum teste ficou pendente ou falhando. O aviso de tamanho do bundle permanece sem impedir o build.
 
 Artefatos atuais: ativar-demais-abas.sql, combinado 031..035 com recarga de schema, SHA-256 f6a873814cead9bdf199e40d25813fe1e0aad091b97b6418c76c202b4c955994; business-import.ts SHA-256 7e25e88120e165250550485ac7e2628ee1f57d9a59b150d6b53a3cd8b9b553f6. O agente não executou SQL, republicou funções ou importou RH no projeto remoto. A ativação requer o combinado atual, atualização da função existente e site 0.13.1; depois reimportar a mesma planilha. Guia: [corrigir-importacao-rh.md](corrigir-importacao-rh.md).
+
+## Salário Folha, Salário recebido e Total — 0.13.2
+
+A operação definiu os dois salários e solicitou explicitamente o Total como a soma dos cinco campos: Salário Base + VT total + Salário recebido + Adiantamento + Ajuda de Custo. Depois esclareceu os dois cards: Salário Folha — colaboradores deve usar Salário Folha sem descontos, excluindo sócios; o antigo Salário da Folha deve usar Salário recebido com descontos, incluindo sócios. Os aliases Salário Folha / Salário da Folha passam ao campo bruto; Salário recebido / Salário Líquido ao recebido. Salário Base + Salário e o legado de dois SALÁRIO continuam aceitos. Colunas explícitas conflitantes são recusadas.
+
+A migration 036 calcula o Total de cada pessoa e da base em centavos exatos, com limites por linha e agregado absoluto. Os cinco componentes entram uma vez, incluindo os dois salários e os sócios. TOTAL da origem é preservado separadamente; não supre componente desconhecido nem integra novamente o cálculo. Prévia, tela e Excel usam a mesma projeção do banco. A qualidade missing_total passa a indicar Total calculado indisponível. Posições antigas sem ajuda de custo continuam desconhecidas; benefícios vazios em colunas presentes valem zero conforme confirmação anterior.
+
+A revisão 3 permite reimportar o mesmo original com os vínculos corrigidos, preservando os registros, bytes e auditorias antigos. A consulta usa uma posição, sem agregar revisões. Repetições exatas são idempotentes. Novas gravações por revisões anteriores são bloqueadas após a primeira revisão 3; replays idempotentes anteriores continuam possíveis. O site identifica o importador antigo antes de apresentar confirmação. O gateway continua analisando bytes originais no servidor e gravando as 13 propriedades canônicas, sem gravar a projeção derivada. Migrations publicadas 001..035 permanecem inalteradas.
+
+Validação local em 19/10/2026:
+
+- Build TypeScript/Vite aprovado; sem dependências novas. O aviso de tamanho dos chunks permanece sem impedir a geração.
+- **235 testes Node aprovados**, incluindo aliases bruto/recebido em ordens diferentes, compatibilidade dos salários genéricos e arquivo XLSX com prévia derivada e commit canônico.
+- **17 testes SQL aprovados**: 13 da 036 e quatro do combinado repetível. Cobrem preservação, mesma origem reimportada, versão 3, totais com sócios, dados desconhecidos, original TOTAL separado, precisão, concorrência, sessões e permissões.
+- **27 testes de navegador aprovados**: 12 de RH, nove comerciais e seis da Diretoria. Conferidos os dois cards, a soma dos cinco campos, detalhes, prévia, Excel, leitura legada, original TOTAL separado e bloqueio do importador antigo. Nenhum cenário falhou ou foi ignorado.
+- Artefato SQL 031..036 com recarga do schema: SHA-256 `e8879ff8bce392708176f60073facfa5bd1923881ab9737e635df1e4950165af`.
+- Função business-import de arquivo único: SHA-256 `fb15fa35be80b51e0f1133fdc3f63fde69e376ce8839303c7ac87f8e937edbac`.
+
+O agente não executou SQL, atualizou funções ou importou RH no projeto remoto; não comprovou o término do deploy Cloudflare. Ativação: combinado 031..036, função existente business-import e site 0.13.2; depois reimportar a mesma planilha com a data original. Guia: [corrigir-importacao-rh.md](corrigir-importacao-rh.md).

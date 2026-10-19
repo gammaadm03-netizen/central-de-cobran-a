@@ -10,13 +10,14 @@ const base64=Buffer.from(csv).toString('base64');
 const permissions=[{resource:'importar_bases',action:'read'},{resource:'fechamento',action:'import'},{resource:'faturamento',action:'read'},{resource:'rh_dp',action:'read'},{resource:'rh_dp',action:'write'},{resource:'rh_dp',action:'import'}];
 const body=(extra={})=>({action:'preview',mode:'commercial',month:'2026-10-01',file_name:'synthetic.csv',file_base64:base64,...extra});
 const request=(data=body(),headers={})=>new Request('https://functions.example/business-import',{method:'POST',headers:{origin,authorization:`Bearer ${token}`,'content-type':'application/json',...headers},body:JSON.stringify(data)});
-function fixture({grants=permissions,authStatus=200,accessStatus=200,upstreamFailure,loadWorkbook}={}){
+function fixture({grants=permissions,authStatus=200,accessStatus=200,upstreamFailure,loadWorkbook,hrPreview}={}){
  const calls=[];let loaded=0;
  const gateway=createBusinessGateway({env:name=>({ALLOWED_ORIGINS:origin,SUPABASE_URL:'https://project.example',SUPABASE_ANON_KEY:'public-key',SUPABASE_SERVICE_ROLE_KEY:'server-only-key'}[name]),loadWorkbook:async buffer=>{loaded++;return loadWorkbook(buffer);},fetch:async(url,options)=>{
   const data=options.body===undefined?undefined:JSON.parse(options.body);calls.push({url,data,headers:options.headers});
   if(url.endsWith('/auth/v1/user'))return Response.json({id:uid},{status:authStatus});
   if(url.endsWith('/current_access'))return Response.json({profile:{id:uid,enabled:true},permissions:grants},{status:accessStatus});
   if(upstreamFailure)return Response.json(upstreamFailure,{status:400});
+  if(url.endsWith('/preview_hr_total_import'))return Response.json(hrPreview?hrPreview(data):{row_count:data.p_rows.length,previous_import_id:null,summary:{total_formula_version:'rh-five-fields-v1'},rows:data.p_rows.map(row=>({...row,reported_total_cents:row.total_cents,total_cents:null}))});
   if(url.includes('/preview_'))return Response.json({row_count:data.p_rows.length,previous_import_id:null,sale_cents:10000,margin_cents:0});
   if(url.includes('/commit_'))return Response.json({import_id:importId,row_count:data.p_rows.length,idempotent:false});
   throw Error('Unexpected request');
@@ -48,7 +49,7 @@ test('business maps stale previews and missing migration safely without forwardi
 });
 test('HR uses its canonical parser, reference date and separate guarded RPC',async()=>{
  const source='FILIAL;ADMISSÃO;ANIVERSÁRIO;SALÁRIO;SETOR;FUNCIONÁRIO;VT TOTAL;SALÁRIO;ADIANTAMENTO;TOTAL\r\nA;01/01/2020;01/01/2000;2.000,00;OPERAÇÃO;Pessoa sintética;100,00;1.500,00;300,00;2.100,00';
- const f=fixture(),data={action:'preview',mode:'hr',reference_date:'2026-10-19',file_name:'hr.csv',file_base64:Buffer.from(source).toString('base64')};const response=await f.gateway(request(data));assert.equal(response.status,200);const result=await response.json();assert.equal(result.rows[0].salary_base_cents,200000);assert.equal(result.rows[0].payroll_salary_cents,150000);assert(f.calls.at(-1).url.endsWith('/preview_hr_report_import'));assert.equal(f.calls.at(-1).data.p_reference_date,'2026-10-19');
+ const f=fixture(),data={action:'preview',mode:'hr',reference_date:'2026-10-19',file_name:'hr.csv',file_base64:Buffer.from(source).toString('base64')};const response=await f.gateway(request(data));assert.equal(response.status,200);const result=await response.json();assert.equal(result.rows[0].salary_base_cents,200000);assert.equal(result.rows[0].payroll_salary_cents,150000);assert(f.calls.at(-1).url.endsWith('/preview_hr_total_import'));assert.equal(f.calls.at(-1).data.p_reference_date,'2026-10-19');
  const noWrite=fixture({grants:permissions.filter(p=>p.resource!=='rh_dp'||p.action!=='write')});assert.equal((await noWrite.gateway(request(data))).status,403);
 });
 test('business rejects oversized JSON and noncanonical base64 with no persistence',async()=>{
@@ -56,17 +57,17 @@ test('business rejects oversized JSON and noncanonical base64 with no persistenc
 });
 test('actual RH headers and accounting cells survive XLSX preview and canonical commit without losing either salary or allowance',async()=>{
  const book=new ExcelJS.Workbook(),sheet=book.addWorksheet('Posição sintética');
- sheet.addRows([['FILIAL','ADMISSAO','ANIVERSARIO','Salário Base','VT TOTAL','Salário','Adiantamento','Ajuda de Custo','SETOR','Funcionário'],
+ sheet.addRows([['FILIAL','ADMISSAO','ANIVERSARIO','Salário Folha','VT TOTAL','Salário recebido','Adiantamento','Ajuda de Custo','SETOR','Funcionário'],
   ['Unidade sintética',new Date('2020-03-01T00:00:00Z'),new Date('1990-05-20T00:00:00Z'),2500,0,1850.75,null,480.25,'Área sintética','Pessoa sintética']]);
  for(const column of [2,3])sheet.getRow(2).getCell(column).numFmt='dd/mm/yyyy';
  for(const column of [4,5,6,7,8])sheet.getRow(2).getCell(column).numFmt='"R$" #,##0.00;[Red]-"R$" #,##0.00;"R$" -';
  const bytes=Buffer.from(await book.xlsx.writeBuffer());
- const f=fixture({loadWorkbook:async buffer=>{const loaded=new ExcelJS.Workbook();await loaded.xlsx.load(buffer);return{matrix:loaded.worksheets[0].getSheetValues().slice(1).map(row=>row.slice(1)),excel1904:false};}});
+ const f=fixture({hrPreview:data=>({row_count:1,previous_import_id:null,summary:{total_formula_version:'rh-five-fields-v1',total_cents:483100},rows:[{...data.p_rows[0],reported_total_cents:null,total_cents:483100}]}),loadWorkbook:async buffer=>{const loaded=new ExcelJS.Workbook();await loaded.xlsx.load(buffer);return{matrix:loaded.worksheets[0].getSheetValues().slice(1).map(row=>row.slice(1)),excel1904:false};}});
  const data={action:'preview',mode:'hr',reference_date:'2026-10-19',file_name:'rh-sintetico.xlsx',file_base64:bytes.toString('base64')};
  const response=await f.gateway(request(data));assert.equal(response.status,200);const result=await response.json();
  const parsed=result.rows[0];assert.equal(parsed.salary_base_cents,250000);assert.equal(parsed.payroll_salary_cents,185075);assert.equal(parsed.cost_allowance_cents,48025);
- assert.equal(parsed.transport_cents,0);assert.equal(parsed.advance_cents,0);assert.equal(parsed.total_cents,null);assert.equal(parsed.admitted_on,'2020-03-01');
- assert(f.calls.at(-1).url.endsWith('/preview_hr_report_import'));assert.equal(result.file_sha256,createHash('sha256').update(bytes).digest('hex'));
+ assert.equal(parsed.transport_cents,0);assert.equal(parsed.advance_cents,0);assert.equal(parsed.total_cents,483100);assert.equal(parsed.reported_total_cents,null);assert.equal(result.preview.summary.total_cents,483100);assert.equal(parsed.admitted_on,'2020-03-01');
+ assert(f.calls.at(-1).url.endsWith('/preview_hr_total_import'));assert.equal(result.file_sha256,createHash('sha256').update(bytes).digest('hex'));
  assert.equal((await f.gateway(request({...data,action:'commit',complete:true,previous_import_id:null}))).status,200);
- const commit=f.calls.at(-1);assert(commit.url.endsWith('/commit_hr_report_import_from_gateway'));assert.deepEqual(commit.data.p_rows,result.rows);assert.equal(commit.data.p_file_base64,data.file_base64);assert.equal(commit.data.p_user_id,uid);assert.equal(f.loaded(),2);
+ const commit=f.calls.at(-1);assert(commit.url.endsWith('/commit_hr_total_import_from_gateway'));assert.deepEqual(commit.data.p_rows,[{...parsed,total_cents:null,reported_total_cents:undefined}].map(({reported_total_cents,...row})=>row));assert.equal(Object.keys(commit.data.p_rows[0]).length,13);assert.equal(commit.data.p_file_base64,data.file_base64);assert.equal(commit.data.p_user_id,uid);assert.equal(f.loaded(),2);
 });

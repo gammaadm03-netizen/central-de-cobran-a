@@ -9,6 +9,7 @@ export const MODULE_MIGRATIONS = [
   '033_hr.sql',
   '034_commissions.sql',
   '035_hr_report_model.sql',
+  '036_hr_total.sql',
 ];
 
 function tag(prefix, body) {
@@ -51,6 +52,7 @@ END;`;
 -- Uma transação, repetível por versão; não apaga nem importa bases históricas.
 -- Inclui a restrição de consulta da Diretoria (031), caso ainda não instalada.
 -- 035 reconhece o modelo de RH com Salário Base, Salário e Ajuda de Custo.
+-- 036 separa Salário Folha e Salário recebido e calcula o Total dos cinco campos.
 -- A função business-import é publicada separadamente; não colar TypeScript aqui.
 BEGIN;
 DO $cf_module_base$

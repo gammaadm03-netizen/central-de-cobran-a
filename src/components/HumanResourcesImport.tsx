@@ -3,11 +3,11 @@ import { commercialError, commercialImportRequest } from '../lib/commercial';
 import { formatCents } from '../lib/payables';
 import { officialToday } from './Treasury';
 import type { HrImportRow } from '../lib/hr-parser.mjs';
-import type { HrQuality, HrSummary } from '../lib/hr';
+import type { HrProjectedRow, HrQuality, HrSummary } from '../lib/hr';
 import '../human-resources.css';
 
 interface HrPreview { row_count: number; previous_import_id: string | null; summary: HrSummary; quality: HrQuality }
-interface HrAnalysis { rows: HrImportRow[]; preview: HrPreview; file_sha256: string }
+interface HrAnalysis { rows: HrProjectedRow[]; preview: HrPreview; file_sha256: string; format_version: 3 }
 interface HrProblem { line: number; column: string; problem: string; correction: string }
 interface Prepared { source: File; reference: string; base64: string; hash: string; analysis: HrAnalysis }
 const uuid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
@@ -20,13 +20,15 @@ const displayDate = (value: string | null) => value === null ? 'Não informado' 
 const qualityKeys = ['missing_admission', 'missing_birthday', 'missing_branch', 'missing_sector', 'missing_salary_base', 'missing_payroll_salary', 'missing_transport', 'missing_advance', 'missing_cost_allowance', 'missing_total'] as const;
 function assertAnalysis(value: unknown, hash: string): asserts value is HrAnalysis {
   const result = value as HrAnalysis, preview = result?.preview, summary = preview?.summary;
+  if (result?.format_version !== 3) throw new Error('hr_gateway_update_required');
   if (!result || result.file_sha256 !== hash || !hashPattern.test(result.file_sha256) || !preview || !safeCount(preview.row_count) || !preview.row_count || preview.row_count > 5000
     || preview.previous_import_id !== null && !uuid.test(preview.previous_import_id) || !Array.isArray(result.rows) || result.rows.length !== preview.row_count
     || result.rows.some(row => !row || !safeCount(row.source_row) || typeof row.employee !== 'string' || !row.employee.trim() || typeof row.branch !== 'string' || typeof row.sector !== 'string'
-      || !['salary_base_cents', 'payroll_salary_cents', 'transport_cents', 'advance_cents', 'total_cents'].every(key => money(row[key as keyof HrImportRow])) || !optionalMoney(row.cost_allowance_cents))
+      || !['salary_base_cents', 'payroll_salary_cents', 'transport_cents', 'advance_cents', 'total_cents'].every(key => money(row[key as keyof HrImportRow])) || !optionalMoney(row.cost_allowance_cents) || !optionalMoney(row.reported_total_cents))
     || !summary || !['employees', 'partners', 'admissions', 'birthdays', 'basket_eligible', 'basket_excluded', 'basket_unit_cents', 'basket_monthly_cents', 'basket_annual_cents'].every(key => safeCount(summary[key as keyof HrSummary]))
     || !['salary_base_cents', 'transport_cents', 'advance_cents', 'total_cents'].every(key => money(summary[key as keyof HrSummary]))
-    || !optionalMoney(summary.payroll_salary_cents) || !optionalMoney(summary.cost_allowance_cents)
+    || !optionalMoney(summary.payroll_salary_cents) || !optionalMoney(summary.cost_allowance_cents) || !optionalMoney(summary.reported_total_cents) || !optionalMoney(summary.salary_base_all_cents)
+    || summary.total_formula_version !== undefined && summary.total_formula_version !== 'rh-five-fields-v1'
     || summary.employees + summary.partners !== preview.row_count || summary.basket_eligible + summary.basket_excluded !== preview.row_count || summary.basket_unit_cents !== 11280
     || summary.basket_monthly_cents !== summary.basket_eligible * 11280 || summary.basket_annual_cents !== summary.basket_monthly_cents * 12
     || !preview.quality || !qualityKeys.every(key => key === 'missing_cost_allowance' && preview.quality[key] === undefined || safeCount(preview.quality[key]))) throw new Error('invalid_preview');
@@ -61,7 +63,7 @@ export default function HumanResourcesImport({ canImport, onImported }: { canImp
       assertAnalysis(analysis, hash);
       if (!abort.signal.aborted && current === generation.current) setPrepared({ source, reference: selectedReference, base64, hash, analysis });
     } catch (failure) { if (!abort.signal.aborted && current === generation.current) {
-      const details = importProblems(failure); if (details.length) setProblems(details); else setError(commercialError(failure, 'Não foi possível analisar a base de RH / DP. Nenhum dado foi alterado.'));
+      const details = importProblems(failure); if (details.length) setProblems(details); else setError(failure instanceof Error && failure.message === 'hr_gateway_update_required' ? 'Atualize a função business-import para reconhecer Salário Folha e Salário recebido. Depois, analise novamente. Nenhum dado foi alterado.' : commercialError(failure, 'Não foi possível analisar a base de RH / DP. Nenhum dado foi alterado.'));
     } } finally { if (current === generation.current) setBusy(null); }
   }
   async function commit() {
@@ -83,11 +85,12 @@ export default function HumanResourcesImport({ canImport, onImported }: { canImp
   }
   if (!canImport) return <p className="notice">Seu perfil não permite importar bases de RH / DP.</p>;
   const summary = prepared?.analysis.preview.summary, quality = prepared?.analysis.preview.quality;
+  const calculatedTotal = summary?.total_formula_version === 'rh-five-fields-v1';
   const missing = quality ? qualityKeys.reduce((sum, key) => sum + (quality[key] ?? 0), 0) : 0;
   return <section className="panel human-resources-import" aria-labelledby="hr-import-title">
     <div className="panel-header"><div><h2 id="hr-import-title">Importar base de RH / DP</h2><p className="muted">Envie a base completa de pessoas e valores para atualizar o quadro, os benefícios e o calendário.</p></div></div>
-    <p className="help-text">Cabeçalhos: FILIAL, ADMISSAO, ANIVERSARIO, Salário Base, VT TOTAL, Salário, Adiantamento, Ajuda de Custo, SETOR e Funcionário. Salário Base e Salário da folha são importados separadamente. O formato antigo com dois cabeçalhos SALÁRIO também é aceito.</p>
-    <p className="help-text">VT TOTAL, Adiantamento e Ajuda de Custo em branco ou com traço valem zero. Colunas ausentes permanecem como “Não informado”. A coluna TOTAL é opcional e seu valor não é calculado pela Central.</p>
+    <p className="help-text">Cabeçalhos: FILIAL, ADMISSAO, ANIVERSARIO, Salário Folha (ou Salário Base), VT TOTAL, Salário recebido, Adiantamento, Ajuda de Custo, SETOR e Funcionário. Salário Folha / Base é o valor sem descontos; Salário recebido é o valor com descontos. Os dois são importados separadamente. O formato antigo com dois cabeçalhos SALÁRIO também é aceito.</p>
+    <p className="help-text">VT TOTAL, Adiantamento e Ajuda de Custo em branco ou com traço valem zero. Colunas ausentes permanecem como “Não informado”. O Total é calculado como Salário Base + VT total + Salário recebido + Adiantamento + Ajuda de Custo, incluindo os dois salários. A coluna TOTAL do arquivo é opcional e fica preservada para conferência, sem ser somada novamente.</p>
     <p className="notice">Cada importação é uma posição completa de RH / DP. A posição com a data mais recente alimenta a aba; os arquivos e as posições anteriores permanecem preservados.</p>
     {error && <p className="notice error" role="alert">{error}</p>}{success && <p className="notice success" role="status">{success}</p>}
     {uncertain && <p className="notice" role="status">Conferência do envio pendente. O arquivo e a data ficam preservados até a confirmação do mesmo envio.</p>}
@@ -97,9 +100,10 @@ export default function HumanResourcesImport({ canImport, onImported }: { canImp
     </form>
     {problems.length > 0 && <div className="table-wrap"><table><caption>Campos a corrigir no arquivo de RH / DP</caption><thead><tr><th>Linha</th><th>Coluna</th><th>Problema</th><th>Como corrigir</th></tr></thead><tbody>{problems.map((problem, index) => <tr key={index}><td>{problem.line || 'Arquivo'}</td><td>{problem.column}</td><td>{problem.problem}</td><td>{problem.correction}</td></tr>)}</tbody></table></div>}
     {prepared && summary && <section className="stack" aria-labelledby="hr-preview-title"><h3 id="hr-preview-title">Conferência da posição de RH / DP</h3><p>{prepared.source.name} · {prepared.analysis.preview.row_count} registro(s) · posição de {prepared.reference.split('-').reverse().join('/')}</p>
-      <div className="hr-import-preview"><article>Colaboradores / sócios<strong>{summary.employees} / {summary.partners}</strong></article><article>Salário base dos colaboradores<strong>{displayMoney(summary.salary_base_cents)}</strong></article><article>Salário da folha<strong>{displayMoney(summary.payroll_salary_cents)}</strong></article><article>Vale-transporte<strong>{displayMoney(summary.transport_cents)}</strong></article><article>Adiantamentos<strong>{displayMoney(summary.advance_cents)}</strong></article><article>Ajuda de Custo<strong>{displayMoney(summary.cost_allowance_cents)}</strong></article><article>Cesta básica mensal<strong>{formatCents(summary.basket_monthly_cents)}</strong></article><article>Total informado na base<strong>{displayMoney(summary.total_cents)}</strong></article></div>
+      <div className="hr-import-preview"><article>Colaboradores / sócios<strong>{summary.employees} / {summary.partners}</strong></article><article>Salário Folha — colaboradores<strong>{displayMoney(summary.salary_base_cents)}</strong></article><article>Salário recebido<strong>{displayMoney(summary.payroll_salary_cents)}</strong></article><article>Vale-transporte<strong>{displayMoney(summary.transport_cents)}</strong></article><article>Adiantamentos<strong>{displayMoney(summary.advance_cents)}</strong></article><article>Ajuda de Custo<strong>{displayMoney(summary.cost_allowance_cents)}</strong></article><article>Cesta básica mensal<strong>{formatCents(summary.basket_monthly_cents)}</strong></article><article>{calculatedTotal ? 'Total de salários e benefícios' : 'TOTAL da posição anterior'}<strong>{displayMoney(summary.total_cents)}</strong></article></div>
+      {calculatedTotal && <p className="help-text">Total = Salário Base + VT total + Salário recebido + Adiantamento + Ajuda de Custo. O cálculo inclui os dois salários e os sócios. A coluna TOTAL original é preservada para conferência.</p>}
       {missing > 0 && <p className="notice">A base contém {missing} campo(s) sem informação. Confira a amostra abaixo. Colunas ausentes permanecem como “Não informado”; os benefícios em branco nas colunas presentes são importados como zero.</p>}
-      <div className="table-wrap"><table><caption>Amostra da base de RH / DP — até dez pessoas</caption><thead><tr><th>Linha</th><th>Funcionário</th><th>Filial</th><th>Setor</th><th>Admissão</th><th>Aniversário</th><th>Salário base</th><th>Salário folha</th><th>VT TOTAL</th><th>Adiantamento</th><th>Ajuda de Custo</th><th>Total</th></tr></thead><tbody>{prepared.analysis.rows.slice(0, 10).map(row => <tr key={row.source_row}><td>{row.source_row}</td><td>{row.employee}</td><td>{row.branch || 'Não informado'}</td><td>{row.sector || 'Não informado'}</td><td>{displayDate(row.admitted_on)}</td><td>{displayDate(row.birthday_on)}</td><td>{displayMoney(row.salary_base_cents)}</td><td>{displayMoney(row.payroll_salary_cents)}</td><td>{displayMoney(row.transport_cents)}</td><td>{displayMoney(row.advance_cents)}</td><td>{displayMoney(row.cost_allowance_cents)}</td><td>{displayMoney(row.total_cents)}</td></tr>)}</tbody></table></div>
+      <div className="table-wrap"><table><caption>Amostra da base de RH / DP — até dez pessoas</caption><thead><tr><th>Linha</th><th>Funcionário</th><th>Filial</th><th>Setor</th><th>Admissão</th><th>Aniversário</th><th>Salário Folha / base sem descontos</th><th>Salário recebido com descontos</th><th>VT TOTAL</th><th>Adiantamento</th><th>Ajuda de Custo</th><th>{calculatedTotal ? 'Total calculado' : 'TOTAL da posição anterior'}</th><th>TOTAL na origem</th></tr></thead><tbody>{prepared.analysis.rows.slice(0, 10).map(row => <tr key={row.source_row}><td>{row.source_row}</td><td>{row.employee}</td><td>{row.branch || 'Não informado'}</td><td>{row.sector || 'Não informado'}</td><td>{displayDate(row.admitted_on)}</td><td>{displayDate(row.birthday_on)}</td><td>{displayMoney(row.salary_base_cents)}</td><td>{displayMoney(row.payroll_salary_cents)}</td><td>{displayMoney(row.transport_cents)}</td><td>{displayMoney(row.advance_cents)}</td><td>{displayMoney(row.cost_allowance_cents)}</td><td>{displayMoney(row.total_cents)}</td><td>{displayMoney(row.reported_total_cents)}</td></tr>)}</tbody></table></div>
       <label className="checkbox-field"><input type="checkbox" checked={acknowledged} disabled={busy !== null} onChange={event => setAcknowledged(event.target.checked)} /> Confirmo que esta é a base completa de RH / DP da data informada e conferi os campos apresentados.</label>
       <button className="button" disabled={!acknowledged || busy !== null} onClick={() => void commit()}>{busy === 'commit' ? 'Atualizando RH / DP…' : 'Confirmar importação de RH / DP'}</button>
     </section>}

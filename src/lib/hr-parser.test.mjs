@@ -27,11 +27,11 @@ test('RH actual report maps named Salário Base and Salário independently and i
 });
 test('RH salary names take priority regardless of their positions and preserve the legacy repeated salary layout',()=>{
  const base=['FILIAL','FUNCIONÁRIO','SETOR'];
- for(const [cols,values]of [[['Salário','Salário Base'],['1.100,10','2.200,20']],[['Salário da folha','Salário'],['1.100,10','2.200,20']],[['Salário Base','Salário Folha'],['2.200,20','1.100,10']],[['Salário','Salário'],['2.200,20','1.100,10']]]){
+ for(const [cols,values]of [[['Salário','Salário Base'],['1.100,10','2.200,20']],[['Salário da folha','Salário'],['2.200,20','1.100,10']],[['Salário Folha','Salário recebido'],['2.200,20','1.100,10']],[['Salário recebido','Salário Folha'],['1.100,10','2.200,20']],[['Salário Base','Salário Líquido'],['2.200,20','1.100,10']],[['Salário','Salário'],['2.200,20','1.100,10']]]){
   const result=validateHrRows([[...base,...cols],['Unidade','Pessoa sintética','Área',...values]]);assert.deepEqual(result.errors,[]);
   assert.equal(result.rows[0].salary_base_cents,220020);assert.equal(result.rows[0].payroll_salary_cents,110010);
  }
- for(const cols of [['Salário Base','Salário Base'],['Salário Base','Salário','Salário'],['Salário Base','Salário Folha','Salário']])assert(validateHrRows([[...base,...cols],['Unidade','Pessoa sintética','Área',...cols.map(()=>1)]]).errors.length>0);
+ for(const cols of [['Salário Base','Salário Base'],['Salário Base','Salário Folha'],['Salário recebido','Salário Líquido'],['Salário Base','Salário','Salário'],['Salário Base','Salário Folha','Salário']])assert(validateHrRows([[...base,...cols],['Unidade','Pessoa sintética','Área',...cols.map(()=>1)]]).errors.length>0);
 });
 test('RH present optional benefits accept blank or accounting zero without inventing absent columns or salary values',()=>{
  for(const value of ['',null,undefined,0,'0,00','-','R$ -','R$  —']){

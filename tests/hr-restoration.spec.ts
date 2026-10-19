@@ -12,17 +12,17 @@ const rows = [
 ];
 const summary = { employees: 2, partners: 1, admissions: 1, birthdays: 1, basket_eligible: 2, basket_excluded: 1, basket_unit_cents: 11280, basket_monthly_cents: 22560, basket_annual_cents: 270720, salary_base_cents: 500000, transport_cents: null, advance_cents: null, total_cents: null };
 const quality = { missing_admission: 0, missing_birthday: 0, missing_branch: 0, missing_sector: 0, missing_salary_base: 0, missing_payroll_salary: 1, missing_transport: 1, missing_advance: 1, missing_total: 1 };
-const modelRows = rows.map((row, index) => ({ ...row, admitted_on: index === 1 ? null : row.admitted_on, payroll_salary_cents: [175000, 500000, 225000][index], transport_cents: index === 0 ? 20000 : 0, advance_cents: index === 0 ? 10000 : 0, cost_allowance_cents: index === 1 ? 45000 : 0, total_cents: null }));
-const modelSummary = { ...summary, payroll_salary_cents: 900000, transport_cents: 20000, advance_cents: 10000, cost_allowance_cents: 45000, total_cents: null };
-const modelQuality = { ...quality, missing_admission: 1, missing_payroll_salary: 0, missing_transport: 0, missing_advance: 0, missing_cost_allowance: 0, missing_total: 3 };
-function report(month = '2026-10-01', actualModel = false) {
-  const sourceRows = actualModel ? modelRows : rows, sourceSummary = actualModel ? modelSummary : summary, sourceQuality = actualModel ? modelQuality : quality;
+const modelRows = rows.map((row, index) => ({ ...row, admitted_on: index === 1 ? null : row.admitted_on, payroll_salary_cents: [175000, 500000, 225000][index], transport_cents: index === 0 ? 20000 : 0, advance_cents: index === 0 ? 10000 : 0, cost_allowance_cents: index === 1 ? 45000 : 0, total_cents: [405000, 1545000, 525000][index], reported_total_cents: null }));
+const modelSummary = { ...summary, salary_base_all_cents: 1500000, payroll_salary_employees_cents: 400000, payroll_salary_cents: 900000, transport_cents: 20000, advance_cents: 10000, cost_allowance_cents: 45000, total_cents: 2475000, reported_total_cents: null, total_formula_version: 'rh-five-fields-v1', total_formula_caption: 'Total = Salário Base + VT total + Salário recebido + Adiantamento + Ajuda de Custo' };
+const modelQuality = { ...quality, missing_admission: 1, missing_payroll_salary: 0, missing_transport: 0, missing_advance: 0, missing_cost_allowance: 0, missing_total: 0 };
+function report(month = '2026-10-01', actualModel = false, reportedTotal = false) {
+  const sourceRows = actualModel ? modelRows.map((row, index) => ({ ...row, reported_total_cents: reportedTotal && index === 0 ? 999900 : null })) : rows, sourceSummary = actualModel ? modelSummary : summary, sourceQuality = actualModel ? modelQuality : quality;
   const selected = Number(month.slice(5, 7)), year = Number(month.slice(0, 4));
   return { calendar_month: month, snapshot: { id: id(8), reference_date: '2026-10-19', file_name: 'RH-SINTETICO.xlsx', imported_at: now, sha256: 'a'.repeat(64), row_count: rows.length }, summary: { ...sourceSummary, admissions: sourceRows.filter(row => row.admitted_on?.startsWith(month.slice(0, 7))).length, birthdays: sourceRows.filter(row => Number(row.birthday_on.slice(5, 7)) === selected).length }, quality: sourceQuality,
     rows: sourceRows, by_branch: [{ label: 'Filial sintética A', count: 2, salary_base_cents: 1200000 }, { label: 'Filial sintética B', count: 1, salary_base_cents: 300000 }], by_sector: [{ label: 'Financeiro sintético', count: 1, salary_base_cents: 200000 }, { label: 'SÓCIO', count: 1, salary_base_cents: 1000000 }, { label: 'Operações sintéticas', count: 1, salary_base_cents: 300000 }],
     birthdays: sourceRows.filter(row => Number(row.birthday_on.slice(5, 7)) === selected).map(row => ({ ...row, day: Number(row.birthday_on.slice(8)) })), work_anniversaries: sourceRows.filter(row => row.admitted_on && Number(row.admitted_on.slice(5, 7)) === selected && year > Number(row.admitted_on.slice(0, 4))).map(row => ({ ...row, day: Number(row.admitted_on!.slice(8)), years: year - Number(row.admitted_on!.slice(0, 4)) })) };
 }
-async function setup(page: Page, role: 'diretor' | 'rh_dp' = 'diretor', options: { empty?: boolean; importError?: boolean; stale?: boolean; actualModel?: boolean } = {}) {
+async function setup(page: Page, role: 'diretor' | 'rh_dp' = 'diretor', options: { empty?: boolean; importError?: boolean; stale?: boolean; actualModel?: boolean; reportedTotal?: boolean; legacyGateway?: boolean } = {}) {
   await page.clock.setFixedTime(new Date(now));
   const profile = { id: id(1), username: 'UsuarioRHSintetico', display_name: 'Usuário de RH sintético', role_key: role, enabled: true };
   const permissions = ['rh_dp'].flatMap(resource => ['read', 'export'].map(action => ({ resource, action })));
@@ -40,12 +40,12 @@ async function setup(page: Page, role: 'diretor' | 'rh_dp' = 'diretor', options:
     if (url.pathname === '/auth/v1/user') return reply({ id: profile.id, aud: 'authenticated', role: 'authenticated', email: 'rh@synthetic.test', created_at: now, app_metadata: {}, user_metadata: {} });
     if (name === 'current_access') return reply(access);
     if (name === 'hr_report') {
-      if (!options.empty) return reply(report(body.p_month, options.actualModel));
+      if (!options.empty) return reply(report(body.p_month, options.actualModel, options.reportedTotal));
       return reply({ calendar_month: body.p_month, snapshot: null, summary: Object.fromEntries(Object.entries(summary).map(([key]) => [key, key === 'basket_unit_cents' ? 11280 : 0])), quality: Object.fromEntries(Object.keys(quality).map(key => [key, 0])), rows: [], by_branch: [], by_sector: [], birthdays: [], work_anniversaries: [] });
     }
     if (name === 'business-import') {
       if (options.importError) return reply({ code: '22023', errors: [{ line: 4, column: 'Primeiro Salário — base', problem: 'Valor inválido na base sintética.', correction: 'Corrija a célula e exporte uma nova cópia.' }] }, 422);
-      if (body.action === 'preview') return reply({ rows: (options.actualModel ? modelRows : rows).map(({ basket_eligible, basket_cost_cents, is_partner, ...row }) => row), preview: { row_count: rows.length, previous_import_id: id(8), summary: options.actualModel ? modelSummary : summary, quality: options.actualModel ? modelQuality : quality }, file_sha256: createHash('sha256').update(Buffer.from(body.file_base64, 'base64')).digest('hex') });
+      if (body.action === 'preview') return reply({ format_version: options.legacyGateway ? undefined : 3, rows: (options.actualModel ? modelRows : rows).map(({ basket_eligible, basket_cost_cents, is_partner, ...row }) => row), preview: { row_count: rows.length, previous_import_id: id(8), summary: options.actualModel ? modelSummary : summary, quality: options.actualModel ? modelQuality : quality }, file_sha256: createHash('sha256').update(Buffer.from(body.file_base64, 'base64')).digest('hex') });
       return reply({ import_id: id(9), row_count: rows.length, idempotent: false });
     }
     return reply({ code: 'PGRST202' }, 404);
@@ -62,7 +62,7 @@ test('RH original shows separate partners, exact basket exceptions and nullable 
   await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Colaboradores', exact: true }) })).toContainText('2');
   await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Sócios', exact: true }) })).toContainText('1');
   await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Custo mensal — cesta básica', exact: true }) })).toContainText('225,60');
-  await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Salário base — colaboradores', exact: true }) })).toContainText('5.000,00');
+  await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Salário Folha — colaboradores', exact: true }) })).toContainText('5.000,00');
   await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Vale-transporte', exact: true }) })).toContainText('Não informado');
   const detail = page.getByRole('table', { name: 'Funcionários, sócios e valores informados na base de RH / DP' });
   await expect(detail.getByRole('row').filter({ hasText: 'GABRIEL PEDROSA MARQUES FERREIRA' })).toContainText('Não informado');
@@ -126,12 +126,14 @@ test('RH import displays canonical line errors and prevents confirmation', async
   expect(calls.filter(call => call.name === 'business-import' && call.body.action === 'commit')).toHaveLength(0);
 });
 
-test('RH actual headers keep salary base and payroll separate, show allowance and preserve absent TOTAL', async ({ page }) => {
+test('RH salary Folha uses gross employees only, received salary stays separate and total sums all five fields', async ({ page }) => {
   await setup(page, 'diretor', { actualModel: true, stale: true });
   const cards = page.locator('.hr-cards');
-  await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Salário da folha', exact: true }) })).toContainText('9.000,00');
+  await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Salário Folha — colaboradores', exact: true }) })).toContainText('5.000,00');
+  await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Salário base — sem descontos', exact: true }) })).toContainText('15.000,00');
+  await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Salário recebido', exact: true }) })).toContainText('9.000,00');
   await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Ajuda de custo', exact: true }) })).toContainText('450,00');
-  await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Total informado na base', exact: true }) })).toContainText('Não informado');
+  await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Total de salários e benefícios', exact: true }) })).toContainText('24.750,00');
   const detail = page.getByRole('table', { name: 'Funcionários, sócios e valores informados na base de RH / DP' });
   await expect(detail.getByRole('columnheader', { name: 'Ajuda de Custo', exact: true })).toBeVisible();
   const partner = detail.getByRole('row').filter({ hasText: 'Sócio Sintético' });
@@ -142,14 +144,16 @@ test('RH actual headers keep salary base and payroll separate, show allowance an
   const sheet = book.getWorksheet('Pessoas filtradas')!;
   expect(sheet.getCell('I2').value).toBe(10000); expect(sheet.getCell('K2').value).toBe(5000);
   expect(sheet.getCell('M1').value).toBe('Ajuda de Custo'); expect(sheet.getCell('M2').value).toBe(450);
-  expect(sheet.getCell('N2').value).toBe('Não informado'); expect(sheet.getCell('J2').value).toBe(0);
+  expect(sheet.getCell('N2').value).toBe(15450); expect(sheet.getCell('O2').value).toBe('Não informado'); expect(sheet.getCell('J2').value).toBe(0);
+  expect(sheet.getCell('I1').value).toBe('Salário Folha / Salário Base sem descontos'); expect(sheet.getCell('K1').value).toBe('Salário recebido com descontos');
+  const criteria = book.getWorksheet('Origem e critérios')!; expect(criteria.getRows(1, criteria.rowCount)?.map(row => row.values).flat().join(' ')).toContain('Total = Salário Base + VT total + Salário recebido + Adiantamento + Ajuda de Custo');
   await expect(page.getByRole('button', { name: /Importar base de RH|Importar Bases/ })).toHaveCount(0);
 });
-test('RH actual model preview includes all reported benefits and does not calculate absent TOTAL', async ({ page }) => {
+test('RH actual model preview displays server-calculated five-field total without a TOTAL column', async ({ page }) => {
   const calls = await setup(page, 'rh_dp', { actualModel: true });
   await page.getByRole('button', { name: 'Importar base de RH / DP', exact: true }).click();
-  await expect(page.getByText(/Salário Base e Salário da folha são importados separadamente/)).toBeVisible();
-  const bytes = Buffer.from('FILIAL;ADMISSAO;ANIVERSARIO;Salário Base;VT TOTAL;Salário;Adiantamento;Ajuda de Custo;SETOR;Funcionário\nUnidade sintética;01/10/2020;01/10/1990;2000;;1750;;;ADMIN;Pessoa sintética\n');
+  await expect(page.getByText(/Os dois são importados separadamente/)).toBeVisible();
+  const bytes = Buffer.from('FILIAL;ADMISSAO;ANIVERSARIO;Salário Folha;VT TOTAL;Salário recebido;Adiantamento;Ajuda de Custo;SETOR;Funcionário\nUnidade sintética;01/10/2020;01/10/1990;2000;;1750;;;ADMIN;Pessoa sintética\n');
   await page.getByLabel('Arquivo da base de RH / DP', { exact: true }).setInputFiles({ name: 'RH-MODELO-SINTETICO.csv', mimeType: 'text/csv', buffer: bytes });
   await page.getByRole('button', { name: 'Analisar base de RH / DP', exact: true }).click();
   const preview = page.getByRole('table', { name: 'Amostra da base de RH / DP — até dez pessoas' });
@@ -158,17 +162,51 @@ test('RH actual model preview includes all reported benefits and does not calcul
   await expect(first).toContainText('2.000,00'); await expect(first).toContainText('1.750,00');
   const partner = preview.getByRole('row').filter({ hasText: 'Sócio Sintético' });
   await expect(partner).toContainText('450,00'); await expect(partner).toContainText('Não informado');
-  await expect(page.locator('.hr-import-preview article').filter({ hasText: 'Salário da folha' })).toContainText('9.000,00');
-  await expect(page.locator('.hr-import-preview article').filter({ hasText: 'Total informado na base' })).toContainText('Não informado');
+  await expect(page.locator('.hr-import-preview article').filter({ hasText: 'Salário recebido' })).toContainText('9.000,00');
+  await expect(page.locator('.hr-import-preview article').filter({ hasText: 'Total de salários e benefícios' })).toContainText('24.750,00');
   await expect(page.getByRole('button', { name: 'Confirmar importação de RH / DP', exact: true })).toBeDisabled();
   expect(calls.filter(call => call.name === 'business-import' && call.body.action === 'commit')).toHaveLength(0);
 });
 test('RH positions created before allowance support remain readable without inventing historic values', async ({ page }) => {
   await setup(page);
   const cards = page.locator('.hr-cards');
-  await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Salário da folha', exact: true }) })).toContainText('Não informado');
+  await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Salário recebido', exact: true }) })).toContainText('Não informado');
   await expect(cards.locator('article').filter({ has: page.getByRole('heading', { name: 'Ajuda de custo', exact: true }) })).toContainText('Não informado');
   const detail = page.getByRole('table', { name: 'Funcionários, sócios e valores informados na base de RH / DP' });
   await expect(detail.getByRole('row')).toHaveCount(4);
   await expect(page.locator('.hr-quality p').filter({ hasText: 'Sem ajuda de custo' })).toContainText('Não informado');
+});
+
+test('RH preserves an original TOTAL only for comparison and never adds it to the calculated total', async ({ page }) => {
+  await setup(page, 'diretor', { actualModel: true, reportedTotal: true });
+  const card = page.locator('.hr-cards article').filter({ has: page.getByRole('heading', { name: 'Total de salários e benefícios', exact: true }) });
+  await expect(card).toContainText('24.750,00');
+  const detail = page.getByRole('table', { name: 'Funcionários, sócios e valores informados na base de RH / DP' });
+  const ana = detail.getByRole('row').filter({ hasText: 'Ana Sintética' });
+  await expect(ana).toContainText('4.050,00'); await expect(ana).toContainText('9.999,00');
+  await expect(detail.getByRole('columnheader', { name: 'Total calculado', exact: true })).toBeVisible();
+  await expect(detail.getByRole('columnheader', { name: 'TOTAL na origem', exact: true })).toBeVisible();
+  await page.getByLabel('Buscar pessoa', { exact: true }).fill('Ana Sintética');
+  const pending = page.waitForEvent('download'); await page.getByRole('button', { name: 'Baixar relatório de RH / DP', exact: true }).click();
+  const download = await pending, book = new ExcelJS.Workbook(); await book.xlsx.readFile((await download.path())!);
+  const sheet = book.getWorksheet('Pessoas filtradas')!;
+  expect(sheet.getCell('N2').value).toBe(4050); expect(sheet.getCell('O2').value).toBe(9999);
+});
+test('RH legacy report never presents the original TOTAL as a calculated five-field total', async ({ page }) => {
+  await setup(page);
+  await expect(page.getByRole('heading', { name: 'Total de salários e benefícios', exact: true })).toHaveCount(0);
+  const detail = page.getByRole('table', { name: 'Funcionários, sócios e valores informados na base de RH / DP' });
+  await expect(detail.getByRole('columnheader', { name: 'TOTAL da posição anterior', exact: true })).toBeVisible();
+  await expect(detail.getByRole('row').filter({ hasText: 'Ana Sintética' })).toContainText('2.000,00');
+  await expect(page.getByText(/O total desta consulta conserva o valor registrado na posição anterior/)).toBeVisible();
+});
+
+test('RH blocks an old importer before confirming a file with the updated salary bindings', async ({ page }) => {
+  const calls = await setup(page, 'rh_dp', { actualModel: true, legacyGateway: true });
+  await page.getByRole('button', { name: 'Importar base de RH / DP', exact: true }).click();
+  await page.getByLabel('Arquivo da base de RH / DP', { exact: true }).setInputFiles({ name: 'RH-SINTETICO.csv', mimeType: 'text/csv', buffer: Buffer.from('FILIAL;FUNCIONÁRIO;SETOR\nX;Pessoa sintética;Área') });
+  await page.getByRole('button', { name: 'Analisar base de RH / DP', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Atualize a função business-import');
+  await expect(page.getByRole('button', { name: 'Confirmar importação de RH / DP', exact: true })).toHaveCount(0);
+  expect(calls.filter(call => call.name === 'business-import' && call.body.action === 'commit')).toHaveLength(0);
 });

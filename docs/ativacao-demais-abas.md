@@ -1,6 +1,6 @@
 # Comissões, Faturamento, Margens e RH / DP — 0.13.0
 
-**Atualização 0.13.1:** o combinado atual inclui **031..035**. Para o modelo com **Salário Base**, **Salário** e **Ajuda de Custo**, seguir [corrigir-importacao-rh.md](corrigir-importacao-rh.md). Essa correção substitui a orientação anterior de deixar benefícios vazios como desconhecidos: em colunas presentes, VT, adiantamento e ajuda vazios valem zero, conforme confirmado pelo usuário.
+**Atualização 0.13.2:** o combinado atual inclui **031..036**. Para separar Salário Folha / Base (sem descontos) de Salário recebido (com descontos) e calcular o Total dos cinco campos, seguir [corrigir-importacao-rh.md](corrigir-importacao-rh.md). VT, adiantamento e ajuda vazios em colunas presentes valem zero; a coluna TOTAL original permanece separada do cálculo.
 
 As quatro abas foram recuperadas do código original V75 e adaptadas à base central. O HTML antigo e seus registros embutidos permanecem privados. Esta atualização não substitui usuários, saldos, títulos, recebimentos ou atendimentos já cadastrados.
 

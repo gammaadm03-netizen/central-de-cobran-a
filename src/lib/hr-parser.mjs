@@ -1,8 +1,8 @@
 import { MAX_ROWS, parseCivilDate, parseMoneyCents } from './payables-parser.mjs';
 
 const normalize = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-const LABELS = { branch:'Filial', employee:'Funcionário', sector:'Setor', admitted_on:'Admissão', birthday_on:'Aniversário', salary_base_cents:'Salário Base', payroll_salary_cents:'Salário da folha', transport_cents:'VT TOTAL', advance_cents:'Adiantamento', cost_allowance_cents:'Ajuda de Custo', total_cents:'Total', count_label:'Contagem' };
-const HEADERS = { FILIAL:'branch', FUNCIONARIO:'employee', SETOR:'sector', ADMISSAO:'admitted_on', ANIVERSARIO:'birthday_on', VTTOTAL:'transport_cents', VT:'transport_cents', ADIANTAMENTO:'advance_cents', AJUDADECUSTO:'cost_allowance_cents', AJUDACUSTO:'cost_allowance_cents', TOTAL:'total_cents', CONTAGEM:'count_label', SALARIOBASE:'salary_base_cents', SALARIODAFOLHA:'payroll_salary_cents', SALARIOFOLHA:'payroll_salary_cents' };
+const LABELS = { branch:'Filial', employee:'Funcionário', sector:'Setor', admitted_on:'Admissão', birthday_on:'Aniversário', salary_base_cents:'Salário Folha / Base, sem descontos', payroll_salary_cents:'Salário recebido, com descontos', transport_cents:'VT TOTAL', advance_cents:'Adiantamento', cost_allowance_cents:'Ajuda de Custo', total_cents:'Total informado na origem', count_label:'Contagem' };
+const HEADERS = { FILIAL:'branch', FUNCIONARIO:'employee', SETOR:'sector', ADMISSAO:'admitted_on', ANIVERSARIO:'birthday_on', VTTOTAL:'transport_cents', VT:'transport_cents', ADIANTAMENTO:'advance_cents', AJUDADECUSTO:'cost_allowance_cents', AJUDACUSTO:'cost_allowance_cents', TOTAL:'total_cents', CONTAGEM:'count_label', SALARIOBASE:'salary_base_cents', SALARIODAFOLHA:'salary_base_cents', SALARIOFOLHA:'salary_base_cents', SALARIORECEBIDO:'payroll_salary_cents', SALARIOLIQUIDO:'payroll_salary_cents' };
 const MONEY = ['salary_base_cents','payroll_salary_cents','transport_cents','advance_cents','cost_allowance_cents','total_cents'];
 // Confirmado pela operação: vazio é zero nestas colunas quando presentes no arquivo.
 // A ausência da coluna, dos salários ou do TOTAL permanece desconhecida.
@@ -39,8 +39,8 @@ function money(value, key) {
 }
 
 // Named salary fields take priority; remaining SALÁRIO columns fill base then
-// payroll. This supports SALÁRIO BASE + SALÁRIO and the legacy repeated SALÁRIO
-// layout without overwriting either value when converting the sheet to rows.
+// received. SALÁRIO FOLHA / BASE is gross; SALÁRIO RECEBIDO is net. This also
+// supports SALÁRIO BASE + SALÁRIO and the legacy repeated SALÁRIO layout.
 export function validateHrRows(matrix, { excel1904 = false } = {}) {
   const errors = [], rows = [];
   const problem = (line,column,message) => errors.push({line,column,problem:message,correction:'Corrija a célula no arquivo original e selecione uma nova cópia.'});
@@ -52,7 +52,7 @@ export function validateHrRows(matrix, { excel1904 = false } = {}) {
     try { head=matrix[line].map(value=>normalize(scalar(value))); } catch { continue; }
     if (head.includes('FILIAL') && head.includes('FUNCIONARIO') && head.includes('SETOR')) candidates.push({line,head});
   }
-  if (!candidates.length) return {rows,errors:[{line:1,column:'Cabeçalho',problem:'Não encontrei FILIAL, SETOR e FUNCIONÁRIO na mesma linha.',correction:'Inclua os três cabeçalhos. Use Salário Base e Salário, ou dois SALÁRIO na ordem base e folha.'}]};
+  if (!candidates.length) return {rows,errors:[{line:1,column:'Cabeçalho',problem:'Não encontrei FILIAL, SETOR e FUNCIONÁRIO na mesma linha.',correction:'Inclua os três cabeçalhos. Use Salário Folha (ou Base) e Salário recebido, ou dois SALÁRIO na ordem sem descontos e recebido.'}]};
   const {line:headerLine,head}=candidates[0];
   if (head.length>100) problem(headerLine+1,'Cabeçalho','A base excede 100 colunas.');
   const columns=new Map(), unnamedSalaries=[];
