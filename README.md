@@ -1,12 +1,14 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.13.3**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.13.4**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
 
-## Salários e pró-labores em RH / DP — 0.13.3
+## Folha e totais do relatório de RH / DP — 0.13.4
 
-Os valores do setor **SÓCIO** passam a ser apresentados separadamente como **Pró-labore sem descontos** e **Pró-labore recebido**. Os dois indicadores de salários abrangem somente colaboradores. Quadro por filial/setor, prévia e Excel distinguem a remuneração dos sócios. O Total geral mantém os cinco componentes definidos pela operação, com subtotais de colaboradores e sócios separados; o TOTAL original permanece apenas para conferência.
+A importação reconhece o modelo de onze colunas com **Salário Folha**, **Salário recebido**, **Total** e o rodapé final. Fórmulas financeiras utilizam somente resultados numéricos já salvos pelo Excel. O rodapé é conferido contra as pessoas, preservado separadamente e não aumenta a contagem do quadro.
 
-Ativação: [salários e pró-labores de RH](docs/corrigir-importacao-rh.md). Executar o combinado **031..037** e conferir o site **0.13.3**. Para quem já ativou a 0.13.2, esta classificação usa a base existente e dispensa nova importação ou atualização da função. Os passos anteriores de reconhecimento das colunas continuam descritos no guia para quem ainda não os concluiu.
+O usuário confirmou três indicadores: **Folha total do relatório** (incluindo sócios), **Salários dos colaboradores** e **Pró-labore sem descontos**. O Total de remunerações e benefícios passa a usar a própria coluna **Total** e seu rodapé, substituindo a soma de cinco campos anterior. Prévia, cards e Excel mantêm as mesmas fontes e distinguem colaboradores e sócios.
+
+Ativação: [folha e totais da planilha](docs/corrigir-importacao-rh.md). Executar o combinado **031..038**, atualizar a função existente **business-import**, conferir o site **0.13.4** e reimportar a planilha com a data original para recuperar os campos anteriormente ausentes. A revisão 4 preserva o histórico e é idempotente.
 
 ## Quatro abas recuperadas da V75 — 0.13.0
 

@@ -411,3 +411,24 @@ Validação local em 19/10/2026:
 - business-import.ts permanece inalterado: SHA-256 `fb15fa35be80b51e0f1133fdc3f63fde69e376ce8839303c7ac87f8e937edbac`. Migrations publicadas 001..036 também permanecem inalteradas.
 
 O agente não aplicou SQL no Supabase remoto nem comprovou o término do deploy Cloudflare. Para quem já ativou 0.13.2, basta executar o combinado atual e atualizar a consulta no site 0.13.3. Essa classificação não exige reimportação ou nova publicação da função. O guia mantém os passos anteriores para quem ainda não concluiu o reconhecimento das colunas: [corrigir-importacao-rh.md](corrigir-importacao-rh.md).
+
+## Coluna Salário Folha e rodapé do relatório — 0.13.4
+
+O usuário mostrou o modelo completo de onze colunas com Salário Folha, Salário recebido, Total e rodapé final. Confirmou Folha total do relatório (incluindo sócios), Salários dos colaboradores e Pró-labore sem descontos como três indicadores separados. Determinou que o Total de remunerações e benefícios use o próprio Total do relatório. Essa definição substitui a fórmula anterior de cinco parcelas.
+
+O parser já reconhecia Salário Folha, mas recusava fórmulas mesmo com resultado salvo e a linha final sem Funcionário. A revisão permite somente resultados numéricos salvos de fórmulas nas colunas financeiras, sem avaliar fórmulas ou executar macros. Preserva centavos exatos e trata apenas ruído binário insignificante do resultado salvo. Um único rodapé final, com campos financeiros e identificação vazia ou rótulo de total, fica separado das pessoas. Totais informados são conferidos com a soma dos registros; diferenças ou valores não verificáveis bloqueiam a importação. Benefícios em branco nas linhas das pessoas continuam zero quando presentes; campo vazio no rodapé continua desconhecido. Datas numéricas do Excel já eram aceitas e permanecem civis.
+
+A migration 038 guarda report_totals na revisão 4 e usa a coluna Total original em linhas, grupos, calendários, prévia, consulta e Excel. Não soma a remuneração sem descontos ao Total informado. Os indicadores separam folha inteira, salários de colaboradores e pró-labores; recebido continua dividido entre colaboradores e sócios. Posições antigas não ganham valores ausentes por inferência. A consulta anterior à atualização também evita apresentar a antiga soma de cinco campos como Total original. Reimportar o mesmo arquivo pela revisão 4 recupera os valores com histórico preservado; replay exato é idempotente e importadores antigos ficam impedidos de criar novas posições após a revisão 4.
+
+O gateway business-import lê novamente os bytes originais na prévia e na confirmação, extrai o rodapé no servidor e não aceita rodapé, linhas ou autor fornecidos como campos adicionais pelo cliente. A ampliação limitada do CSV permite 5.000 pessoas com preâmbulo e rodapé; o limite padrão das demais importações não mudou. XLSX mantém os limites de bytes, expansão, colunas e pessoas. Originais privados, sessões aprovadas, permissões e Diretoria somente para consulta continuam em vigor. Migrations publicadas 001..037 permanecem inalteradas.
+
+Validação local em 19/10/2026:
+
+- Build TypeScript/Vite aprovado, sem dependências novas; aviso de tamanho dos chunks permanece sem impedir a geração.
+- **242 testes Node aprovados**. Incluem onze cabeçalhos, salários sem descontos e recebidos, fórmulas financeiras com resultado salvo, rodapé reconciliado, erros de fórmula/rodapé, troca da ordem das colunas, XLSX original reanalisado, prevenção de metadados forjados e CSV com 5.000 pessoas, preâmbulo e rodapé.
+- **18 testes SQL aprovados**: 14 da 038 e quatro do combinado. Fonte Total distinta da soma anterior, conferência do rodapé, mesma origem reimportada em revisão 4, replay, cercas de versões antigas, concorrência, centavos, dados desconhecidos e preservação de originais, histórico, auditoria e RBAC.
+- **29 cenários de navegador aprovados**: 14 RH, nove comerciais e seis da Diretoria. Conferidos três indicadores de folha, pró-labores, Total original, rodapé na prévia, Excel filtrado, leitura antiga segura, valores ausentes e bloqueio do importador anterior. Nenhum teste falhou ou foi ignorado.
+- Combinado 031..038: SHA-256 `d11c16ff09e3e95ac03f63ab9acb1b6c704040d302b78a3621bc2ae13305fb08`.
+- business-import.ts atualizado: SHA-256 `b082daa83678372e15d7df8941d32eceba2b20b7aa9c96a29b63924fd647d063`.
+
+O agente trabalhou com uma imagem do relatório real e arquivos sintéticos nos testes, sem promover nomes ou valores reais a fixtures ou dados iniciais públicos. Não aplicou SQL, publicou funções ou importou a folha no Supabase remoto; não comprovou o término do deploy Cloudflare. Para ativar: SQL combinado atual, código completo da função existente business-import e site 0.13.4; depois reimportar essa planilha com a data original, conferindo a prévia. Guia: [corrigir-importacao-rh.md](corrigir-importacao-rh.md).

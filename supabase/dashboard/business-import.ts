@@ -60,7 +60,8 @@ function parseMoneyCents(value) {
   if (cents > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Valor excede o limite seguro.");
   return Number(cents);
 }
-function parseCsv(text2) {
+function parseCsv(text2, { maxRows = MAX_ROWS + 1 } = {}) {
+  if (!Number.isSafeInteger(maxRows) || maxRows < 1 || maxRows > MAX_ROWS + 21) throw new Error("Limite de linhas do CSV inv\xE1lido.");
   text2 = text2.replace(/^\uFEFF/, "");
   if (text2.includes("\0")) throw new Error("CSV cont\xE9m bytes inv\xE1lidos. Salve uma c\xF3pia em UTF-8.");
   const sample = text2.split(/\r?\n/, 1)[0];
@@ -84,7 +85,7 @@ function parseCsv(text2) {
     finishField();
     rows.push(row);
     row = [];
-    if (rows.length > MAX_ROWS + 1) throw new Error("A base excede o limite de 5.000 linhas.");
+    if (rows.length > maxRows) throw new Error(maxRows === MAX_ROWS + 1 ? "A base excede o limite de 5.000 linhas." : "O arquivo CSV excede o limite de linhas permitido.");
   }
   for (let index = 0; index < text2.length; index++) {
     const character = text2[index];
@@ -306,6 +307,16 @@ function scalar2(value) {
   if (typeof value === "string" && (/^\s*[=+@]/.test(value) || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value))) throw new Error("Conte\xFAdo inv\xE1lido ou interpret\xE1vel como f\xF3rmula. Salve somente valores.");
   return value;
 }
+function financialScalar(value) {
+  if (value && typeof value === "object" && ("formula" in value || "sharedFormula" in value)) {
+    if (typeof value.result !== "number" || !Number.isFinite(value.result)) throw new Error("A f\xF3rmula n\xE3o tem resultado num\xE9rico salvo. Recalcule e salve a planilha no Excel antes de importar.");
+    const scaled = value.result * 100, cents = Math.round(scaled);
+    if (!Number.isSafeInteger(cents) || Math.abs(scaled - cents) > 1e-6) throw new Error("O resultado salvo da f\xF3rmula deve ter at\xE9 duas casas decimais e respeitar o limite de precis\xE3o.");
+    const exact = BigInt(cents), absolute = exact < 0n ? -exact : exact;
+    return `${exact < 0n ? "-" : ""}${absolute / 100n},${String(absolute % 100n).padStart(2, "0")}`;
+  }
+  return scalar2(value);
+}
 function date2(value, excel1904) {
   if (blank(value)) return null;
   return parseCivilDate(value, excel1904);
@@ -326,6 +337,7 @@ function money2(value, key) {
 }
 function validateHrRows(matrix, { excel1904 = false } = {}) {
   const errors = [], rows = [];
+  let totals = null;
   const problem = (line, column, message) => errors.push({ line, column, problem: message, correction: "Corrija a c\xE9lula no arquivo original e selecione uma nova c\xF3pia." });
   if (!Array.isArray(matrix) || !matrix.length) return { rows, errors: [{ line: 1, column: "Arquivo", problem: "Arquivo vazio.", correction: "Exporte a base de RH/DP com seus cabe\xE7alhos." }] };
   const candidates = [];
@@ -356,6 +368,10 @@ function validateHrRows(matrix, { excel1904 = false } = {}) {
   if (unnamedSalaries.length > remainingSalaries.length) problem(headerLine + 1, "Sal\xE1rio", "H\xE1 mais de duas colunas de sal\xE1rio ou a identifica\xE7\xE3o est\xE1 amb\xEDgua.");
   else unnamedSalaries.forEach((column, index) => columns.set(remainingSalaries[index], column));
   if (errors.length) return { rows, errors };
+  const moneyColumns = new Set([...columns].filter(([key]) => MONEY.includes(key)).map(([, column]) => column));
+  const footerLabels = /* @__PURE__ */ new Set(["TOTAL", "TOTAIS", "TOTALGERAL", "SOMA"]);
+  const footerLabelColumns = new Set(["branch", "employee"].filter((key) => columns.has(key)).map((key) => columns.get(key)));
+  const footerCandidate = (source) => source.some((value, column) => moneyColumns.has(column) && !blank(value)) && source.every((value, column) => moneyColumns.has(column) || blank(value) || footerLabelColumns.has(column) && footerLabels.has(normalize(value)));
   let count = 0;
   const total = Object.fromEntries(MONEY.map((key) => [key, 0n]));
   for (let index = headerLine + 1; index < matrix.length; index++) {
@@ -365,6 +381,33 @@ function validateHrRows(matrix, { excel1904 = false } = {}) {
       continue;
     }
     if (source.every(blank)) continue;
+    if (totals) {
+      problem(index + 1, "Rodap\xE9", "A linha de totais deve ser a \xFAltima linha preenchida do relat\xF3rio.");
+      continue;
+    }
+    if (footerCandidate(source)) {
+      if (!rows.length) {
+        problem(index + 1, "Rodap\xE9", "A linha de totais precisa aparecer depois das pessoas da base.");
+        continue;
+      }
+      totals = { source_row: index + 1, ...Object.fromEntries(MONEY.map((key) => [key, null])) };
+      for (const key of MONEY) {
+        const column = columns.get(key);
+        if (column === void 0 || blank(source[column])) continue;
+        try {
+          totals[key] = money2(financialScalar(source[column]), key);
+        } catch (error) {
+          problem(index + 1, LABELS[key], error.message);
+        }
+      }
+      for (const key of MONEY) {
+        if (totals[key] === null) continue;
+        const values = rows.map((row2) => row2[key]);
+        if (values.some((value) => value === null)) problem(index + 1, LABELS[key], "O total do rodap\xE9 n\xE3o pode ser conferido porque h\xE1 valores n\xE3o informados nas pessoas.");
+        else if (values.reduce((sum, value) => sum + BigInt(value), 0n) !== BigInt(totals[key])) problem(index + 1, LABELS[key], "O total do rodap\xE9 difere da soma dos valores das pessoas. Confira a f\xF3rmula e salve a planilha novamente.");
+      }
+      continue;
+    }
     if (++count > MAX_ROWS) {
       problem(index + 1, "Arquivo", "A base excede 5.000 registros.");
       break;
@@ -372,14 +415,14 @@ function validateHrRows(matrix, { excel1904 = false } = {}) {
     const before = errors.length;
     if (source.length > 100 || source.slice(head.length).some((value) => !blank(value))) problem(index + 1, "Arquivo", "H\xE1 valores fora das colunas do cabe\xE7alho.");
     for (let column = 0; column < source.length; column++) try {
-      scalar2(source[column]);
+      (moneyColumns.has(column) ? financialScalar : scalar2)(source[column]);
     } catch (error) {
       problem(index + 1, `Coluna ${column + 1}`, error.message);
     }
     const row = { source_row: index + 1, branch: "", employee: "", sector: "", admitted_on: null, birthday_on: null, salary_base_cents: null, payroll_salary_cents: null, transport_cents: null, advance_cents: null, cost_allowance_cents: null, total_cents: null, count_label: null };
     for (const [key, column] of columns) {
       try {
-        const value = scalar2(source[column]);
+        const value = (MONEY.includes(key) ? financialScalar : scalar2)(source[column]);
         if (MONEY.includes(key)) row[key] = money2(value, key);
         else if (key === "admitted_on" || key === "birthday_on") row[key] = date2(value, excel1904);
         else {
@@ -405,7 +448,7 @@ function validateHrRows(matrix, { excel1904 = false } = {}) {
     if (errors.length >= 100) break;
   }
   if (!rows.length && !errors.length) problem(headerLine + 2, "Arquivo", "A base n\xE3o cont\xE9m funcion\xE1rios. Uma base vazia n\xE3o substitui a posi\xE7\xE3o atual.");
-  return { rows: errors.length ? [] : rows, errors: errors.slice(0, 100) };
+  return { rows: errors.length ? [] : rows, totals: errors.length ? null : totals, errors: errors.slice(0, 100) };
 }
 
 // supabase/functions/business-import/handler.mjs
@@ -413,6 +456,7 @@ var UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 var FAILURE = "N\xE3o foi poss\xEDvel confirmar a opera\xE7\xE3o. Atualize o hist\xF3rico antes de tentar novamente.";
 var INVALID = "Solicita\xE7\xE3o inv\xE1lida. Selecione novamente o relat\xF3rio completo.";
 var CORRECTION = "Confira os cabe\xE7alhos e salve uma c\xF3pia somente com valores.";
+var HR_CORRECTION = "Confira os cabe\xE7alhos e os totais. Se houver f\xF3rmulas financeiras, recalcule e salve o arquivo no Excel antes de importar.";
 function origins(raw) {
   const values = String(raw || "").split(",").map((value) => value.trim()).filter(Boolean);
   if (!values.length) throw Error("origins");
@@ -467,7 +511,7 @@ function sessionId(token, id) {
   if (claims.sub !== id || !UUID.test(claims.session_id ?? "")) throw Error("claims");
   return claims.session_id;
 }
-var problems = (errors) => errors.slice(0, 100).map((row) => ({ line: Number.isSafeInteger(row.line) && row.line >= 0 && row.line <= 5020 ? row.line : 0, column: String(row.column || "Arquivo").slice(0, 100), problem: String(row.problem || "Linha inv\xE1lida.").slice(0, 400), correction: String(row.correction || CORRECTION).slice(0, 400) }));
+var problems = (errors, correction = CORRECTION) => errors.slice(0, 100).map((row) => ({ line: Number.isSafeInteger(row.line) && row.line >= 0 && row.line <= 5021 ? row.line : 0, column: String(row.column || "Arquivo").slice(0, 100), problem: String(row.problem || "Linha inv\xE1lida.").slice(0, 400), correction: String(row.correction || correction).slice(0, 400) }));
 function createBusinessGateway({ env, fetch: fetcher = globalThis.fetch, loadWorkbook, log = () => {
 } }) {
   return async (request) => {
@@ -554,31 +598,31 @@ function createBusinessGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
       let parsed;
       try {
         let matrix, excel1904 = false;
-        if (/\.csv$/i.test(body.file_name)) matrix = parseCsv(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+        if (/\.csv$/i.test(body.file_name)) matrix = parseCsv(new TextDecoder("utf-8", { fatal: true }).decode(bytes), commercial ? void 0 : { maxRows: MAX_ROWS + 21 });
         else {
           await validateWorkbookExpandedSize(bytes.buffer);
           const workbook = await loadWorkbook(bytes.buffer);
           matrix = workbook.matrix;
           excel1904 = workbook.excel1904 === true;
         }
-        if (!Array.isArray(matrix) || matrix.length > MAX_ROWS + (commercial ? 1 : 20) || matrix.some((row) => !Array.isArray(row) || row.length > 100)) throw Error("size");
+        if (!Array.isArray(matrix) || matrix.length > MAX_ROWS + (commercial ? 1 : 21) || matrix.some((row) => !Array.isArray(row) || row.length > 100)) throw Error("size");
         parsed = (commercial ? validateCommercialRows : validateHrRows)(matrix, { excel1904 });
       } catch {
-        return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: [{ line: 0, column: "Arquivo", problem: "N\xE3o foi poss\xEDvel analisar o arquivo. Use uma \xFAnica aba com at\xE9 5.000 linhas e 100 colunas, somente com valores.", correction: CORRECTION }] });
+        return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: [{ line: 0, column: "Arquivo", problem: commercial ? "N\xE3o foi poss\xEDvel analisar o arquivo. Use uma \xFAnica aba com at\xE9 5.000 linhas e 100 colunas, somente com valores." : "N\xE3o foi poss\xEDvel analisar o arquivo. Use uma \xFAnica aba com at\xE9 5.000 pessoas, uma linha final de totais e 100 colunas.", correction: commercial ? CORRECTION : HR_CORRECTION }] });
       }
-      if (parsed.errors.length) return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: problems(parsed.errors) });
+      if (parsed.errors.length) return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: problems(parsed.errors, commercial ? CORRECTION : HR_CORRECTION) });
       const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
-      const referenceArgument = commercial ? { p_month: reference } : { p_reference_date: reference };
+      const referenceArgument = commercial ? { p_month: reference } : { p_reference_date: reference, p_report_totals: parsed.totals ?? null };
       if (body.action === "preview") {
-        const preview = await call(`/rest/v1/rpc/${commercial ? "preview_commercial_import" : "preview_hr_total_import"}`, { data: { p_rows: parsed.rows, ...referenceArgument } });
+        const preview = await call(`/rest/v1/rpc/${commercial ? "preview_commercial_import" : "preview_hr_sheet_import"}`, { data: { p_rows: parsed.rows, ...referenceArgument } });
         if (!preview.ok) return fail(preview);
         if (preview.payload?.row_count !== parsed.rows.length || !(preview.payload.previous_import_id === null || UUID.test(preview.payload.previous_import_id ?? ""))) throw Error("preview");
         const rows = commercial ? parsed.rows : preview.payload.rows;
-        if (!Array.isArray(rows) || rows.length !== parsed.rows.length || !commercial && preview.payload.summary?.total_formula_version !== "rh-five-fields-v1") throw Error("preview");
+        if (!Array.isArray(rows) || rows.length !== parsed.rows.length || !commercial && preview.payload.summary?.total_formula_version !== "rh-reported-total-v1") throw Error("preview");
         const { rows: projectedRows, ...details } = preview.payload;
-        return respond(200, { rows, preview: commercial ? preview.payload : details, file_sha256: hash, ...commercial ? {} : { format_version: 3 } });
+        return respond(200, { rows, preview: commercial ? preview.payload : details, file_sha256: hash, ...commercial ? {} : { format_version: 4 } });
       }
-      const committed = await call(`/rest/v1/rpc/${commercial ? "commit_commercial_import_from_gateway" : "commit_hr_total_import_from_gateway"}`, { service: true, data: { p_user_id: auth.payload.id, p_session_id: verifiedSession, p_file_name: body.file_name, p_file_sha256: hash, p_file_base64: body.file_base64, p_rows: parsed.rows, ...referenceArgument, p_previous_import_id: body.previous_import_id } });
+      const committed = await call(`/rest/v1/rpc/${commercial ? "commit_commercial_import_from_gateway" : "commit_hr_sheet_import_from_gateway"}`, { service: true, data: { p_user_id: auth.payload.id, p_session_id: verifiedSession, p_file_name: body.file_name, p_file_sha256: hash, p_file_base64: body.file_base64, p_rows: parsed.rows, ...referenceArgument, p_previous_import_id: body.previous_import_id } });
       if (!committed.ok) return fail(committed);
       if (!UUID.test(committed.payload?.import_id ?? "") || committed.payload.row_count !== parsed.rows.length) throw Error("commit");
       return respond(200, committed.payload);
@@ -598,7 +642,7 @@ Deno.serve(createBusinessGateway({
     const populated = workbook.worksheets.filter((sheet2) => sheet2.actualRowCount > 0);
     if (populated.length !== 1) throw new Error("Use uma \xFAnica aba com dados.");
     const sheet = populated[0];
-    if (sheet.rowCount > 5020 || sheet.columnCount > 100) throw new Error("Limite da planilha excedido.");
+    if (sheet.rowCount > 5021 || sheet.columnCount > 100) throw new Error("Limite da planilha excedido.");
     const matrix = [];
     for (let index = 1; index <= sheet.rowCount; index++) matrix.push(sheet.getRow(index).values.slice(1));
     return { matrix, excel1904: Boolean(workbook.properties.date1904) };

@@ -1,15 +1,15 @@
 # Comissões, Faturamento, Margens e RH / DP — 0.13.0
 
-**Atualização 0.13.3:** o combinado atual inclui **031..037**. Os valores dos sócios aparecem como Pró-labore, separados dos salários dos colaboradores. Para quem já ativou a 0.13.2, basta aplicar o combinado atual e conferir o site 0.13.3; a classificação usa a base já importada. [Guia de RH](corrigir-importacao-rh.md).
+**Atualização 0.13.4:** o combinado atual inclui **031..038**. A importação reconhece a folha e o rodapé de totais, e o Total geral vem da coluna Total do relatório. Atualize também business-import e reimporte a planilha para recuperar os campos anteriores ausentes. [Guia de RH](corrigir-importacao-rh.md).
 
 As quatro abas foram recuperadas do código original V75 e adaptadas à base central. O HTML antigo e seus registros embutidos permanecem privados. Esta atualização não substitui usuários, saldos, títulos, recebimentos ou atendimentos já cadastrados.
 
 ## Ativar no projeto existente
 
-1. No Supabase, abra **SQL Editor → New query**. Cole todo o conteúdo de [ativar-demais-abas.sql](../supabase/dashboard/ativar-demais-abas.sql) e clique em **Run**. Este arquivo é SQL e instala somente versões ainda não registradas, de 031 a 037, em uma transação. `Success. No rows returned` é o resultado normal. Não repetir a instalação inicial.
+1. No Supabase, abra **SQL Editor → New query**. Cole todo o conteúdo de [ativar-demais-abas.sql](../supabase/dashboard/ativar-demais-abas.sql) e clique em **Run**. Este arquivo é SQL e instala somente versões ainda não registradas, de 031 a 038, em uma transação. `Success. No rows returned` é o resultado normal. Não repetir a instalação inicial.
 2. Abra **Edge Functions → Deploy a new function → Via Editor**. Substitua todo o conteúdo de **index.ts** pelo arquivo [business-import.ts](../supabase/dashboard/business-import.ts). Em **Function name**, no rodapé ao lado de **Deploy function**, escreva exatamente **business-import** e publique. Se esse nome já existir, atualize **Code → index.ts** na função existente.
 3. Em **business-import → Settings**, desligue **Verify JWT with legacy secret** e salve. A função verifica o token pelo Supabase Auth, a sessão aprovada e as permissões antes de processar o arquivo. O secret existente **ALLOWED_ORIGINS** deve conter `https://central-de-cobran-a.pages.dev`, sem barra final. As outras funções permanecem em uso.
-4. Na Cloudflare, confira o deploy da branch **main**. Na Central, atualize a página e confira **Versão 0.13.3** no rodapé. Entre novamente para carregar suas permissões.
+4. Na Cloudflare, confira o deploy da branch **main**. Na Central, atualize a página e confira **Versão 0.13.4** no rodapé. Entre novamente para carregar suas permissões.
 
 O arquivo TypeScript do passo 2 pertence ao editor de Edge Functions; não deve ser colado no SQL Editor. A publicação pelo Git atualiza o site, mas não executa SQL nem publica a função do Supabase.
 

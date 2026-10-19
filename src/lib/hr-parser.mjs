@@ -20,6 +20,16 @@ function scalar(value) {
   if (typeof value === 'string' && (/^\s*[=+@]/.test(value) || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value))) throw new Error('Conteúdo inválido ou interpretável como fórmula. Salve somente valores.');
   return value;
 }
+function financialScalar(value) {
+  if (value && typeof value === 'object' && ('formula' in value || 'sharedFormula' in value)) {
+    if (typeof value.result !== 'number' || !Number.isFinite(value.result)) throw new Error('A fórmula não tem resultado numérico salvo. Recalcule e salve a planilha no Excel antes de importar.');
+    const scaled=value.result*100, cents=Math.round(scaled);
+    if(!Number.isSafeInteger(cents)||Math.abs(scaled-cents)>0.000001)throw new Error('O resultado salvo da fórmula deve ter até duas casas decimais e respeitar o limite de precisão.');
+    const exact=BigInt(cents), absolute=exact<0n?-exact:exact;
+    return `${exact<0n?'-':''}${absolute/100n},${String(absolute%100n).padStart(2,'0')}`;
+  }
+  return scalar(value);
+}
 function date(value, excel1904) {
   if (blank(value)) return null;
   // Excel dates preserve their civil UTC components. Clock portions from an ERP
@@ -43,6 +53,7 @@ function money(value, key) {
 // supports SALÁRIO BASE + SALÁRIO and the legacy repeated SALÁRIO layout.
 export function validateHrRows(matrix, { excel1904 = false } = {}) {
   const errors = [], rows = [];
+  let totals = null;
   const problem = (line,column,message) => errors.push({line,column,problem:message,correction:'Corrija a célula no arquivo original e selecione uma nova cópia.'});
   if (!Array.isArray(matrix) || !matrix.length) return {rows,errors:[{line:1,column:'Arquivo',problem:'Arquivo vazio.',correction:'Exporte a base de RH/DP com seus cabeçalhos.'}]};
   const candidates = [];
@@ -65,18 +76,33 @@ export function validateHrRows(matrix, { excel1904 = false } = {}) {
   if(unnamedSalaries.length>remainingSalaries.length)problem(headerLine+1,'Salário','Há mais de duas colunas de salário ou a identificação está ambígua.');
   else unnamedSalaries.forEach((column,index)=>columns.set(remainingSalaries[index],column));
   if(errors.length)return{rows,errors};
+  const moneyColumns=new Set([...columns].filter(([key])=>MONEY.includes(key)).map(([,column])=>column));
+  const footerLabels=new Set(['TOTAL','TOTAIS','TOTALGERAL','SOMA']);
+  const footerLabelColumns=new Set(['branch','employee'].filter(key=>columns.has(key)).map(key=>columns.get(key)));
+  const footerCandidate=source=>source.some((value,column)=>moneyColumns.has(column)&&!blank(value))&&source.every((value,column)=>moneyColumns.has(column)||blank(value)||footerLabelColumns.has(column)&&footerLabels.has(normalize(value)));
   let count=0;const total=Object.fromEntries(MONEY.map(key=>[key,0n]));
   for(let index=headerLine+1;index<matrix.length;index++){
     const source=matrix[index];
     if(!Array.isArray(source)){problem(index+1,'Arquivo','Linha inválida.');continue;}
     if(source.every(blank))continue;
+    if(totals){problem(index+1,'Rodapé','A linha de totais deve ser a última linha preenchida do relatório.');continue;}
+    if(footerCandidate(source)){
+      if(!rows.length){problem(index+1,'Rodapé','A linha de totais precisa aparecer depois das pessoas da base.');continue;}
+      totals={source_row:index+1,...Object.fromEntries(MONEY.map(key=>[key,null]))};
+      for(const key of MONEY){const column=columns.get(key);if(column===undefined||blank(source[column]))continue;
+        try{totals[key]=money(financialScalar(source[column]),key);}catch(error){problem(index+1,LABELS[key],error.message);}}
+      for(const key of MONEY){if(totals[key]===null)continue;const values=rows.map(row=>row[key]);
+        if(values.some(value=>value===null))problem(index+1,LABELS[key],'O total do rodapé não pode ser conferido porque há valores não informados nas pessoas.');
+        else if(values.reduce((sum,value)=>sum+BigInt(value),0n)!==BigInt(totals[key]))problem(index+1,LABELS[key],'O total do rodapé difere da soma dos valores das pessoas. Confira a fórmula e salve a planilha novamente.');}
+      continue;
+    }
     if(++count>MAX_ROWS){problem(index+1,'Arquivo','A base excede 5.000 registros.');break;}
     const before=errors.length;
     if(source.length>100||source.slice(head.length).some(value=>!blank(value)))problem(index+1,'Arquivo','Há valores fora das colunas do cabeçalho.');
-    for(let column=0;column<source.length;column++)try{scalar(source[column]);}catch(error){problem(index+1,`Coluna ${column+1}`,error.message);}
+    for(let column=0;column<source.length;column++)try{(moneyColumns.has(column)?financialScalar:scalar)(source[column]);}catch(error){problem(index+1,`Coluna ${column+1}`,error.message);}
     const row={source_row:index+1,branch:'',employee:'',sector:'',admitted_on:null,birthday_on:null,salary_base_cents:null,payroll_salary_cents:null,transport_cents:null,advance_cents:null,cost_allowance_cents:null,total_cents:null,count_label:null};
     for(const[key,column]of columns){try{
-      const value=scalar(source[column]);
+      const value=(MONEY.includes(key)?financialScalar:scalar)(source[column]);
       if(MONEY.includes(key))row[key]=money(value,key);
       else if(key==='admitted_on'||key==='birthday_on')row[key]=date(value,excel1904);
       else {row[key]=String(value).trim().replace(/\s+/g,' ');if(row[key].length>(key==='employee'?300:150))throw new Error('Texto excede o limite de caracteres.');if(key==='employee'&&!row[key])throw new Error('Nome do funcionário obrigatório.');if(key==='count_label'&&!row[key])row[key]=null;}
@@ -89,6 +115,6 @@ export function validateHrRows(matrix, { excel1904 = false } = {}) {
     if(errors.length>=100)break;
   }
   if(!rows.length&&!errors.length)problem(headerLine+2,'Arquivo','A base não contém funcionários. Uma base vazia não substitui a posição atual.');
-  return {rows:errors.length?[]:rows,errors:errors.slice(0,100)};
+  return {rows:errors.length?[]:rows,totals:errors.length?null:totals,errors:errors.slice(0,100)};
 }
 export const parseHrRows = validateHrRows;

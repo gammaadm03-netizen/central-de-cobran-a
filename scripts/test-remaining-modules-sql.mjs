@@ -51,10 +51,10 @@ try {
       assert.deepEqual(after[table], rows, `Activation must preserve ${table}`);
     }
   }
-  for (const name of ['031_director_readonly', '032_commercial', '033_hr', '034_commissions', '035_hr_report_model', '036_hr_total', '037_hr_prolabore']) {
+  for (const name of ['031_director_readonly', '032_commercial', '033_hr', '034_commissions', '035_hr_report_model', '036_hr_total', '037_hr_prolabore', '038_hr_sheet_totals']) {
     assert.equal(await scalar('SELECT count(*)::int AS value FROM public.central_schema_migrations WHERE version=$1', [name]), 1);
   }
-  console.log('PASS combined activation installs all seven versions and preserves existing operational data');
+  console.log('PASS combined activation installs all eight versions and preserves existing operational data');
   await db.exec(bundle);
   assert.deepEqual(await state(), after);
   console.log('PASS repeating the activation changes no data, grant, rule or audit event');

@@ -84,7 +84,10 @@ export function parseMoneyCents(value) {
 }
 
 // RFC4180-style parser, preserving quoted delimiters, newlines and escaped quotes.
-export function parseCsv(text) {
+export function parseCsv(text, { maxRows = MAX_ROWS + 1 } = {}) {
+  // Financial imports retain their existing limit. RH can reserve bounded rows
+  // for its preamble and final report totals without increasing the person limit.
+  if (!Number.isSafeInteger(maxRows) || maxRows < 1 || maxRows > MAX_ROWS + 21) throw new Error('Limite de linhas do CSV inválido.');
   text = text.replace(/^\uFEFF/, '');
   if (text.includes('\u0000')) throw new Error('CSV contém bytes inválidos. Salve uma cópia em UTF-8.');
   const sample = text.split(/\r?\n/, 1)[0];
@@ -97,7 +100,7 @@ export function parseCsv(text) {
   const delimiter = semicolons >= commas ? ';' : ',';
   const rows = []; let row = [], field = '', inQuote = false, closedQuote = false;
   function finishField() { row.push(field); field = ''; closedQuote = false; }
-  function finishRow() { finishField(); rows.push(row); row = []; if (rows.length > MAX_ROWS + 1) throw new Error('A base excede o limite de 5.000 linhas.'); }
+  function finishRow() { finishField(); rows.push(row); row = []; if (rows.length > maxRows) throw new Error(maxRows === MAX_ROWS + 1 ? 'A base excede o limite de 5.000 linhas.' : 'O arquivo CSV excede o limite de linhas permitido.'); }
   for (let index = 0; index < text.length; index++) {
     const character = text[index];
     if (inQuote) {

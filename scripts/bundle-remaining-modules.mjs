@@ -11,6 +11,7 @@ export const MODULE_MIGRATIONS = [
   '035_hr_report_model.sql',
   '036_hr_total.sql',
   '037_hr_prolabore.sql',
+  '038_hr_sheet_totals.sql',
 ];
 
 function tag(prefix, body) {
@@ -55,6 +56,7 @@ END;`;
 -- 035 reconhece o modelo de RH com Salário Base, Salário e Ajuda de Custo.
 -- 036 separa Salário Folha e Salário recebido e calcula o Total dos cinco campos.
 -- 037 apresenta a remuneração dos sócios separadamente como Pró-labore.
+-- 038 importa e confere o rodapé; o Total geral vem da coluna TOTAL do relatório.
 -- A função business-import é publicada separadamente; não colar TypeScript aqui.
 BEGIN;
 DO $cf_module_base$

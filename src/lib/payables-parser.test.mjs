@@ -21,6 +21,15 @@ test('CSV com vírgula respeita valores brasileiros entre aspas e recusa aspas t
   assert.throws(() => parseCsv('a;b\n1;"sem fim'), /fechamento/);
   assert.throws(() => parseCsv('a;b\n1;"b"erro'), /fechamento/);
 });
+test('CSV keeps the default financial bound and permits only a bounded RH preamble/footer allowance', () => {
+  const defaultBound=Array.from({length:5001},()=> 'a;b').join('\n');
+  assert.equal(parseCsv(defaultBound).length,5001);
+  assert.throws(()=>parseCsv(defaultBound+'\na;b'),/limite/);
+  const rhBound=Array.from({length:5021},()=> 'a;b').join('\n');
+  assert.equal(parseCsv(rhBound,{maxRows:5021}).length,5021);
+  assert.throws(()=>parseCsv(rhBound+'\na;b',{maxRows:5021}),/limite/);
+  for(const maxRows of [0,-1,1.5,NaN,Infinity,'5021',5022])assert.throws(()=>parseCsv('a;b',{maxRows}),/inválido/);
+});
 test('centavos exatos não aceitam arredondamento, texto inválido ou notação estrangeira ambígua', () => {
   assert.equal(parseMoneyCents('R$ 1.234.567,89'),123456789);
   assert.equal(parseMoneyCents(19.99),1999);

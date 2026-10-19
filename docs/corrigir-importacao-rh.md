@@ -1,51 +1,38 @@
-# Salários e pró-labores de RH / DP — 0.13.3
+# Folha, pró-labores e Total da planilha — 0.13.4
 
-Os registros com setor **SÓCIO** são identificados como **Pró-labore**, com seus valores apresentados separadamente dos salários dos colaboradores. A classificação considera o setor informado na planilha, sem depender do nome da pessoa.
+A base enviada tem onze colunas: FILIAL, ADMISSAO, ANIVERSARIO, Salário Folha, VT TOTAL, Salário recebido, Adiantamento, Ajuda de Custo, Total, SETOR e Funcionário. Ao final há uma linha com os totais das colunas financeiras, sem nome de pessoa. Essa linha é um rodapé e não entra no quadro de colaboradores ou sócios.
 
-| Indicador | Coluna de origem | Pessoas incluídas |
-| --- | --- | --- |
-| Salário Folha — colaboradores | Salário Folha ou Salário Base, sem descontos | Colaboradores, sem sócios |
-| Salário recebido — colaboradores | Salário recebido, com descontos | Colaboradores, sem sócios |
-| Pró-labore sem descontos | Salário Folha ou Salário Base, sem descontos | Sócios |
-| Pró-labore recebido | Salário recebido, com descontos | Sócios |
+O usuário confirmou três indicadores separados para a remuneração sem descontos:
 
-O **Total geral** mantém a soma definida pela operação: **remuneração sem descontos + VT total + remuneração recebida + Adiantamento + Ajuda de Custo**. Há subtotais separados para colaboradores e sócios. Para os colaboradores, remuneração significa salário; para os sócios, pró-labore. Os valores originais e o histórico permanecem preservados.
-
-## Ativar a separação dos sócios
-
-1. No Supabase, abra **SQL Editor → New query**. Abra o [SQL completo de atualização](https://raw.githubusercontent.com/gammaadm03-netizen/central-de-cobran-a/main/supabase/dashboard/ativar-demais-abas.sql), copie tudo, cole e clique em **Run**. O arquivo termina em `COMMIT;`. Instala somente versões ausentes de **031 a 037** e solicita atualização do cache da API. `Success. No rows returned` é normal.
-2. Confira o deploy do site **0.13.3** na Cloudflare. Atualize a Central, abra **RH / DP** e clique em **Atualizar RH / DP**.
-
-Se a versão **0.13.2 já foi ativada**, esses dois passos bastam. A classificação usa os registros já importados; não é necessário reimportar o arquivo ou republicar a função para separar pró-labores. A publicação pelo Git não executa o SQL no Supabase.
-
-## Se ainda não concluiu a correção das colunas da 0.13.2
-
-Depois de executar o SQL acima, abra **Edge Functions → business-import → Code → index.ts**. Abra o [código completo da função](https://raw.githubusercontent.com/gammaadm03-netizen/central-de-cobran-a/main/supabase/dashboard/business-import.ts), copie tudo e substitua o conteúdo inteiro. Confira que termina em `}));` e publique a função existente. Mantenha **Verify JWT with legacy secret** desligado em Settings.
-
-Na Central atualizada, abra **Importar Bases → RH / DP**. Selecione a mesma planilha com a data da posição original, confira os salários e pró-labores na prévia e confirme. Essa reimportação recupera vínculos de colunas antes interpretados incorretamente; não é necessária apenas para a classificação de sócios.
-
-## Cabeçalhos aceitos
-
-| Coluna do relatório | Informação utilizada |
+| Indicador | Origem no relatório mostrado |
 | --- | --- |
-| FILIAL | Filial / empresa da pessoa |
-| ADMISSAO | Data de admissão; pode ficar vazia |
-| ANIVERSARIO | Data de nascimento / aniversário |
-| Salário Folha, Salário da Folha ou Salário Base | Remuneração sem descontos: salário ou pró-labore conforme o setor |
-| VT TOTAL | Vale-transporte recebido |
-| Salário recebido ou Salário Líquido | Remuneração recebida com descontos: salário ou pró-labore conforme o setor |
-| Adiantamento | Adiantamento informado |
-| Ajuda de Custo | Ajuda de custo |
-| SETOR | SÓCIO identifica a pessoa na soma de pró-labores |
-| Funcionário | Nome da pessoa |
-| TOTAL (opcional) | Valor original preservado para conferência, separado do Total calculado |
+| Folha total do relatório | Total da coluna Salário Folha, mostrado em D30; inclui colaboradores e sócios |
+| Salários dos colaboradores | Coluna Salário Folha das pessoas que não são do setor SÓCIO; equivale a D30 menos os pró-labores |
+| Pró-labore sem descontos | Coluna Salário Folha dos registros do setor SÓCIO, mostrados em D27:D29 |
+| Salário recebido — colaboradores | Coluna Salário recebido, apenas colaboradores |
+| Pró-labore recebido | Coluna Salário recebido, apenas sócios |
+| Total de remunerações e benefícios | Coluna Total, conferida com o rodapé mostrado em I30 |
 
-O modelo anterior com **Salário Base + Salário** continua aceito: Salário preenche o valor recebido. No formato com dois cabeçalhos SALÁRIO, o primeiro é sem descontos e o segundo é recebido. Nomes explícitos têm prioridade, independentemente da ordem das colunas. Duas colunas explícitas para o mesmo campo exigem correção do arquivo para evitar escolha ambígua.
+A origem do **Total** passa a ser o valor informado no relatório. Isso substitui a fórmula anterior que somava salário sem descontos ao valor recebido. A posição e as letras das colunas podem mudar: a importação usa os cabeçalhos, a linha final de totais e o setor da pessoa, sem fixar as linhas 27–30.
 
-Conforme confirmado pelo usuário, **célula vazia em VT TOTAL, Adiantamento ou Ajuda de Custo significa zero**, quando a coluna existe. O traço contábil, como `R$ -`, também representa zero. Coluna ausente, salários, pró-labores e datas vazios permanecem não informados.
+## Atualizar e reimportar
 
-## Conferência e histórico
+1. No Supabase, abra **SQL Editor → New query**. Copie o [SQL completo de atualização](https://raw.githubusercontent.com/gammaadm03-netizen/central-de-cobran-a/main/supabase/dashboard/ativar-demais-abas.sql), cole e clique em **Run**. O arquivo termina em `COMMIT;`, aplica somente versões ausentes de **031 a 038** e recarrega o cache da API. `Success. No rows returned` é normal.
+2. Abra **Edge Functions → business-import → Code → index.ts**. Substitua o conteúdo inteiro pelo [código atualizado da função](https://raw.githubusercontent.com/gammaadm03-netizen/central-de-cobran-a/main/supabase/dashboard/business-import.ts) e clique em **Deploy**. O código termina em `}));`. Use a função existente e mantenha **Verify JWT with legacy secret** desligado.
+3. Quando a Central mostrar **0.13.4**, abra **Importar Bases → RH / DP**, selecione essa planilha e mantenha a data da posição original. Confira os indicadores e o rodapé na prévia e confirme.
 
-O banco calcula os totais em centavos; RH/DP, prévia e Excel mantêm os salários e pró-labores separados. A coluna TOTAL original permanece apenas para conferência. Se faltar um dos cinco componentes, o Total correspondente fica **Não informado**; uma informação ausente no grupo de sócios não torna desconhecido o subtotal dos colaboradores e vice-versa. A cesta básica continua separada desse cálculo.
+Reimportar é necessário para recuperar os valores que não foram guardados pela leitura anterior. A revisão 4 permite registrar o mesmo original corrigido, preservando o arquivo e as posições anteriores. A consulta utiliza uma posição atual e repetir a revisão corrigida não duplica pessoas ou totais. A publicação pelo Git não executa SQL ou atualiza a função no Supabase.
 
-As posições antigas, arquivos originais e auditorias não são reescritos. A consulta usa uma posição atual; repetir o mesmo arquivo pela revisão atual não duplica pessoas ou totais. A revisão 3 e a proteção contra importadores antigos continuam em uso. O Excel identifica cada pessoa como Salário ou Pró-labore e mantém as informações de origem.
+## Fórmulas e conferência
+
+As colunas financeiras podem conter valores ou fórmulas com **resultado numérico salvo pelo Excel**. A Central usa o resultado salvo, sem executar a fórmula ou macros. Se faltar esse resultado, recalcule e salve a planilha no Excel antes de importar. Fórmulas em campos de texto, datas ou cabeçalhos continuam recusadas.
+
+O rodapé pode ficar sem identificação ou usar TOTAL/TOTAIS/TOTAL GERAL na identificação. Deve ser a última linha preenchida e conter apenas totais financeiros. Cada total informado precisa ser igual à soma das pessoas na coluna correspondente, em centavos. Um total de coluna deixado em branco permanece ausente no rodapé, sem assumir zero. Diferenças bloqueiam a importação e indicam a coluna a conferir.
+
+VT TOTAL, Adiantamento e Ajuda de Custo vazios nas linhas das pessoas valem zero quando as colunas existem, conforme confirmado pela operação. Colunas ausentes, remunerações ou datas vazias permanecem não informadas. O Total de cada pessoa vem da coluna Total; se ela faltar, o total correspondente permanece desconhecido. O salário sem descontos não é somado novamente ao Total informado.
+
+A prévia, os cards e o Excel mantêm folha, salários e pró-labores separados. O Excel identifica Salário ou Pró-labore e os subtotais consideram somente as pessoas filtradas. Os arquivos originais, rodapés, posições e auditorias permanecem preservados. A Diretoria continua somente em consulta.
+
+## Compatibilidade
+
+Salário Folha, Salário da Folha e Salário Base são aceitos como remuneração sem descontos. Salário recebido e Salário Líquido são aceitos como remuneração recebida. O modelo anterior Salário Base + Salário e o formato com dois SALÁRIO continuam aceitos. Nomes explícitos têm prioridade; duas colunas explícitas para o mesmo campo são recusadas como ambíguas.

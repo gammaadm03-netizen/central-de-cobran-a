@@ -1,14 +1,14 @@
-import type { HrImportRow } from './hr-parser.mjs';
+import type { HrImportRow, HrReportTotals } from './hr-parser.mjs';
 export interface HrProjectedRow extends HrImportRow { reported_total_cents?:number|null;compensation_kind?:'salary'|'prolabore' }
 export interface HrRow extends HrProjectedRow { basket_eligible:boolean;basket_cost_cents:number;is_partner:boolean }
-export interface HrTotalFormula { total_formula_version?:'rh-five-fields-v1';total_formula_caption?:string }
+export interface HrTotalFormula { total_formula_version?:'rh-five-fields-v1'|'rh-reported-total-v1';total_formula_caption?:string;report_totals?:HrReportTotals|null }
 export interface HrSummary extends HrTotalFormula { employees:number;partners:number;admissions:number;birthdays:number;basket_eligible:number;basket_excluded:number;basket_unit_cents:number;basket_monthly_cents:number;basket_annual_cents:number;salary_base_cents:number|null;salary_base_all_cents?:number|null;payroll_salary_cents:number|null;payroll_salary_employees_cents?:number|null;prolabore_base_cents?:number|null;prolabore_received_cents?:number|null;employee_total_cents?:number|null;partner_total_cents?:number|null;compensation_groups_version?:'rh-compensation-groups-v1';transport_cents:number|null;advance_cents:number|null;cost_allowance_cents:number|null;total_cents:number|null;reported_total_cents?:number|null }
 export interface HrQuality { missing_admission:number;missing_birthday:number;missing_branch:number;missing_sector:number;missing_salary_base:number;missing_payroll_salary:number;missing_transport:number;missing_advance:number;missing_cost_allowance:number;missing_total:number }
 export interface HrGroup { label:string;count:number;salary_base_cents:number|null;prolabore_base_cents?:number|null;employee_count?:number;partner_count?:number }
 export interface HrReport extends HrTotalFormula { calendar_month:string;snapshot:{id:string;reference_date:string;file_name:string;imported_at:string;sha256:string;row_count:number;format_version?:number}|null;summary:HrSummary;quality:HrQuality;by_branch:HrGroup[];by_sector:HrGroup[];birthdays:(HrRow&{day:number})[];work_anniversaries:(HrRow&{day:number;years:number})[];rows:HrRow[] }
 const integer=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value);
 const nullableMoney=(value:unknown)=>value===null||integer(value);
-const formula=(value:HrTotalFormula)=>value.total_formula_version===undefined||value.total_formula_version==='rh-five-fields-v1'&&typeof value.total_formula_caption==='string';
+const formula=(value:HrTotalFormula)=>value.total_formula_version===undefined||['rh-five-fields-v1','rh-reported-total-v1'].includes(value.total_formula_version)&&typeof value.total_formula_caption==='string';
 export function isHrReport(value:unknown):value is HrReport {
   if(!value||typeof value!=='object')return false;
   const report=value as HrReport;

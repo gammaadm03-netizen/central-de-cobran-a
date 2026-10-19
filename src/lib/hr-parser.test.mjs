@@ -45,11 +45,11 @@ test('RH present optional benefits accept blank or accounting zero without inven
  const partner=[...reportRow];partner[1]='';partner[8]='SOCIO';assert.equal(validateHrRows([reportHeader,partner]).rows[0].admitted_on,null);
 });
 test('RH rejects impossible dates, abbreviated years, unsupported formulas and third salary before import',()=>{
- for(const change of [[2,'31/02/2020'],[3,'01/01/99'],[4,{formula:'SUM(A1)',result:1}],[6,'=HYPERLINK("x")'],[6,'']]){
+ for(const change of [[2,'31/02/2020'],[3,'01/01/99'],[4,{formula:'SUM(A1)'}],[6,'=HYPERLINK("x")'],[6,'']]){
   const source=[...row];source[change[0]]=change[1];const result=validateHrRows([header,source]);assert.equal(result.rows.length,0);assert(result.errors.length>0);
  }
  assert(validateHrRows([[...header,'SALÁRIO'],[...row,'1,00']]).errors.length>0);
- assert(validateHrRows([header,row,['', '', '', '', '', '', '', '', '', '', '2.120,50']]).errors.some(error=>error.column==='Funcionário'));
+ const footer=validateHrRows([header,row,['', '', '', '', '', '', '', '', '', '', '2.120,50']]);assert.deepEqual(footer.errors,[]);assert.equal(footer.rows.length,1);assert.equal(footer.totals.total_cents,212050);
 });
 test('RH handles Excel 1900 and 1904 civil dates and exact signed payroll adjustments',()=>{
  const source=[...row];source[2]=new Date('2020-10-10T00:00:00.000Z');source[3]=61;source[9]='-20,00';
@@ -61,4 +61,34 @@ test('RH rejects missing source headers, empty snapshot, unsafe money and out-of
  assert(validateHrRows([header]).errors.length>0);
  for(const value of ['1,234',900719925474099.1,-100]){const source=[...row];source[4]=value;assert(validateHrRows([header,source]).errors.length>0);}
  assert(validateHrRows([header,[...row,'extra']]).errors.length>0);
+});
+
+const sheetHeader=['FILIAL','ADMISSAO','ANIVERSARIO','Salário Folha','VT TOTAL','Salário recebido','Adiantamento','Ajuda de Custo','Total','SETOR','Funcionário'];
+const cached=(formula,result)=>({formula,result});
+const sheetPeople=[
+ ['Unidade sintética',46000,35000,2500,120.25,1850.75,800,50,cached('SUM(E2:H2)',2821),'Operação','Pessoa sintética A'],
+ ['Unidade sintética','',30000,8000,'-',4000,4000,'',cached('SUM(E3:H3)',8000),'SÓCIO','Pessoa sintética B'],
+ ['Unidade sintética','',32000,500,'',480.25,'',25,cached('SUM(E4:H4)',505.25),'SOCIO','Pessoa sintética C'],
+];
+const sheetFooter=['','','',cached('SUM(D2:D4)',11000),'',cached('SUM(F2:F4)',6331),cached('SUM(G2:G4)',4800),cached('SUM(H2:H4)',75),cached('SUM(I2:I4)',11326.25),'',''];
+test('RH imports the actual eleven-column layout with cached financial formulas and a verified final footer, without counting it as a person',()=>{
+ const parsed=validateHrRows([sheetHeader,...sheetPeople,sheetFooter]);assert.deepEqual(parsed.errors,[]);assert.equal(parsed.rows.length,3);
+ assert.deepEqual(parsed.totals,{source_row:5,salary_base_cents:1100000,payroll_salary_cents:633100,transport_cents:null,advance_cents:480000,cost_allowance_cents:7500,total_cents:1132625});
+ assert.equal(parsed.rows[0].salary_base_cents,250000);assert.equal(parsed.rows[0].total_cents,282100);assert.equal(parsed.rows[1].salary_base_cents,800000);assert.equal(parsed.rows[1].payroll_salary_cents,400000);
+ assert(parsed.rows.every(row=>Object.keys(row).length===13));
+ const reordered=[...sheetHeader].reverse(), result=validateHrRows([['Posição sintética'],reordered,...sheetPeople.map(row=>[...row].reverse()),[...sheetFooter].reverse()]);assert.deepEqual(result.errors,[]);assert.equal(result.totals.source_row,6);assert.equal(result.totals.total_cents,1132625);
+});
+test('RH rejects inconsistent, repeated or misplaced footers and refuses formula cells without numeric cached results',()=>{
+ const wrong=[...sheetFooter];wrong[8]=11326.26;assert(validateHrRows([sheetHeader,...sheetPeople,wrong]).errors.some(error=>error.problem.includes('difere da soma')));
+ assert(validateHrRows([sheetHeader,...sheetPeople,sheetFooter,sheetFooter]).errors.some(error=>error.problem.includes('última linha')));
+ assert(validateHrRows([sheetHeader,sheetFooter]).errors.some(error=>error.problem.includes('depois das pessoas')));
+ for(const result of [undefined,NaN,Infinity,'2821',{error:'#VALUE!'},1.001]){
+  const changed=[...sheetPeople[0]];changed[8]=cached('SUM(E2:H2)',result);assert(validateHrRows([sheetHeader,changed]).errors.length>0);
+ }
+ const invalid=[...sheetPeople[0]];invalid[10]=cached('SOME_TEXT()',10);assert(validateHrRows([sheetHeader,invalid]).errors.length>0);
+ const unnamed=[...sheetPeople[0]];unnamed[10]='';assert(validateHrRows([sheetHeader,unnamed]).errors.some(error=>error.column==='Funcionário'));
+});
+test('RH uses saved numeric results only, handles negligible binary noise and never evaluates formulas',()=>{
+ const source=[...sheetPeople[0]];source[8]={sharedFormula:'I1',result:0.1+0.2};const parsed=validateHrRows([sheetHeader,source]);assert.deepEqual(parsed.errors,[]);assert.equal(parsed.rows[0].total_cents,30);
+ source[8]={formula:'EXTERNAL_FUNCTION_THAT_IS_NOT_EXECUTED()',result:42};assert.equal(validateHrRows([sheetHeader,source]).rows[0].total_cents,4200);
 });

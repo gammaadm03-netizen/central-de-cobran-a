@@ -6,6 +6,7 @@ const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const FAILURE='Não foi possível confirmar a operação. Atualize o histórico antes de tentar novamente.';
 const INVALID='Solicitação inválida. Selecione novamente o relatório completo.';
 const CORRECTION='Confira os cabeçalhos e salve uma cópia somente com valores.';
+const HR_CORRECTION='Confira os cabeçalhos e os totais. Se houver fórmulas financeiras, recalcule e salve o arquivo no Excel antes de importar.';
 function origins(raw){const values=String(raw||'').split(',').map(value=>value.trim()).filter(Boolean);if(!values.length)throw Error('origins');return new Set(values.map(value=>{const url=new URL(value);if(url.origin!==value||!['https:','http:'].includes(url.protocol)||(url.protocol==='http:'&&!['localhost','127.0.0.1'].includes(url.hostname)))throw Error('origin');return value;}));}
 async function bodyOf(request){
  if(!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type')||''))throw Error('body');
@@ -17,7 +18,7 @@ async function bodyOf(request){
 }
 function decode(encoded){if(typeof encoded!=='string'||!encoded.length||encoded.length>4*Math.ceil(MAX_FILE_BYTES/3)||encoded.length%4||/[^A-Za-z0-9+/=]/.test(encoded))throw Error('base64');const binary=atob(encoded);if(!binary.length||binary.length>MAX_FILE_BYTES||btoa(binary)!==encoded)throw Error('file');return Uint8Array.from(binary,c=>c.charCodeAt(0));}
 function sessionId(token,id){const part=token.split('.')[1];if(!part)throw Error('claims');const claims=JSON.parse(atob(part.replace(/-/g,'+').replace(/_/g,'/')));if(claims.sub!==id||!UUID.test(claims.session_id??''))throw Error('claims');return claims.session_id;}
-const problems=errors=>errors.slice(0,100).map(row=>({line:Number.isSafeInteger(row.line)&&row.line>=0&&row.line<=5020?row.line:0,column:String(row.column||'Arquivo').slice(0,100),problem:String(row.problem||'Linha inválida.').slice(0,400),correction:String(row.correction||CORRECTION).slice(0,400)}));
+const problems=(errors,correction=CORRECTION)=>errors.slice(0,100).map(row=>({line:Number.isSafeInteger(row.line)&&row.line>=0&&row.line<=5021?row.line:0,column:String(row.column||'Arquivo').slice(0,100),problem:String(row.problem||'Linha inválida.').slice(0,400),correction:String(row.correction||correction).slice(0,400)}));
 
 /** Original bytes are authenticated, bounded and parsed again on every preview/commit. */
 export function createBusinessGateway({env,fetch:fetcher=globalThis.fetch,loadWorkbook,log=()=>{}}){return async request=>{
@@ -46,22 +47,22 @@ export function createBusinessGateway({env,fetch:fetcher=globalThis.fetch,loadWo
   if(!/\.(xlsx|xlsm|csv)$/i.test(body.file_name))return respond(400,{error:'Selecione .xlsx, .xlsm ou .csv. Para .xls, salve uma cópia como .xlsx.'});
   let bytes;try{bytes=decode(body.file_base64);}catch{return respond(400,{error:'Selecione um arquivo não vazio de até 2 MiB.'});}
   let parsed;try{
-   let matrix,excel1904=false;if(/\.csv$/i.test(body.file_name))matrix=parseCsv(new TextDecoder('utf-8',{fatal:true}).decode(bytes));else{await validateWorkbookExpandedSize(bytes.buffer);const workbook=await loadWorkbook(bytes.buffer);matrix=workbook.matrix;excel1904=workbook.excel1904===true;}
-   if(!Array.isArray(matrix)||matrix.length>MAX_ROWS+(commercial?1:20)||matrix.some(row=>!Array.isArray(row)||row.length>100))throw Error('size');
+   let matrix,excel1904=false;if(/\.csv$/i.test(body.file_name))matrix=parseCsv(new TextDecoder('utf-8',{fatal:true}).decode(bytes),commercial?undefined:{maxRows:MAX_ROWS+21});else{await validateWorkbookExpandedSize(bytes.buffer);const workbook=await loadWorkbook(bytes.buffer);matrix=workbook.matrix;excel1904=workbook.excel1904===true;}
+   if(!Array.isArray(matrix)||matrix.length>MAX_ROWS+(commercial?1:21)||matrix.some(row=>!Array.isArray(row)||row.length>100))throw Error('size');
    parsed=(commercial?validateCommercialRows:validateHrRows)(matrix,{excel1904});
-  }catch{return respond(422,{error:'Importação bloqueada. Nenhum dado foi alterado.',errors:[{line:0,column:'Arquivo',problem:'Não foi possível analisar o arquivo. Use uma única aba com até 5.000 linhas e 100 colunas, somente com valores.',correction:CORRECTION}]});}
-  if(parsed.errors.length)return respond(422,{error:'Importação bloqueada. Nenhum dado foi alterado.',errors:problems(parsed.errors)});
+  }catch{return respond(422,{error:'Importação bloqueada. Nenhum dado foi alterado.',errors:[{line:0,column:'Arquivo',problem:commercial?'Não foi possível analisar o arquivo. Use uma única aba com até 5.000 linhas e 100 colunas, somente com valores.':'Não foi possível analisar o arquivo. Use uma única aba com até 5.000 pessoas, uma linha final de totais e 100 colunas.',correction:commercial?CORRECTION:HR_CORRECTION}]});}
+  if(parsed.errors.length)return respond(422,{error:'Importação bloqueada. Nenhum dado foi alterado.',errors:problems(parsed.errors,commercial?CORRECTION:HR_CORRECTION)});
   const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(b=>b.toString(16).padStart(2,'0')).join('');
-  const referenceArgument=commercial?{p_month:reference}:{p_reference_date:reference};
+  const referenceArgument=commercial?{p_month:reference}:{p_reference_date:reference,p_report_totals:parsed.totals??null};
   if(body.action==='preview'){
-   const preview=await call(`/rest/v1/rpc/${commercial?'preview_commercial_import':'preview_hr_total_import'}`,{data:{p_rows:parsed.rows,...referenceArgument}});if(!preview.ok)return fail(preview);
+   const preview=await call(`/rest/v1/rpc/${commercial?'preview_commercial_import':'preview_hr_sheet_import'}`,{data:{p_rows:parsed.rows,...referenceArgument}});if(!preview.ok)return fail(preview);
    if(preview.payload?.row_count!==parsed.rows.length||!(preview.payload.previous_import_id===null||UUID.test(preview.payload.previous_import_id??'')))throw Error('preview');
    const rows=commercial?parsed.rows:preview.payload.rows;
-   if(!Array.isArray(rows)||rows.length!==parsed.rows.length||!commercial&&preview.payload.summary?.total_formula_version!=='rh-five-fields-v1')throw Error('preview');
+   if(!Array.isArray(rows)||rows.length!==parsed.rows.length||!commercial&&preview.payload.summary?.total_formula_version!=='rh-reported-total-v1')throw Error('preview');
    const {rows:projectedRows,...details}=preview.payload;
-   return respond(200,{rows,preview:commercial?preview.payload:details,file_sha256:hash,...commercial?{}:{format_version:3}});
+   return respond(200,{rows,preview:commercial?preview.payload:details,file_sha256:hash,...commercial?{}:{format_version:4}});
   }
-  const committed=await call(`/rest/v1/rpc/${commercial?'commit_commercial_import_from_gateway':'commit_hr_total_import_from_gateway'}`,{service:true,data:{p_user_id:auth.payload.id,p_session_id:verifiedSession,p_file_name:body.file_name,p_file_sha256:hash,p_file_base64:body.file_base64,p_rows:parsed.rows,...referenceArgument,p_previous_import_id:body.previous_import_id}});
+  const committed=await call(`/rest/v1/rpc/${commercial?'commit_commercial_import_from_gateway':'commit_hr_sheet_import_from_gateway'}`,{service:true,data:{p_user_id:auth.payload.id,p_session_id:verifiedSession,p_file_name:body.file_name,p_file_sha256:hash,p_file_base64:body.file_base64,p_rows:parsed.rows,...referenceArgument,p_previous_import_id:body.previous_import_id}});
   if(!committed.ok)return fail(committed);if(!UUID.test(committed.payload?.import_id??'')||committed.payload.row_count!==parsed.rows.length)throw Error('commit');return respond(200,committed.payload);
  }catch{log('request_unavailable');return respond(503,{error:FAILURE});}
 };}

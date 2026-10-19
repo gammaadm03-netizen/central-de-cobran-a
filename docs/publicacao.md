@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.13.3
+# Publicação e ativação — 0.13.4
+
+A atualização **0.13.4** reconhece a coluna Salário Folha e o rodapé final do modelo de RH, aceita resultados numéricos salvos de fórmulas financeiras e usa a coluna Total como fonte do Total geral. Folha total, salários de colaboradores e pró-labores têm indicadores separados. Aplicar **031..038**, atualizar a função existente **business-import**, conferir o site **0.13.4** e reimportar a planilha com a data original. A revisão 4 preserva os originais e as posições anteriores, sem duplicar totais. [Guia de ativação](corrigir-importacao-rh.md).
 
 A atualização **0.13.3** separa a remuneração dos registros com setor SÓCIO como **Pró-labore**, retirando-os dos indicadores de salários dos colaboradores. A prévia, o Excel, os quadros por filial/setor e os subtotais seguem a mesma classificação. Aplicar o combinado atual **031..037**, conferir o site **0.13.3** e atualizar a consulta de RH. Quem já ativou a 0.13.2 não precisa reimportar a planilha nem republicar business-import para essa separação. As bases e os valores originais permanecem preservados. [Guia](corrigir-importacao-rh.md).
 

@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.13.3",
+  "version": "0.13.4",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -59,7 +59,8 @@
     "test:remaining-modules-sql": "node scripts/test-remaining-modules-sql.mjs",
     "test:hr-report-model-sql": "node scripts/test-hr-report-model-sql.mjs",
     "test:hr-total-sql": "node scripts/test-hr-total-sql.mjs",
-    "test:hr-prolabore-sql": "node scripts/test-hr-prolabore-sql.mjs"
+    "test:hr-prolabore-sql": "node scripts/test-hr-prolabore-sql.mjs",
+    "test:hr-sheet-totals-sql": "node scripts/test-hr-sheet-totals-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

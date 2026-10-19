@@ -4,7 +4,7 @@ export const MAX_ROWS: number;
 export const COLUMN_LABELS: Record<string, string>;
 export function parseCivilDate(value: unknown, excel1904?: boolean): string;
 export function parseMoneyCents(value: unknown): number;
-export function parseCsv(text: string): unknown[][];
+export function parseCsv(text: string, options?: { maxRows?: number }): unknown[][];
 export function isChequeNumberHeader(value: unknown): boolean;
 export function readPayableChequeCell(value: unknown, numFmt?: string): string;
 export function inspectWorkbookZip(buffer: ArrayBuffer): { start: number; compressed: number; uncompressed: number; method: number }[];
