@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.14.2**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.14.3**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Destaque dos cards ao passar o mouse — 0.14.3
+
+Os indicadores do painel e os cards de resumo das demais abas ganham elevação discreta, sombra e destaque na borda ao passar o mouse. Botões dentro dos cards também recebem o destaque ao navegar pelo teclado. Valores e ações são preservados; em telas de toque não há efeito persistente, e a preferência por movimento reduzido elimina o deslocamento. Depende somente do site.
 
 ## Revalidar escolhas de parcelas — 0.14.2
 

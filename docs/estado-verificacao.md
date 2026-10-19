@@ -494,3 +494,14 @@ Verificação local em 19/10/2026:
 - Revisão independente conferiu snapshot, geração, cancelamento, bloqueios, preservação das escolhas e tratamento de conflitos. git diff --check aprovado.
 
 A melhoria depende somente do site. Não foram alterados gateway, migrations ou dados persistidos. O [guia de revalidação](revalidar-parcelas-recebiveis.md) inclui a atualização da função existente com o código completo já publicado caso o serviço remoto esteja divergente. O agente não publicou funções, executou SQL ou importou arquivos no Supabase remoto e não comprovou o término do deploy Cloudflare. A causa remota exata continua pendente; a versão não deve ser descrita como confirmação de importação de produção corrigida.
+
+
+## Cards de indicadores com resposta ao cursor — 0.14.3
+
+O usuário pediu que os boxes, exemplificados pelos quatro indicadores principais do Painel, respondam à passagem do mouse. Um CSS compartilhado aplica elevação de 4 px, sombra e borda verde suave aos indicadores financeiros e cards de resumo equivalentes de Contas a Pagar, Cobrança, RH/DP, Comercial, Comissões e tempo de atendimento. O efeito também acompanha o foco de um controle já existente dentro do card. Não transforma artigos em botões, não acrescenta paradas de tabulação e conserva as cores dos valores e os comportamentos existentes.
+
+O efeito se restringe a telas com ponteiro preciso e suporte real a hover. A preferência por movimento reduzido conserva somente o destaque, sem transformação ou transição. As regras não se aplicam à impressão. Painéis inteiros de formulários e tabelas ficam fora do escopo. O comportamento já existente dos agrupamentos bancários não foi alterado.
+
+Verificação local em 19/10/2026: build TypeScript/Vite da 0.14.3 aprovado, com o aviso existente de tamanho dos chunks. Conferência direta no Chromium com CSS compilado e marcação sintética verificou os quatro cards financeiros e as seis outras famílias: elevação e retorno, altura e posição dos vizinhos estáveis, cores dos valores preservadas, foco de botão interno, ausência de deslocamento/transição sob movimento reduzido, impressão sem movimento/sombra e toque em 390 px sem hover persistente ou transbordamento horizontal. A imagem local dos quatro cards foi inspecionada. git diff --check aprovado. Não foram criados testes permanentes para esta alteração visual reversível.
+
+A atualização depende somente do site e não altera dados, cálculos, banco ou funções. O agente não confirmou o término do deploy Cloudflare. A investigação da importação de recebíveis permanece com os limites descritos na 0.14.2; este ajuste visual não a substitui nem comprova a importação remota.

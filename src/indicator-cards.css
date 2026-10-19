@@ -1,0 +1,55 @@
+/* Shared response for summary cards, without moving forms or table panels. */
+@media screen and (hover: hover) and (pointer: fine) {
+  :is(
+    .financial-kpi,
+    .payables-overview-card,
+    .collections-management-card,
+    .hr-card,
+    .commercial-cards > article,
+    .commission-base-cards > article,
+    .collection-work-cards > article
+  ) {
+    transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+  }
+
+  :is(
+    .financial-kpi,
+    .payables-overview-card,
+    .collections-management-card,
+    .hr-card,
+    .commercial-cards > article,
+    .commission-base-cards > article,
+    .collection-work-cards > article
+  ):is(:hover, :focus-within) {
+    transform: translateY(-4px);
+    border-color: #a3c9b3;
+    box-shadow: 0 12px 28px rgb(20 68 46 / 12%);
+  }
+}
+
+@media screen and (prefers-reduced-motion: reduce) {
+  :is(
+    .financial-kpi,
+    .payables-overview-card,
+    .collections-management-card,
+    .hr-card,
+    .commercial-cards > article,
+    .commission-base-cards > article,
+    .collection-work-cards > article
+  ) {
+    transition: none;
+    transform: none;
+  }
+
+  :is(
+    .financial-kpi,
+    .payables-overview-card,
+    .collections-management-card,
+    .hr-card,
+    .commercial-cards > article,
+    .commission-base-cards > article,
+    .collection-work-cards > article
+  ):is(:hover, :focus-within) {
+    transform: none;
+  }
+}
