@@ -1,0 +1,26 @@
+.collection-email-draft{min-width:0;border-color:#cee1d5;background:linear-gradient(135deg,#fff,#fbfdfb);margin:0 0 20px}
+.collection-email-draft .panel-header{gap:16px;margin-bottom:18px}
+.collection-email-draft .panel-header>.button{flex-shrink:0}
+.collection-email-draft>.notice,.collection-email-draft>.help-text{margin-top:15px}
+.collection-email-preview{display:flex;flex-direction:column;gap:18px;min-width:0;margin-top:24px;scroll-margin-top:20px}
+.collection-email-preview:focus{outline:2px solid #94bb9c;outline-offset:7px;border-radius:5px}
+.collection-email-client h3{font-size:16px;overflow-wrap:anywhere}
+.collection-email-client p{font-size:11px;color:#758b7c;line-height:1.7;margin-top:6px}
+.collection-email-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:0;margin:0}
+.collection-email-totals>div{padding:16px;border:1px solid #dce8df;background:#f4f8f4;border-radius:9px;min-width:0}
+.collection-email-totals dt{font-size:10px;color:#6d8374;text-transform:uppercase;font-weight:650;letter-spacing:.3px}
+.collection-email-totals dd{font-size:22px;color:#17553b;font-weight:750;margin:8px 0 3px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.collection-email-totals small{font-size:10px;color:#7d9082}
+.collection-email-recipients{padding:16px;border:1px solid #dce7df;border-radius:9px;background:#fff;min-width:0}
+.collection-email-recipients legend{font-size:12px;font-weight:650;color:#3a624a;padding:0 5px}
+.collection-email-recipients .checkbox-field{display:flex;align-items:flex-start;gap:9px;font-size:12px;line-height:1.7;padding:7px 0;overflow-wrap:anywhere}
+.collection-email-recipients input[type=checkbox]{flex-shrink:0;width:16px;min-height:16px;height:16px;margin:3px 0 0}
+.collection-email-recipients .help-text{margin-top:10px}
+.collection-email-preview .field{min-width:0}
+.collection-email-preview input[readonly],.collection-email-preview textarea[readonly]{background:#fcfdfb;color:#334d3d;font-size:12px;line-height:1.7}
+.collection-email-preview textarea{min-height:300px;resize:vertical;white-space:pre-wrap}
+.collection-email-actions{display:flex;flex-wrap:wrap;gap:10px}
+.collection-email-actions a.button{text-decoration:none}
+.collection-email-actions .button{max-width:100%}
+@media(max-width:760px){.collection-email-draft .panel-header{flex-direction:column}.collection-email-draft .panel-header>.button{align-self:flex-end}.collection-email-totals{grid-template-columns:1fr}.collection-email-actions>.button{width:100%}.collection-email-draft{padding:18px}.collection-email-recipients{padding:12px}.collection-email-totals dd{font-size:21px}}
+@media print{.collection-email-draft{display:none!important}}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
-import { analyzeReceivableFile, analyzeReceivableReceivedFile, dateLabel, formatCents, RECEIVABLE_SCOPE, receivableError, receivableImportRequest, type ImportProblem, type ReceivableImportRow } from '../lib/receivables';
+import { analyzeReceivableFile, analyzeReceivableReceivedFile, dateLabel, formatCents, RECEIVABLE_SCOPE, receivableError, receivableImportRequest, makeReceivableFailure, receivableFailureReference, receivableImportFailureMessage, type ImportProblem, type ReceivableImportRow } from '../lib/receivables';
 
 type Mode = 'open' | 'received';
 interface Batch { id: string; file_name: string; created_at: string; row_count: number; new_count: number; open_count: number; pending_count: number; validated_in_source_count: number; import_mode?: string }
@@ -66,6 +66,13 @@ function validatePreview(value: ServerPreview, mode: Mode, hash: string) {
   }
   return { nominalTotal, receivedTotal };
 }
+function officialPreview(value: ServerPreview, mode: Mode, hash: string) {
+  try { return validatePreview(value, mode, hash); }
+  catch (failure) {
+    if (failure && typeof failure === 'object' && 'code' in failure) throw failure;
+    throw makeReceivableFailure({ phase: 'preview', status: 200, code: 'CR_INVALID_PREVIEW' });
+  }
+}
 
 export default function ReceivablesImport({ canImport }: { canImport: boolean }) {
   const [mode, setMode] = useState<Mode>('open'), [file, setFile] = useState<File | null>(null), [complete, setComplete] = useState(false);
@@ -76,10 +83,12 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
   const [collectorsLoading, setCollectorsLoading] = useState(false), [collectorsError, setCollectorsError] = useState('');
   const [bulkCollector, setBulkCollector] = useState(''), [customerSearch, setCustomerSearch] = useState(''), [customerPage, setCustomerPage] = useState(1);
   const [problems, setProblems] = useState<ImportProblem[]>([]), [history, setHistory] = useState<Batch[]>([]);
+  const [previousProblems, setPreviousProblems] = useState(false), [errorReference, setErrorReference] = useState('');
   const [historyLoading, setHistoryLoading] = useState(true), [historyError, setHistoryError] = useState('');
   const [error, setError] = useState(''), [success, setSuccess] = useState(''), [refresh, setRefresh] = useState(0);
   const controller = useRef<AbortController | null>(null), generation = useRef(0), inputRef = useRef<HTMLInputElement | null>(null);
   const problemsRef = useRef<HTMLDivElement | null>(null), focusProblems = useRef(false);
+  const errorRef = useRef<HTMLDivElement | null>(null), focusError = useRef(false);
   useEffect(() => () => { generation.current++; controller.current?.abort(); }, []);
   useEffect(() => {
     if (busy !== null || !problems.length || !focusProblems.current || !problemsRef.current) return;
@@ -87,6 +96,10 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
     problemsRef.current.focus({ preventScroll: true });
     problemsRef.current.scrollIntoView({ block: 'start' });
   }, [busy, problems]);
+  useEffect(() => {
+    if (busy !== null || !error || !focusError.current || !errorRef.current) return;
+    focusError.current = false; errorRef.current.focus({ preventScroll: true }); errorRef.current.scrollIntoView({ block: 'start' });
+  }, [busy, error]);
   useEffect(() => {
     if (!supabase || !canImport || mode !== 'open') return;
     const abort = new AbortController(); let active = true;
@@ -115,7 +128,7 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
     }).catch(() => { if (active) setHistoryError('Não foi possível carregar o histórico de importações. Tente atualizar novamente.'); }).finally(() => { if (active) setHistoryLoading(false); });
     return () => { active = false; abort.abort(); };
   }, [canImport, refresh]);
-  function resetAnalysis() { generation.current++; controller.current?.abort(); focusProblems.current = false; setAnalysis(null); setProblems([]); setError(''); setSuccess(''); setBusy(null); }
+  function resetAnalysis() { generation.current++; controller.current?.abort(); focusProblems.current = false; focusError.current = false; setAnalysis(null); setProblems([]); setPreviousProblems(false); setError(''); setErrorReference(''); setSuccess(''); setBusy(null); }
   function changeMode(next: Mode) {
     if (busy || uncertain || next === mode) return;
     resetAnalysis(); setMode(next); setFile(null); setComplete(false); setMappings({}); setCollectorMappings({}); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); if (inputRef.current) inputRef.current.value = '';
@@ -123,13 +136,15 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
   async function analyze(event?: FormEvent) {
     event?.preventDefault();
     if (!supabase || !file || !complete || !canImport || busy) return;
+    const previousAnalysis = analysis?.file === file && analysis.mode === mode ? analysis : null;
+    function preserveChoices() { setAnalysis(previousAnalysis); if (previousAnalysis) setMappingsDirty(true); }
     const current = ++generation.current;
     controller.current?.abort(); const abort = new AbortController(); controller.current = abort;
-    focusProblems.current = false; setBusy('analyzing'); setProblems([]); setError(''); setSuccess('');
+    focusProblems.current = false; focusError.current = false; setBusy('analyzing'); setProblems([]); setPreviousProblems(false); setError(''); setErrorReference(''); setSuccess('');
     try {
       const parsed = mode === 'received' ? await analyzeReceivableReceivedFile(file, abort.signal) : await analyzeReceivableFile(file, abort.signal);
       if (current !== generation.current) return;
-      if (parsed.errors.length) { setAnalysis(null); focusProblems.current = true; setProblems(parsed.errors); return; }
+      if (parsed.errors.length) { preserveChoices(); focusProblems.current = true; setProblems(parsed.errors); return; }
       let canonical: ServerPreview, recoveredCollectors = false;
       try {
         canonical = await receivableImportRequest<ServerPreview>({ action: 'preview', mode, file_name: file.name, file_base64: parsed.base64, title_mappings: mappings, ...(mode === 'open' ? { collector_mappings: collectorMappings } : {}) }, abort.signal);
@@ -140,13 +155,13 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
         // commit response. Re-read the same original without choices; this call
         // cannot change finance. File/mode/parcel mappings remain frozen.
         canonical = await receivableImportRequest<ServerPreview>({ action: 'preview', mode, file_name: file.name, file_base64: parsed.base64, title_mappings: mappings, collector_mappings: {} }, abort.signal);
-        validatePreview(canonical, mode, parsed.hash);
+        officialPreview(canonical, mode, parsed.hash);
         if (current !== generation.current) return;
         setCollectorMappings({}); setBulkCollector(''); setReviewCollectors(true); recoveredCollectors = true; setRefresh(value => value + 1);
         setError('A carteira mudou durante a confirmação pendente. Consulte os vínculos atuais abaixo e, se necessário, escolha as responsáveis ausentes. O mesmo arquivo foi preservado; nenhum recebimento foi alterado por esta consulta.');
       }
       if (current !== generation.current) return;
-      const totals = validatePreview(canonical, mode, parsed.hash);
+      const totals = officialPreview(canonical, mode, parsed.hash);
       const nextAnalysis: Analysis = { file, mode, base64: parsed.base64, rows: canonical.rows, preview: canonical.preview, titleMappings: { ...mappings }, ...totals };
       setAnalysis(nextAnalysis);
       // SQL preview identifies each financial item from 1; the header occupies
@@ -154,9 +169,9 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
       const nextProblems = safeProblems(canonical.preview.errors).map(problem => ({ ...problem, line: problem.line > 0 ? problem.line + 1 : problem.line }));
       focusProblems.current = nextProblems.length > 0; setProblems(nextProblems); setMappingsDirty(recoveredCollectors);
     } catch (failure) { if (current === generation.current && !abort.signal.aborted) {
-      setAnalysis(null);
+      preserveChoices(); setErrorReference(receivableFailureReference(failure, 'preview'));
       const details = safeProblems(failure && typeof failure === 'object' && 'errors' in failure ? failure.errors : null);
-      if (details.length) { focusProblems.current = true; setProblems(details); } else setError(receivableError(failure, 'Não foi possível concluir a análise. Nenhum dado foi alterado.'));
+      if (details.length) { focusProblems.current = true; setProblems(details); } else { focusError.current = true; setError(receivableError(failure, receivableImportFailureMessage(failure, 'preview'))); }
     } } finally { if (current === generation.current) setBusy(null); }
   }
   async function commit() {
@@ -166,34 +181,34 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
       ? `Confirmar o relatório de TÍTULOS QUITADOS?\n\n${p.row_count} títulos; recebido efetivo ${formatCents(analysis.receivedTotal)}.\n${p.new_count} novos títulos; ${p.matched_count ?? 0} recebimentos já registrados; ${corrections} correções de recebimentos importados; ${p.historical_count ?? 0} quitados do histórico.\n\nOs recebimentos conferidos pelo arquivo sairão da carteira ativa e alimentarão a base de apuração de comissões. Correções preservam os registros anteriores. Esta importação não paga comissões.`
       : `Confirmar o relatório de ABERTOS E VENCIDOS?\n\n${p.row_count} títulos; ${p.new_count} novas parcelas; ${p.changed_count ?? 0} alterações em títulos existentes.\n\nAs carteiras e o histórico serão preservados. Títulos ausentes neste arquivo continuarão como estão. Nenhum recebimento será confirmado por esta importação.`;
     if (!window.confirm(message)) return;
-    setBusy('saving'); setError(''); setSuccess(''); const current = generation.current;
+    setBusy('saving'); setError(''); setErrorReference(''); setSuccess(''); const current = generation.current;
     try {
       const summary = await receivableImportRequest<{ import_id: string; row_count: number }>({ action: 'commit', mode: analysis.mode, file_name: analysis.file.name, file_base64: analysis.base64, complete: true, title_mappings: mappings, previous_import_id: p.previous_import_id, previous_financial_revision: p.financial_revision, ...(analysis.mode === 'received' ? { confirm_corrections: corrections > 0 } : { collector_mappings: collectorMappings }) });
       if (current !== generation.current) return;
-      if (!summary || typeof summary.import_id !== 'string' || !uuid.test(summary.import_id) || summary.row_count !== p.row_count) throw new Error('Resposta de importação não confirmada.');
+      if (!summary || typeof summary.import_id !== 'string' || !uuid.test(summary.import_id) || summary.row_count !== p.row_count) throw makeReceivableFailure({ phase: 'commit', status: 200, code: 'CR_INVALID_RESPONSE' });
       setSuccess(analysis.mode === 'received' ? `Importação concluída: ${summary.row_count} títulos quitados conferidos. Recebimentos disponíveis no resumo e na base de apuração de comissões; títulos validados fora da carteira ativa.` : `Importação concluída: ${summary.row_count} títulos conferidos. Ausências preservadas. Nenhum recebimento foi confirmado por esta importação.`);
       setUncertain(false); setReviewCollectors(false); setAnalysis(null); setComplete(false); setFile(null); setMappings({}); setCollectorMappings({}); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); setProblems([]); setRefresh(value => value + 1); if (inputRef.current) inputRef.current.value = '';
     } catch (failure) { if (current === generation.current) {
       const code = failure && typeof failure === 'object' && 'code' in failure ? String(failure.code) : '';
       const known = ['40001', '23505', '23514', '22023', '42501', 'P0023', 'P0024', 'P0030', 'PGRST301', 'PGRST303'].includes(code);
       setUncertain(!known); setReviewCollectors(false);
-      setError(receivableError(failure, 'A confirmação do envio não chegou. Mantenha este arquivo e confira novamente antes de repetir a importação.'));
+      focusError.current = true; setErrorReference(receivableFailureReference(failure, 'commit'));
+      setError(receivableError(failure, receivableImportFailureMessage(failure, 'commit')));
       if (known) setAnalysis(null); else setMappingsDirty(true);
       setRefresh(value => value + 1);
     } } finally { if (current === generation.current) setBusy(null); }
   }
   function mapTitle(line: number, title: string) {
     if (busy || uncertain) return;
-    setMappings(previous => { const next = { ...previous }; if (title) next[String(line)] = title; else delete next[String(line)]; return next; }); setMappingsDirty(true); setError('');
+    setMappings(previous => { const next = { ...previous }; if (title) next[String(line)] = title; else delete next[String(line)]; return next; }); setMappingsDirty(true); setPreviousProblems(true); setError(''); setErrorReference('');
   }
   function mapCollector(key: string, id: string) {
     if (busy || uncertain && !reviewCollectors || !analysis?.preview.customer_collector_assignments?.some(item => item.customer_key === key && item.requires_selection && !item.locked) || id && !collectors.some(item => item.id === id)) return;
-    setCollectorMappings(previous => { const next = { ...previous }; if (id) next[key] = id; else delete next[key]; return next; }); setMappingsDirty(true); setError('');
+    setCollectorMappings(previous => { const next = { ...previous }; if (id) next[key] = id; else delete next[key]; return next; }); setMappingsDirty(true); setPreviousProblems(true); setError(''); setErrorReference('');
   }
   if (!canImport) return <p className="notice">Seu perfil não permite importar bases de Contas a Receber.</p>;
   const mappingRows = analysis?.rows.filter(row => ambiguous(row) || Object.hasOwn(mappings, String(row.line))) ?? [];
   const unresolved = mappingRows.filter(row => ambiguous(row) && !mappings[String(row.line)]);
-  const previousProblems = mappingsDirty && analysis !== null;
   const mappingsNotApplied = !!analysis && !mappingsDirty && unappliedTitleMappings(analysis);
   const assignments = analysis?.preview.customer_collector_assignments ?? [];
   const filteredCustomers = assignments.filter(item => `${item.client_name} ${item.client_document ?? ''}`.toLocaleLowerCase('pt-BR').includes(customerSearch.toLocaleLowerCase('pt-BR')));
@@ -205,7 +220,7 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
       <p className="notice">{mode === 'open' ? 'Abertos e vencidos atualizam a previsão e os dados dos títulos. Uma ausência nunca confirma recebimento nem retira um título da carteira.' : 'Títulos quitados confirmam o recebimento pela data e pelo valor efetivos do relatório, retiram os títulos validados da carteira ativa e alimentam a base de apuração de comissões.'}</p>
       <p className="help-text">{mode === 'open' ? 'Inclua títulos a vencer e vencidos. Na Cobrança aparecem somente os vencidos. Escolha a cobradora dos clientes sem responsável durante esta importação. Carteiras existentes são preservadas nas atualizações diárias. Alterações de parcelas que gerem dúvida exigem conferir o vínculo antes de concluir.' : 'Este modo exige as colunas Quitação: data do recebimento e Quitação: valor recebido. O vencimento e o valor original continuam separados do recebimento; não substitua essas informações.'}</p>
       <p className="help-text">Campos do título: Documento / NF, Cliente / Órgão, Filial, Vencimento e Valor original. Emissão e CNPJ são opcionais; não complete CNPJ ausente automaticamente.</p>
-      {error && <p className="notice error" role="alert">{error}</p>}{success && <p className="notice success" role="status">{success}</p>}
+      {error && <div ref={errorRef} tabIndex={-1} className="notice error" role="alert"><p>{error}</p>{errorReference && <p className="help-text">Código para suporte: <code style={{ overflowWrap: 'anywhere' }}>{errorReference}</code></p>}</div>}{success && <p className="notice success" role="status">{success}</p>}
       {uncertain && <p className="notice" role="status">A confirmação está pendente. O arquivo e o tipo de relatório ficam preservados. Clique em Analisar arquivo para conferir o mesmo envio e concluir sem duplicar recebimentos.</p>}
       <form className="stack" onSubmit={event => void analyze(event)}>
         <label className="field" htmlFor="receivable-file">{mode === 'open' ? 'Relatório de abertos e vencidos de Contas a Receber' : 'Relatório de títulos quitados de Contas a Receber'}<input ref={inputRef} id="receivable-file" type="file" accept=".xlsx,.xlsm,.csv,.xls" disabled={busy !== null || uncertain} onChange={event => { resetAnalysis(); setComplete(false); setMappings({}); setCollectorMappings({}); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); setFile(event.target.files?.[0] ?? null); }} /></label>
@@ -215,14 +230,15 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
       </form>
       {problems.length > 0 && <div ref={problemsRef} tabIndex={-1} role="region" aria-label="Problemas encontrados na importação">
         <div className={`notice${previousProblems ? '' : ' error'}`} role={previousProblems ? 'status' : 'alert'}>
-          {previousProblems ? <><p><strong>Escolhas alteradas.</strong> Valide as escolhas abaixo para atualizar a análise.</p><p>A tabela mostra os problemas da análise anterior. Nenhum dado foi alterado.</p></> : <>
-            <p><strong>Importação bloqueada.</strong> Nenhum dado foi alterado. {problems.length} problema(s) encontrado(s) nesta análise.</p>
+          {previousProblems ? <><p><strong>Escolhas alteradas.</strong> Valide as escolhas abaixo para atualizar a análise.</p><p>A tabela mostra os problemas da análise anterior. Nenhum dado foi alterado por esta análise.</p></> : <>
+            <p><strong>Importação bloqueada.</strong> Nenhum dado foi alterado por esta análise. {problems.length} problema(s) encontrado(s) nesta análise.</p>
             {mappingsNotApplied && <p><strong>{unappliedMappingsMessage}</strong></p>}
             <p><strong>{problems[0].line > 0 ? `Linha ${problems[0].line} · ` : ''}{problems[0].column}:</strong> {problems[0].problem}</p>
             <p><strong>Como corrigir:</strong> {problems[0].correction}</p>
             <p>Confira os detalhes abaixo e analise o arquivo novamente.</p>
           </>}
         </div>
+        {errorReference && !error && <p className="help-text">Código para suporte: <code style={{ overflowWrap: 'anywhere' }}>{errorReference}</code></p>}
         <div className="table-wrap"><table><caption>{previousProblems ? 'Análise anterior · problemas encontrados · até 100 erros por análise' : 'Problemas encontrados · até 100 erros por análise'}</caption><thead><tr><th>Linha</th><th>Coluna</th><th>Problema</th><th>Como corrigir</th></tr></thead><tbody>{problems.map((problem, index) => <tr key={index}><td>{problem.line || '—'}</td><td>{problem.column}</td><td>{problem.problem}</td><td>{problem.correction}</td></tr>)}</tbody></table></div>
       </div>}
       {mode === 'open' && analysis && <section className="stack" aria-labelledby="import-collectors-title"><h3 id="import-collectors-title">Cobradoras responsáveis pela carteira</h3>
@@ -231,7 +247,7 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
         {collectorsError && <p className="notice error" role="alert">{collectorsError}</p>}
         {!collectorsLoading && !collectorsError && collectors.length === 0 && assignments.some(item => item.requires_selection) && <p className="notice" role="status">Nenhuma cobradora ativa está disponível. Peça à Gerência Geral que cadastre ou ative as cobradoras na Administração e atualize o histórico para consultar novamente.</p>}
         {assignments.some(item => item.requires_selection && !item.locked) && <div className="inline-actions"><label className="field">Cobradora para clientes sem responsável<select value={bulkCollector} disabled={busy !== null || uncertain && !reviewCollectors || collectorsLoading || !!collectorsError} onChange={event => setBulkCollector(event.target.value)}><option value="">Selecione a cobradora</option>{collectors.map(item => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label><button type="button" className="button secondary" disabled={busy !== null || uncertain && !reviewCollectors || !bulkCollector || !collectors.some(item => item.id === bulkCollector)} onClick={() => {
-          setCollectorMappings(previous => ({ ...previous, ...Object.fromEntries(assignments.filter(item => item.requires_selection && !item.locked && !previous[item.customer_key]).map(item => [item.customer_key, bulkCollector])) })); setMappingsDirty(true); setError('');
+          setCollectorMappings(previous => ({ ...previous, ...Object.fromEntries(assignments.filter(item => item.requires_selection && !item.locked && !previous[item.customer_key]).map(item => [item.customer_key, bulkCollector])) })); setMappingsDirty(true); setPreviousProblems(true); setError(''); setErrorReference('');
         }}>Aplicar às carteiras sem responsável</button></div>}
         <label className="field">Buscar cliente na atribuição de cobradoras<input value={customerSearch} onChange={event => { setCustomerSearch(event.target.value); setCustomerPage(1); }} /></label>
         <div className="table-wrap"><table><caption>{assignments.length} cliente(s) na conferência de carteiras</caption><thead><tr><th>Cliente</th><th>Títulos</th><th>Cobradora responsável</th></tr></thead><tbody>{filteredCustomers.slice((currentPage - 1) * 20, currentPage * 20).map(item => <tr key={item.customer_key}><td>{item.client_name}{item.client_document && <small className="muted"> · {item.client_document}</small>}</td><td>{item.row_count}</td><td>{item.requires_selection && !item.locked ? <label className="field">Cobradora de {item.client_name}<select value={collectorMappings[item.customer_key] ?? ''} disabled={busy !== null || uncertain && !reviewCollectors || collectorsLoading || !!collectorsError} onChange={event => mapCollector(item.customer_key, event.target.value)}><option value="">Selecione a cobradora</option>{collectors.map(collector => <option key={collector.id} value={collector.id}>{collector.display_name}</option>)}</select></label> : <span>{item.collector_name ?? 'Sem atribuição necessária para títulos quitados'}{item.collector_id && <small className="muted"> · Carteira preservada</small>}</span>}</td></tr>)}</tbody></table></div>
@@ -240,13 +256,13 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
         {mappingsDirty && <p className="notice" role="status">Responsáveis ou vínculos alterados. Clique em Analisar arquivo novamente para conferir as escolhas antes de concluir.</p>}
       </section>}
       {mappingRows.length > 0 && <div className="stack"><h3>Conferir parcelas do mesmo documento</h3><p className="help-text">Escolha um título existente somente quando a linha for uma atualização daquela parcela. Se for outra parcela, escolha Nova parcela. Nenhum vínculo é presumido pelo número da NF.</p>
-        {unresolved.length > 0 && <button type="button" className="button secondary" disabled={busy !== null || uncertain} onClick={() => { setMappings(previous => ({ ...previous, ...Object.fromEntries(unresolved.map(row => [String(row.line), 'NEW'])) })); setMappingsDirty(true); }}>Marcar {unresolved.length} linha(s) como novas parcelas</button>}
+        {unresolved.length > 0 && <button type="button" className="button secondary" disabled={busy !== null || uncertain} onClick={() => { setMappings(previous => ({ ...previous, ...Object.fromEntries(unresolved.map(row => [String(row.line), 'NEW'])) })); setMappingsDirty(true); setPreviousProblems(true); setError(''); setErrorReference(''); }}>Marcar {unresolved.length} linha(s) como novas parcelas</button>}
         <div className="table-wrap"><table><caption>Vínculo das parcelas antes da importação</caption><thead><tr><th>Linha</th><th>Cliente / NF</th><th>Vencimento / Valor original</th><th>Vínculo confirmado</th></tr></thead><tbody>{mappingRows.map(row => <tr key={row.line}><td>{row.line + 1}</td><td>{row.client_name} · {row.document} · Filial {row.branch}</td><td>{dateLabel(row.due_date)} · {formatCents(row.amount_cents)}</td><td><label className="field">Vínculo da linha {row.line + 1}<select aria-label={`Vínculo da linha ${row.line + 1}`} value={mappings[String(row.line)] ?? ''} disabled={busy !== null || uncertain} onChange={event => mapTitle(row.line, event.target.value)}><option value="">Selecione a parcela</option><option value="NEW">Nova parcela</option>{row.candidates?.map(candidate => <option key={candidate.id} value={candidate.id}>{dateLabel(candidate.due_date)} · {formatCents(candidate.amount_cents)} · {candidate.status === 'VALIDATED' ? 'Quitado' : 'Em aberto'}</option>)}</select></label></td></tr>)}</tbody></table></div>
         {mappingsDirty && <p className="notice">Vínculos alterados. Valide as escolhas de parcelas para conferir o resultado antes de concluir.</p>}
         <div className="inline-actions"><button type="button" className="button secondary" disabled={!file || !complete || busy !== null || historyLoading || uncertain} onClick={() => void analyze()}>{busy === 'analyzing' ? 'Validando escolhas…' : 'Validar escolhas de parcelas'}</button></div>
         {mappingsNotApplied && !problems.length && <p className="notice error" role="alert">{unappliedMappingsMessage}</p>}
       </div>}
-      {analysis && <div className="stack"><h3>Conferência de Contas a Receber</h3><p>{analysis.preview.row_count} títulos · total original {formatCents(analysis.nominalTotal)} · {analysis.preview.new_count} novos títulos.</p>
+      {analysis && <div className="stack"><h3>Conferência de Contas a Receber</h3>{mappingsDirty && <p className="notice">Prévia anterior preservada. Valide o mesmo arquivo e as escolhas novamente antes de confirmar a importação.</p>}<p>{analysis.preview.row_count} títulos · total original {formatCents(analysis.nominalTotal)} · {analysis.preview.new_count} novos títulos.</p>
         {mode === 'received' ? <><p><strong>Total recebido efetivo: {formatCents(analysis.receivedTotal)}</strong></p><p>{analysis.preview.received_count ?? 0} recebimentos novos · {analysis.preview.matched_count ?? 0} já registrados · {analysis.preview.correction_count ?? 0} correções · {analysis.preview.historical_count ?? 0} quitados do histórico.</p><p className="notice">A confirmação deste arquivo valida os recebimentos conferidos. A apuração de comissões usa o valor efetivamente recebido; importar não significa pagar comissão.</p></> : <p className="notice">{analysis.preview.changed_count ?? 0} títulos com alterações. Ausências permanecem como estão; nenhum recebimento será confirmado.</p>}
         {(analysis.preview.validated_in_source_count ?? 0) > 0 && <p className="notice">{analysis.preview.validated_in_source_count} título(s) já quitado(s) reaparecem no relatório. A importação não reabre esses títulos.</p>}
         <div className="table-wrap"><table><caption>Conferência das primeiras {Math.min(10, analysis.rows.length)} linhas oficiais</caption><thead><tr><th>Cliente / NF</th><th>Filial</th><th>Vencimento original</th><th>Valor original</th>{mode === 'received' && <><th>Recebido em</th><th>Valor recebido</th></>}<th>Resultado</th></tr></thead><tbody>{analysis.rows.slice(0, 10).map(row => <tr key={row.line}><td>{row.client_name} · {row.document}</td><td>{row.branch}</td><td>{dateLabel(row.due_date)}</td><td>{formatCents(row.amount_cents)}</td>{mode === 'received' && <><td>{dateLabel(row.received_on ?? null)}</td><td>{formatCents(row.received_amount_cents ?? 0)}</td></>}<td>{outcomes[row.outcome]}</td></tr>)}</tbody></table></div>

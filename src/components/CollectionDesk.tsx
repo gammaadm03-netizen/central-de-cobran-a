@@ -7,7 +7,8 @@ import CollectionCustomerContext, { type CollectionContactGuard } from './Collec
 import { COLLECTION_BANDS, COLLECTION_SORTS, COLLECTION_STATUSES, FINANCIAL_STATUSES, INITIAL_COLLECTION_FILTERS, collectionDateTime, collectionServerDay, collectionWorkflowReady, collectionStartReason, collectionDate, collectionDraft, collectionDraftKey, collectionError, downloadCollectionCsv, readCollectionDetail, readCollectionWorkbench, validCollectionTimer, workTime, type CollectionAgent, type CollectionDetail, type CollectionDraft, type CollectionFilters, type CollectionRow, type CollectionSaveResult, type CollectionTimer, type CollectionWorkbench } from '../lib/collection-workbench';
 import '../collection-workbench.css';
 
-interface Props { canWrite: boolean; canManage: boolean; collectorId: string | null; isCollector: boolean; selection?: CollectionSelection & { requestId: number }; onChange?: () => void; onFinish?: (paid: boolean) => void; refreshKey?: number; onContactsChange?: () => void; contactsRefreshKey?: number }
+export interface CollectionEmailCompletion { requestId: string; titleId: string }
+interface Props { canWrite: boolean; canManage: boolean; collectorId: string | null; isCollector: boolean; selection?: CollectionSelection & { requestId: number }; onChange?: () => void; onFinish?: (paid: boolean, completion: CollectionEmailCompletion) => void; refreshKey?: number; onContactsChange?: () => void; contactsRefreshKey?: number }
 interface FrozenRequest { rpc: 'save_collection_case' | 'collection_work_action'; body: Record<string, unknown>; kind: 'start' | 'pause' | 'save' | 'finish' | 'recovery'; titleId: string; paid: boolean; nextId: string | null; globalRecovery?: boolean }
 const nextActions: Record<string, string> = { NONE: 'Sem próxima ação', CONTACT: 'Contato', NO_RESPONSE: 'Sem resposta', PROMISE: 'Promessa de pagamento', RETRY: 'Cobrar novamente', OTHER: 'Outra ação' };
 const actionLabels: Record<string, string> = { CONTACT: 'Contato realizado', NO_RESPONSE: 'Sem resposta', PROMISE: 'Promessa de pagamento', RETRY: 'Cobrar novamente', PAID: 'Pagamento informado à validação', NOT_LOCATED_CONTACT: 'Não localizado no contato', OTHER: 'Atendimento registrado', VALIDATE: 'Recebimento validado', PAYMENT_NOT_LOCATED: 'Pagamento não localizado', PAYMENT_DATE: 'Data de pagamento informada' };
@@ -143,7 +144,10 @@ export default function CollectionDesk({ canWrite, canManage, collectorId, isCol
       setActiveTimer(timer.running ? timer : null);
       if (!request.globalRecovery) await loadDetail(request.titleId, request.kind === 'start' || request.kind === 'pause');
       setNotice(request.kind === 'finish' ? request.paid ? 'Pagamento informado. O título segue para validação em Contas a Receber; a comissão depende da confirmação financeira.' : 'Atendimento finalizado e registrado no histórico.' : request.kind === 'save' ? 'Andamento salvo na base central.' : request.kind === 'start' ? 'Atendimento iniciado.' : request.kind === 'pause' ? 'Atendimento pausado. O andamento pode ser salvo e o trabalho retomado depois.' : 'Intervalo indisponível finalizado; o histórico de tempo foi preservado.');
-      onChange?.(); if (request.kind === 'finish') onFinish?.(request.paid);
+      onChange?.();
+      if (request.kind === 'finish' && typeof request.body.p_request_id === 'string') {
+        onFinish?.(request.paid, { titleId: request.titleId, requestId: request.body.p_request_id });
+      }
     } catch (error) {
       if (!mounted.current) return;
       const known = ['40001', '42501', '23514', '22023', '55000', 'P0029', 'PGRST301', 'PGRST303'].includes(errorCode(error));

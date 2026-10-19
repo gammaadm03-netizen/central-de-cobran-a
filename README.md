@@ -1,6 +1,18 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.14.3**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.15.0**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Análise de Contas a Receber e revalidação — 0.15.0
+
+A busca de parcelas existentes recebe filtros que usam o índice já instalado, mantendo a comparação exata de identidade. A função tem um orçamento de até 50 segundos e o site espera até 60 segundos pela resposta. Falhas mostram uma referência segura para suporte; uma reanálise interrompida preserva escolhas corretas e mantém a confirmação bloqueada até a nova prévia válida. Esses limites não substituem o tempo de execução do próprio banco.
+
+Ativação: executar o [SQL 041](supabase/dashboard/ativar-otimizacao-importacao-recebiveis.sql), atualizar o código completo da função **receivables-import existente** e conferir o site **0.15.0**, seguindo o [guia de importação e revalidação](docs/revalidar-parcelas-recebiveis.md). A atualização de e-mail 040 é independente. As verificações locais não comprovam ativação remota ou conclusão de uma importação real.
+
+## Rascunho de e-mail após atendimento — 0.15.0
+
+Após finalizar o atendimento, a cobradora pode preparar uma mensagem com todos os títulos pendentes do cliente na mesma carteira, separando vencidos e a vencer, e selecionar os destinatários entre os contatos salvos. A mensagem abre por clique no Gmail, Outlook web ou aplicativo padrão; copiar, baixar texto e baixar `.eml` preservam o conteúdo completo quando ele excede o limite dos links. O envio e sua confirmação ocorrem no aplicativo de e-mail, sem SMTP ou envio automático pela Central.
+
+A fila de opções de rascunho fica somente na memória do módulo Cobrança e termina ao sair dele ou recarregar a página. A finalização registrada no banco permanece preservada. Diretoria segue em consulta. Ativação: somente o [SQL 040 e o site 0.15.0](docs/cobranca-email-rascunho.md), sem nova Edge Function. O Git não aplica o SQL remoto.
 
 ## Limite individual para Contas a Pagar — SQL 039
 
@@ -163,6 +175,10 @@ npm run test:collection-workbench-sql
 npm run test:collection-context-sql
 npm run test:collection-reference-imports-sql
 npm run test:collection-workflow-sql
+npm run test:collection-email-draft-sql
+npm run bundle:collection-email
+npm run bundle:receivable-import-performance
+npm run test:receivable-import-performance-sql
 npm run test:receivable-import-collectors-sql
 npm run test:receivables-operations-sql
 npm run test:bank-import-sql

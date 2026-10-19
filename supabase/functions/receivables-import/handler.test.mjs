@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
-import { createReceivablesGateway } from './handler.mjs';
+import { createReceivablesGateway, RECEIVABLES_GATEWAY_SCHEMA } from './handler.mjs';
 import { isReceivableIdentifierHeader, readReceivableIdentifierCell } from '../../../src/lib/receivables-parser.mjs';
 import { receivableCustomerKey } from '../../../src/lib/receivables-parser.mjs';
 
@@ -24,6 +24,11 @@ const RECEIVED_CSV = [...ERP_HEADER,'Quitação: data do recebimento','Quitaçã
 const encode = value => Buffer.from(value).toString('base64');
 const body = (action = 'preview', extra = {}) => ({ action, file_name: 'grupo.csv', file_base64: encode(CSV), ...(action === 'commit' ? { complete: true, previous_import_id: null, ...(extra.mode ? { previous_financial_revision:'17' } : {}) } : {}), ...extra });
 const json = (payload, status = 200) => new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+function diagnostic(payload, code, stage) {
+  assert.equal(payload.code, code); assert.equal(payload.stage, stage);
+  assert.equal(payload.schema_version, RECEIVABLES_GATEWAY_SCHEMA);
+  assert.match(payload.request_id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+}
 
 function setup(options = {}) {
   const calls = [], logs = [];
@@ -49,6 +54,11 @@ function setup(options = {}) {
     const data = init.body ? JSON.parse(init.body) : null;
     calls.push({ path, data, init });
     assert(init.signal instanceof AbortSignal);
+    if (options.delayAtPath === path) await new Promise((resolve, reject) => {
+      const aborted = () => { clearTimeout(timer); reject(new DOMException('Private timeout details', 'AbortError')); };
+      const timer = setTimeout(() => { init.signal.removeEventListener('abort', aborted); resolve(); }, options.delayMs ?? 200);
+      init.signal.addEventListener('abort', aborted, { once: true }); if (init.signal.aborted) aborted();
+    });
     if (options.networkFailure) throw new Error('secret database query and token must never appear');
     if (path === '/auth/v1/user') {
       assert.equal(init.method, 'GET'); assert.equal(init.headers.apikey, ANON);
@@ -87,7 +97,7 @@ function setup(options = {}) {
     throw new Error('Unexpected upstream path');
   };
   const settings = { ALLOWED_ORIGINS: ORIGIN, SUPABASE_URL: BASE, SUPABASE_ANON_KEY: ANON, SUPABASE_SERVICE_ROLE_KEY: SERVICE, ...options.env };
-  const handle = createReceivablesGateway({ env: name => settings[name], fetch: fetcher, loadWorkbook: async value => { workbookCalls++; return loader(value); }, log: message => logs.push(message) });
+  const handle = createReceivablesGateway({ env: name => settings[name], fetch: fetcher, loadWorkbook: async value => { workbookCalls++; return loader(value); }, log: message => logs.push(message), requestTimeoutMs: options.requestTimeoutMs });
   const send = (data = body(), changes = {}) => handle(new Request(`${BASE}/functions/v1/receivables-import`, {
     method: 'POST', headers: { Origin: ORIGIN, Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', ...changes.headers },
     body: JSON.stringify(data),
@@ -218,7 +228,7 @@ test('ambiguous CNPJ identity change explains the correction without leaking dat
     const app = setup({ rpcError: { code: '23514', message, details: SERVICE, hint: TOKEN } });
     const response = await app.send(body(action));
     assert.equal(response.status, 400);
-    assert.deepEqual(await response.json(), { code: '23514', error: message });
+    const payload = await response.json(); assert.equal(payload.error, message); diagnostic(payload, '23514', action);
     assert.deepEqual(app.logs, []);
   }
 });
@@ -228,7 +238,7 @@ test('upstream failures never expose credentials, SQL, responses or raw exceptio
     const app = setup(options); const response = await app.send(body('commit')); assert.equal(response.status, 503);
     const serialized = JSON.stringify({ body: await response.json(), logs: app.logs });
     assert(!serialized.includes(SERVICE)); assert(!serialized.includes(TOKEN)); assert(!serialized.includes('SQL'));
-    assert(app.logs.every(event => ['upstream_unavailable', 'request_unavailable'].includes(event)));
+    assert(app.logs.every(event => event.event === 'receivables_import_failure' && event.code === 'CR_SERVICE_UNAVAILABLE'));
   }
 });
 
@@ -334,7 +344,7 @@ test('new preview envelopes preserve official enriched matches and reject missin
     const app = setup(); const response = await app.send(request); assert.equal(response.status, 200); const payload = await response.json();
     assert.deepEqual(payload.rows, payload.preview.rows); assert.equal(payload.rows[0].line, 1); assert.equal(payload.rows[0].title_id, null); assert.deepEqual(payload.rows[0].candidates, []);
     for (const update of [{ rows:[] },{ financial_revision:null },{ financial_revision:'' },{ rows:[{ ...payload.rows[0],line:2 }] },{ rows:[{ ...payload.rows[0],title_id:'invalid' }] },{ rows:[{ ...payload.rows[0],amount_cents:1 }] },...(mode === 'received' ? [{ rows:[{ ...payload.rows[0],received_amount_cents:1 }] },{ rows:[{ ...payload.rows[0],received_on:'2026-10-20' }] }] : [])]) {
-      const invalid = setup({ previewPayload:{ ...payload.preview,...update } }); const result = await invalid.send(request); assert.equal(result.status, 503); assert(!JSON.stringify(await result.json()).includes('SQL'));
+      const invalid = setup({ previewPayload:{ ...payload.preview,...update } }); const result = await invalid.send(request); assert.equal(result.status, 502); const failure = await result.json(); diagnostic(failure, 'CR_INVALID_PREVIEW', 'preview_validation'); assert(!JSON.stringify(failure).includes('SQL'));
     }
   }
 });
@@ -451,7 +461,7 @@ test('030 preview validates official customer grouping and every assignment fiel
     ...[{ customer_key: 'name:OTHER' }, { client_name: 'Outra origem' }, { client_document: '12345678000195' }, { row_count: 2 }, { row_count: '1' }, { collector_id: 'invalid' }, { collector_name: 'Sem vínculo' }, { requires_selection: 'true' }, { locked: null }].map(update => ({ customer_collector_assignments: [{ ...assignment, ...update }] }))];
   for (const update of updates) {
     const invalid = setup({ previewPayload: { ...good, ...update } }), result = await invalid.send(request);
-    assert.equal(result.status, 503); assert.deepEqual(await result.json(), { error: 'Não foi possível confirmar a operação. Atualize o histórico antes de tentar novamente.' });
+    assert.equal(result.status, 502); diagnostic(await result.json(), 'CR_INVALID_PREVIEW', 'preview_validation');
   }
 });
 
@@ -479,6 +489,53 @@ test('030 commit requires its assignment version and safe outcome counters befor
   const good = { mode: 'open', import_id: IMPORT, row_count: 1, collector_assignment_version: '030', assigned_title_count: 1, assigned_customer_count: 1 };
   for (const update of [{ collector_assignment_version: undefined }, { collector_assignment_version: '029' }, { assigned_title_count: -1 }, { assigned_customer_count: 2 }, { assigned_title_count: Number.MAX_SAFE_INTEGER + 1 }, { assigned_customer_count: '1' }]) {
     const app = setup({ commitPayload: { ...good, ...update } }), response = await app.send(request);
-    assert.equal(response.status, 503); assert.equal(app.calls.filter(call => call.path.includes('/commit_')).length, 1);
+    assert.equal(response.status, 502); diagnostic(await response.json(), 'CR_INVALID_RESPONSE', 'commit_validation'); assert.equal(app.calls.filter(call => call.path.includes('/commit_')).length, 1);
   }
+});
+
+test('bounded request deadline identifies the exact HTTP phase without leaking request or upstream content', async () => {
+  for (const [action, path, stage] of [
+    ['preview', '/auth/v1/user', 'authenticate'],
+    ['preview', '/rest/v1/rpc/preview_receivables_received_import', 'preview'],
+    ['commit', '/rest/v1/rpc/commit_receivables_received_import_from_gateway', 'commit'],
+  ]) {
+    const app = setup({ requestTimeoutMs: 20, delayAtPath: path });
+    const response = await app.send(body(action, { mode: 'received', file_base64: encode(RECEIVED_CSV), title_mappings: { '1': 'NEW' } }));
+    assert.equal(response.status, 504); const payload = await response.json(); diagnostic(payload, 'CR_REQUEST_TIMEOUT', stage);
+    assert.equal(app.logs.length, 1); const event = app.logs[0];
+    assert.deepEqual(Object.keys(event).sort(), ['code', 'elapsed_ms', 'event', 'request_id', 'stage']);
+    assert.equal(event.request_id, payload.request_id); assert.equal(event.stage, stage); assert.equal(event.code, payload.code);
+    assert(Number.isSafeInteger(event.elapsed_ms) && event.elapsed_ms >= 0);
+    assert(!JSON.stringify({ payload, event }).includes('Private')); assert(!JSON.stringify({ payload, event }).includes(SERVICE));
+    if (action === 'commit') assert.equal(app.calls.filter(call => call.path.includes('/commit_')).length, 1);
+  }
+});
+
+test('database cancellation and lock deadlines keep safe diagnostic codes instead of becoming unknown 503s', async () => {
+  for (const [code, status] of [['57014', 504], ['55P03', 503]]) {
+    const app = setup({ rpcError: { code, message: 'SECRET query and invoice', details: SERVICE, hint: TOKEN }, rpcStatus: 500 });
+    const response = await app.send(body('preview', { mode: 'received', file_base64: encode(RECEIVED_CSV) }));
+    assert.equal(response.status, status); const payload = await response.json(); diagnostic(payload, code, 'preview');
+    assert(!JSON.stringify({ payload, logs: app.logs }).includes('SECRET')); assert(!JSON.stringify({ payload, logs: app.logs }).includes(TOKEN));
+  }
+});
+
+test('received RPC absence differs from financial mapping conflicts without exposing SQL signatures', async () => {
+  for (const action of ['preview', 'commit']) for (const code of ['PGRST202', '42883', '42P01']) {
+    const app = setup({ rpcError: { code, message: 'SECRET missing SQL signature', details: SERVICE }, rpcStatus: 404 });
+    const response = await app.send(body(action, { mode: 'received', file_base64: encode(RECEIVED_CSV), title_mappings: { '1': 'NEW' } }));
+    assert.equal(response.status, 409); const payload = await response.json(); diagnostic(payload, code, action);
+    assert.equal(payload.activation_required, true); assert(!JSON.stringify(payload).includes('SECRET')); assert(!JSON.stringify(payload).includes(SERVICE));
+  }
+});
+
+test('upstream HTTP timeouts, rate limits and invalid mapping payloads have separate bounded codes', async () => {
+  for (const [status, expected, code] of [[504, 504, 'CR_UPSTREAM_TIMEOUT'], [429, 429, 'CR_RATE_LIMITED']]) {
+    const app = setup({ rpcError: { message: 'SECRET private upstream content' }, rpcStatus: status });
+    const response = await app.send(body('preview', { mode: 'received', file_base64: encode(RECEIVED_CSV) }));
+    assert.equal(response.status, expected); diagnostic(await response.json(), code, 'preview');
+  }
+  const app = setup(); const response = await app.send(body('preview', { mode: 'received', title_mappings: { '01': 'NEW' }, file_base64: encode(RECEIVED_CSV) }));
+  assert.equal(response.status, 400); diagnostic(await response.json(), 'CR_REQUEST_INVALID', 'request');
+  assert.equal(app.calls.some(call => call.path.includes('/preview_') || call.path.includes('/commit_')), false);
 });

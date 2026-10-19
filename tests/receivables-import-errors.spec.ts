@@ -14,7 +14,7 @@ for (const mode of ['open', 'received'] as const) {
     await analyze(page, content.replace('16/10/2026', '31/02/2026'), mode);
 
     const region = page.getByRole('region', problemRegion), alert = region.getByRole('alert');
-    await expect(alert).toContainText('Importação bloqueada. Nenhum dado foi alterado.');
+    await expect(alert).toContainText('Importação bloqueada. Nenhum dado foi alterado por esta análise.');
     await expect(alert).toContainText('1 problema(s) encontrado(s) nesta análise.');
     await expect(alert).toContainText('Linha 2 · Vencimento: Data inexistente.');
     await expect(alert).toContainText('Como corrigir: Corrija a célula no arquivo original e selecione uma nova cópia.');

@@ -1,7 +1,9 @@
 import { publishableKey, supabase, supabaseUrl } from './supabase';
 import type { ImportProblem } from './payables';
+import { makeReceivableFailure } from './receivables-errors.mjs';
 export { formatCents, dateLabel } from './payables';
 export type { ImportProblem } from './payables';
+export { makeReceivableFailure, receivableFailureReference, receivableImportFailureMessage } from './receivables-errors.mjs';
 export const RECEIVABLE_SCOPE = 'grupo-consolidado';
 export interface ReceivableImportRow { document: string; client_name: string; client_document: string | null; branch: string; issued_on: string | null; due_date: string; amount_cents: number }
 export interface ReceivablePaidRow extends ReceivableImportRow { received_on: string; received_amount_cents: number }
@@ -18,37 +20,53 @@ export function receivableError(error: unknown, fallback: string) {
   if (code === '23514' || code === '22023') return 'A importação foi recusada. Confira as linhas e confirme o relatório completo da mesma origem.';
   if (code === 'P0030') return error && typeof error === 'object' && 'activation_required' in error && error.activation_required === true ? 'Atualize o banco e a função receivables-import para definir as cobradoras na importação.' : 'Confira a responsável de cada cliente sem carteira e os vínculos das parcelas. Analise o mesmo arquivo novamente antes de concluir.';
   if (code === 'P0023' || code === 'P0024') return error && typeof error === 'object' && 'activation_required' in error && error.activation_required === true ? 'Ative a atualização de importação de Contas a Receber no banco e no serviço antes de concluir. Nenhum dado foi alterado.' : 'A importação encontrou uma divergência. Confira os vínculos entre as parcelas e reanalise o arquivo antes de concluir. Nenhum dado desta tentativa foi alterado.';
-  if (code === 'PGRST202' || code === '42P01') return 'Este módulo precisa da atualização do banco de dados. Solicite a atualização de Contas a Receber à administração.';
+  if (['PGRST202', 'PGRST205', '42P01', '42883'].includes(code)) return 'Este módulo precisa da atualização do banco de dados. Solicite a atualização de Contas a Receber à administração.';
   return fallback;
 }
 
 export async function receivableImportRequest<T>(body: { action: 'preview' | 'commit'; file_name: string; file_base64: string; complete?: boolean; previous_import_id?: string | null; mode?: 'open' | 'received'; title_mappings?: Record<string, string>; collector_mappings?: Record<string, string>; previous_financial_revision?: string | null; confirm_corrections?: boolean }, signal?: AbortSignal): Promise<T> {
   const client = supabase;
-  if (!client) throw { code: 'PGRST301' };
-  const { data: { session } } = await client.auth.getSession();
-  if (!session?.access_token) throw { code: 'PGRST301' };
-  const abort = new AbortController(), cancel = () => abort.abort();
+  const phase = body.action;
+  if (signal?.aborted) throw new DOMException('Análise cancelada.', 'AbortError');
+  if (!client) throw makeReceivableFailure({ phase, code: 'PGRST301' });
+  let session;
+  try { ({ data: { session } } = await client.auth.getSession()); }
+  catch { throw makeReceivableFailure({ phase, code: 'CR_AUTH_UNAVAILABLE' }); }
+  if (!session?.access_token) throw makeReceivableFailure({ phase, code: 'PGRST301' });
+  const abort = new AbortController(), cancel = () => abort.abort(); let timedOut = false;
   signal?.addEventListener('abort', cancel, { once: true }); if (signal?.aborted) abort.abort();
-  const timer = window.setTimeout(cancel,30000);
+  const timer = window.setTimeout(() => { timedOut = true; abort.abort(); },60000);
   try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/receivables-import`, {
-      method: 'POST', headers: { apikey: publishableKey, Authorization: `Bearer ${session.access_token}`, 'Content-Type':'application/json' },
-      body:JSON.stringify(body), signal:abort.signal, credentials:'omit', cache:'no-store',
-    });
-    const result = await response.json();
-    if (!response.ok) {
-      const errors: ImportProblem[] = response.status === 422 && Array.isArray(result?.errors) ? result.errors.slice(0,100).filter((item:unknown) => item !== null && typeof item === 'object' && 'line' in item && Number.isSafeInteger(item.line) && 'column' in item && typeof item.column === 'string' && 'problem' in item && typeof item.problem === 'string' && 'correction' in item && typeof item.correction === 'string').map((item:ImportProblem) => ({ line:item.line, column:item.column.slice(0,300), problem:item.problem.slice(0,500), correction:item.correction.slice(0,500) })) : [];
-      throw { activation_required: result?.activation_required === true, code: typeof result?.code === 'string' ? result.code : response.status === 401 ? 'PGRST301' : response.status === 403 ? '42501' : '', errors };
+    let response: Response;
+    try {
+      response = await fetch(`${supabaseUrl}/functions/v1/receivables-import`, {
+        method: 'POST', headers: { apikey: publishableKey, Authorization: `Bearer ${session.access_token}`, 'Content-Type':'application/json' },
+        body:JSON.stringify(body), signal:abort.signal, credentials:'omit', cache:'no-store',
+      });
+    } catch {
+      if (signal?.aborted) throw new DOMException('Análise cancelada.', 'AbortError');
+      throw makeReceivableFailure({ phase, code: timedOut ? 'CR_REQUEST_TIMEOUT' : 'CR_NETWORK_ERROR' });
     }
+    let result: unknown;
+    try { result = await response.json(); }
+    catch {
+      if (signal?.aborted) throw new DOMException('Análise cancelada.', 'AbortError');
+      throw makeReceivableFailure({ phase, status: response.status, code: timedOut ? 'CR_REQUEST_TIMEOUT' : 'CR_INVALID_RESPONSE' });
+    }
+    if (!response.ok) throw makeReceivableFailure({ phase, status: response.status, payload: result });
+    if (result === null || typeof result !== 'object' || Array.isArray(result)) throw makeReceivableFailure({ phase, status: response.status, code: 'CR_INVALID_RESPONSE' });
     return result as T;
   } finally { window.clearTimeout(timer); signal?.removeEventListener('abort',cancel); }
 }
 
 
 async function analyzeReceivableImportFile<Row>(file: File, mode: 'open' | 'received', signal?: AbortSignal): Promise<{ rows: Row[]; errors: ImportProblem[]; hash: string; base64: string }> {
-  if (!file.size || file.size > 2 * 1024 * 1024) throw new Error('Selecione um arquivo não vazio de até 2 MiB.');
-  if (!/\.(xlsx|xlsm|csv|xls)$/i.test(file.name)) throw new Error('Selecione .xlsx, .xlsm ou .csv. Para .xls, salve uma cópia como .xlsx.');
-  const original = await file.arrayBuffer();
+  if (!file.size) throw makeReceivableFailure({ phase: 'preview', code: 'CR_FILE_EMPTY' });
+  if (file.size > 2 * 1024 * 1024) throw makeReceivableFailure({ phase: 'preview', code: 'CR_FILE_TOO_LARGE' });
+  if (!/\.(xlsx|xlsm|csv|xls)$/i.test(file.name)) throw makeReceivableFailure({ phase: 'preview', code: 'CR_FILE_FORMAT_INVALID' });
+  let original: ArrayBuffer;
+  try { original = await file.arrayBuffer(); }
+  catch { throw makeReceivableFailure({ phase: 'preview', code: 'CR_FILE_READ_FAILED' }); }
   if (signal?.aborted) throw new DOMException('Análise cancelada.', 'AbortError');
   const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', original))).map(byte => byte.toString(16).padStart(2, '0')).join('');
   const result = await new Promise<{ rows: Row[]; errors: ImportProblem[] }>((resolve, reject) => {
@@ -57,10 +75,10 @@ async function analyzeReceivableImportFile<Row>(file: File, mode: 'open' | 'rece
     let timeout: number;
     const cleanup = () => { window.clearTimeout(timeout); signal?.removeEventListener('abort', abort); worker.terminate(); };
     const abort = () => { cleanup(); reject(new DOMException('Análise cancelada.', 'AbortError')); };
-    timeout = window.setTimeout(() => { cleanup(); reject(new Error('A análise excedeu 20 segundos. Salve uma cópia com valores e tente novamente.')); }, 20000);
+    timeout = window.setTimeout(() => { cleanup(); reject(makeReceivableFailure({ phase: 'preview', code: 'CR_FILE_ANALYSIS_TIMEOUT' })); }, 20000);
     signal?.addEventListener('abort', abort, { once: true });
     worker.onmessage = event => { cleanup(); resolve(event.data); };
-    worker.onerror = () => { cleanup(); reject(new Error('Não foi possível processar a cópia do arquivo. Nenhum dado foi alterado.')); };
+    worker.onerror = () => { cleanup(); reject(makeReceivableFailure({ phase: 'preview', code: 'CR_FILE_ANALYSIS_FAILED' })); };
     const copy = original.slice(0);
     worker.postMessage({ buffer: copy, name: file.name, mode }, [copy]);
   });

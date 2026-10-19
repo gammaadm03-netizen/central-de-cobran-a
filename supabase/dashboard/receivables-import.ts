@@ -60,7 +60,8 @@ function parseMoneyCents(value) {
   if (cents > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Valor excede o limite seguro.");
   return Number(cents);
 }
-function parseCsv(text) {
+function parseCsv(text, { maxRows = MAX_ROWS + 1 } = {}) {
+  if (!Number.isSafeInteger(maxRows) || maxRows < 1 || maxRows > MAX_ROWS + 21) throw new Error("Limite de linhas do CSV inv\xE1lido.");
   text = text.replace(/^\uFEFF/, "");
   if (text.includes("\0")) throw new Error("CSV cont\xE9m bytes inv\xE1lidos. Salve uma c\xF3pia em UTF-8.");
   const sample = text.split(/\r?\n/, 1)[0];
@@ -84,7 +85,7 @@ function parseCsv(text) {
     finishField();
     rows.push(row);
     row = [];
-    if (rows.length > MAX_ROWS + 1) throw new Error("A base excede o limite de 5.000 linhas.");
+    if (rows.length > maxRows) throw new Error(maxRows === MAX_ROWS + 1 ? "A base excede o limite de 5.000 linhas." : "O arquivo CSV excede o limite de linhas permitido.");
   }
   for (let index = 0; index < text.length; index++) {
     const character = text[index];
@@ -350,6 +351,31 @@ var MAX_BODY_BYTES = 3 * 1024 * 1024;
 var MAX_BASE64_LENGTH = 4 * Math.ceil(MAX_FILE_BYTES / 3);
 var UUID = /^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/;
 var SERVICE_FAILURE = "N\xE3o foi poss\xEDvel confirmar a opera\xE7\xE3o. Atualize o hist\xF3rico antes de tentar novamente.";
+var RECEIVABLES_GATEWAY_SCHEMA = "receivables-import/2026-10-19.1";
+var DIAGNOSTIC_CODES = /* @__PURE__ */ new Set([
+  "42501",
+  "40001",
+  "23505",
+  "23514",
+  "22023",
+  "57014",
+  "55P03",
+  "42P01",
+  "42883",
+  "P0023",
+  "P0024",
+  "P0030",
+  "PGRST202",
+  "PGRST301",
+  "PGRST303",
+  "CR_SERVICE_UNAVAILABLE",
+  "CR_REQUEST_TIMEOUT",
+  "CR_UPSTREAM_TIMEOUT",
+  "CR_INVALID_PREVIEW",
+  "CR_INVALID_RESPONSE",
+  "CR_REQUEST_INVALID",
+  "CR_RATE_LIMITED"
+]);
 var INVALID_REQUEST = "Solicita\xE7\xE3o inv\xE1lida. Selecione novamente o relat\xF3rio completo.";
 var PARSE_FAILURE = "N\xE3o foi poss\xEDvel analisar o arquivo. Salve uma c\xF3pia somente com valores e confira os cabe\xE7alhos.";
 var CORRECTION = "Confira o formato e os cabe\xE7alhos, salve uma c\xF3pia somente com valores e tente novamente.";
@@ -511,16 +537,37 @@ function validCollectorPreview(preview, rows) {
   return missing === preview.missing_collector_count && (!missing || preview.can_commit === false);
 }
 function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWorkbook, log = () => {
-} }) {
+}, requestTimeoutMs = 5e4 }) {
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 6e4) throw new Error("invalid_request_budget");
   return async function handle(request) {
+    const started = performance.now(), requestId = crypto.randomUUID();
+    let stage = "configuration";
+    function diagnostic(status, payload) {
+      const fallback = status === 401 ? "PGRST301" : status === 403 ? "42501" : status === 429 ? "CR_RATE_LIMITED" : status >= 500 ? "CR_SERVICE_UNAVAILABLE" : "CR_REQUEST_INVALID";
+      const code = DIAGNOSTIC_CODES.has(payload.code) ? payload.code : fallback;
+      if (status >= 500) {
+        try {
+          log({
+            event: "receivables_import_failure",
+            stage,
+            code,
+            elapsed_ms: Math.max(0, Math.round(performance.now() - started)),
+            request_id: requestId
+          });
+        } catch {
+        }
+      }
+      return { ...payload, code, request_id: requestId, stage, schema_version: RECEIVABLES_GATEWAY_SCHEMA };
+    }
     let origins;
     try {
       origins = originsFrom(env("ALLOWED_ORIGINS"));
     } catch {
-      return new Response(JSON.stringify({ error: SERVICE_FAILURE }), { status: 503, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
+      return new Response(JSON.stringify(diagnostic(503, { error: SERVICE_FAILURE })), { status: 503, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
     }
+    stage = "cors";
     const origin = request.headers.get("origin");
-    if (!origin || !origins.has(origin)) return new Response(JSON.stringify({ error: "Origem n\xE3o autorizada." }), { status: 403, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", Vary: "Origin" } });
+    if (!origin || !origins.has(origin)) return new Response(JSON.stringify(diagnostic(403, { error: "Origem n\xE3o autorizada." })), { status: 403, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", Vary: "Origin" } });
     const headers = {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
@@ -528,7 +575,7 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       "Access-Control-Allow-Origin": origin,
       Vary: "Origin"
     };
-    const respond = (status, payload, extra = {}) => new Response(JSON.stringify(payload), { status, headers: { ...headers, ...extra } });
+    const respond = (status, payload, extra = {}) => new Response(JSON.stringify(status >= 400 ? diagnostic(status, payload) : payload), { status, headers: { ...headers, ...extra } });
     if (request.method === "OPTIONS") {
       const requested = (request.headers.get("access-control-request-headers") || "").toLowerCase().split(",").map((name) => name.trim()).filter(Boolean);
       if (request.headers.get("access-control-request-method") !== "POST" || requested.some((name) => !["authorization", "content-type", "apikey", "x-client-info"].includes(name))) return respond(403, { error: "Solicita\xE7\xE3o n\xE3o permitida." });
@@ -539,9 +586,11 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
         "Access-Control-Max-Age": "600"
       } });
     }
+    stage = "request";
     if (request.method !== "POST") return respond(405, { error: "M\xE9todo n\xE3o permitido." }, { Allow: "POST, OPTIONS" });
     const token = request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9._~-]{1,8192})$/i)?.[1];
     if (!token) return respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." });
+    stage = "configuration";
     let base, serviceKey, anonKey;
     try {
       serviceKey = env("SUPABASE_SERVICE_ROLE_KEY");
@@ -552,7 +601,8 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
     } catch {
       return respond(503, { error: SERVICE_FAILURE });
     }
-    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(1e4)]);
+    const deadline = AbortSignal.timeout(requestTimeoutMs);
+    const signal = AbortSignal.any([request.signal, deadline]);
     async function call(path, { service = false, method = "POST", data } = {}) {
       const result = await fetcher(`${base}${path}`, {
         method,
@@ -569,6 +619,10 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
     }
     function upstreamFailure(result) {
       const code = result.payload?.code;
+      if (code === "57014") return respond(504, { code, error: "O banco interrompeu a consulta. Preserve o arquivo e confira o hist\xF3rico antes de tentar novamente." });
+      if (code === "55P03") return respond(503, { code, error: "A base est\xE1 ocupada com outra opera\xE7\xE3o. Preserve o arquivo e confira o hist\xF3rico antes de tentar novamente." });
+      if (["PGRST202", "42883", "42P01"].includes(code)) return respond(409, { code, activation_required: true, error: "Atualize a fun\xE7\xE3o de importa\xE7\xE3o e a estrutura de Contas a Receber antes de tentar novamente." });
+      if (code === "PGRST301" || code === "PGRST303") return respond(401, { code, error: "Sua sess\xE3o expirou. Entre novamente." });
       if (code === "42501") return respond(403, { code, error: "Seu perfil n\xE3o tem permiss\xE3o para esta opera\xE7\xE3o." });
       if (code === "40001") return respond(409, { code, error: "A base mudou desde a an\xE1lise. Analise o arquivo novamente antes de concluir." });
       if (code === "23505") return respond(409, { code, error: "Este arquivo j\xE1 foi importado para esta origem. Nenhum dado foi alterado." });
@@ -578,10 +632,12 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       if (code === "23514" && result.payload?.message === IDENTITY_CHANGE) return respond(400, { code, error: IDENTITY_CHANGE });
       if (code === "22023" || code === "23514") return respond(400, { code, error: "A importa\xE7\xE3o foi recusada. Confira as linhas, a origem completa e os v\xEDnculos de cobradora dos clientes antes de concluir." });
       if (result.status === 401) return respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." });
-      log("upstream_unavailable");
+      if (result.status === 429) return respond(429, { code: "CR_RATE_LIMITED", error: "H\xE1 muitas solicita\xE7\xF5es em andamento. Aguarde antes de analisar novamente." });
+      if (result.status === 408 || result.status === 504) return respond(504, { code: "CR_UPSTREAM_TIMEOUT", error: "O servi\xE7o de dados excedeu o tempo de resposta. Preserve o arquivo e confira o hist\xF3rico." });
       return respond(503, { error: SERVICE_FAILURE });
     }
     try {
+      stage = "authenticate";
       const auth = await call("/auth/v1/user", { method: "GET" });
       if (!auth.ok) return auth.status === 401 || auth.status === 403 ? respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." }) : upstreamFailure(auth);
       if (typeof auth.payload?.id !== "string" || !UUID.test(auth.payload.id)) throw new Error("invalid_identity");
@@ -591,12 +647,14 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       } catch {
         return respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." });
       }
+      stage = "authorize";
       const access = await call("/rest/v1/rpc/current_access", { data: {} });
       if (!access.ok) return upstreamFailure(access);
       if (access.payload?.profile?.id !== auth.payload.id || access.payload.profile.enabled !== true || !Array.isArray(access.payload.permissions) || !access.payload.permissions.some((permission) => permission?.resource === "contas_receber" && permission.action === "import")) {
         return respond(403, { code: "42501", error: "Seu perfil n\xE3o tem permiss\xE3o para esta opera\xE7\xE3o." });
       }
       let body;
+      stage = "request";
       try {
         body = await readBody(request);
       } catch {
@@ -616,6 +674,7 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       } catch {
         return respond(400, { error: "O arquivo est\xE1 vazio, inv\xE1lido ou excede 2 MiB. Selecione novamente uma c\xF3pia do relat\xF3rio completo." });
       }
+      stage = "parse";
       let parsed;
       try {
         let matrix, excel1904 = false;
@@ -634,12 +693,14 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
         if (body.mode !== "received" && matrix[0]?.some(receiptColumn)) throw new Error("Este arquivo cont\xE9m colunas de quita\xE7\xE3o. Selecione o modo Recebimentos para importar datas e valores efetivamente recebidos.");
         parsed = body.mode === "received" ? validateReceivablePaidRows(matrix, { excel1904 }) : validateReceivableRows(matrix, { excel1904 });
       } catch (error) {
+        if (signal.aborted) throw error;
         return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: [{ line: 0, column: "Arquivo", problem: safeMessage(error instanceof Error ? error.message : ""), correction: CORRECTION }] });
       }
       if (parsed.errors.length) return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: problemsFor(parsed.errors) });
       const withCollectors = Object.hasOwn(body, "collector_mappings");
       if (body.mode) {
         if (Object.keys(body.title_mappings ?? {}).some((key) => Number(key) > parsed.rows.length)) return respond(400, { error: INVALID_REQUEST });
+        stage = "capabilities";
         const capabilities = await call("/rest/v1/rpc/receivables_import_capabilities", { data: {} });
         const required = body.mode === "open" ? "open_sync" : "received_import";
         if (!capabilities.ok && ["PGRST202", "42883"].includes(capabilities.payload?.code) || capabilities.ok && capabilities.payload?.[required] !== true) {
@@ -650,10 +711,12 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
       if (signal.aborted) throw new Error("request_timed_out");
       if (body.action === "preview") {
+        stage = "preview";
         const path2 = withCollectors ? "preview_receivables_open_import_with_collectors" : body.mode === "open" ? "preview_receivables_open_import" : body.mode === "received" ? "preview_receivables_received_import" : "preview_receivables_import";
         const preview = await call(`/rest/v1/rpc/${path2}`, { data: { p_scope: "grupo-consolidado", p_rows: parsed.rows, ...body.mode ? { p_title_mappings: body.title_mappings ?? {} } : {}, ...withCollectors ? { p_collector_mappings: body.collector_mappings } : {} } });
         if (!preview.ok && withCollectors && ["PGRST202", "42883"].includes(preview.payload?.code)) return respond(409, { code: "P0030", activation_required: true, error: "Ative a atualiza\xE7\xE3o das respons\xE1veis na importa\xE7\xE3o de t\xEDtulos em aberto antes de concluir. Nenhum dado foi alterado." });
         if (!preview.ok) return upstreamFailure(preview);
+        stage = "preview_validation";
         if (!preview.payload || preview.payload.row_count !== parsed.rows.length) throw new Error("invalid_preview");
         if (body.mode) {
           const counters = body.mode === "open" ? ["new_count", "open_count", "changed_count", "pending_count", "validated_in_source_count", "conflict_count"] : ["new_count", "received_count", "matched_count", "correction_count", "historical_count", "conflict_count"];
@@ -665,6 +728,7 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
         return respond(200, { rows: body.mode ? preview.payload.rows : parsed.rows, preview: preview.payload, file_sha256: hash });
       }
       const path = withCollectors ? "commit_receivables_open_import_with_collectors_from_gateway" : body.mode === "open" ? "commit_receivables_open_import_from_gateway" : body.mode === "received" ? "commit_receivables_received_import_from_gateway" : "commit_receivables_import_from_gateway";
+      stage = "commit";
       const committed = await call(`/rest/v1/rpc/${path}`, { service: true, data: {
         p_user_id: auth.payload.id,
         p_session_id: sessionId,
@@ -680,11 +744,14 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       } });
       if (!committed.ok && withCollectors && ["PGRST202", "42883"].includes(committed.payload?.code)) return respond(409, { code: "P0030", activation_required: true, error: "Ative a atualiza\xE7\xE3o das respons\xE1veis na importa\xE7\xE3o de t\xEDtulos em aberto antes de concluir. Nenhum dado foi alterado." });
       if (!committed.ok) return upstreamFailure(committed);
+      stage = "commit_validation";
       if (!committed.payload || committed.payload.row_count !== parsed.rows.length || typeof committed.payload.import_id !== "string" || !UUID.test(committed.payload.import_id) || body.mode && committed.payload.mode !== body.mode) throw new Error("invalid_commit_response");
       if (withCollectors && (committed.payload.collector_assignment_version !== "030" || !["assigned_title_count", "assigned_customer_count"].every((key) => Number.isSafeInteger(committed.payload[key]) && committed.payload[key] >= 0) || committed.payload.assigned_customer_count > committed.payload.assigned_title_count)) throw new Error("invalid_collector_commit_response");
       return respond(200, committed.payload);
-    } catch {
-      log("request_unavailable");
+    } catch (error) {
+      if (signal.aborted || deadline.aborted) return respond(504, { code: "CR_REQUEST_TIMEOUT", error: "A opera\xE7\xE3o excedeu o tempo de resposta. Preserve o arquivo e confira o hist\xF3rico antes de tentar novamente." });
+      if (stage === "preview_validation") return respond(502, { code: "CR_INVALID_PREVIEW", error: "O servi\xE7o retornou uma an\xE1lise incompat\xEDvel. Atualize a fun\xE7\xE3o de importa\xE7\xE3o antes de tentar novamente." });
+      if (stage === "commit_validation" || error instanceof Error && error.message === "invalid_identity") return respond(502, { code: "CR_INVALID_RESPONSE", error: SERVICE_FAILURE });
       return respond(503, { error: SERVICE_FAILURE });
     }
   };
@@ -716,5 +783,5 @@ Deno.serve(createReceivablesGateway({
     }
     return { matrix, excel1904: Boolean(workbook.properties.date1904) };
   },
-  log: (event) => console.warn(`receivables-import:${event}`)
+  log: (event) => console.warn(JSON.stringify(event))
 }));

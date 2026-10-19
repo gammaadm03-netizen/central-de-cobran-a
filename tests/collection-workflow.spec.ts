@@ -1,10 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const day = '2026-10-18', initial = '2026-10-18T15:00:00.000Z';
 const id = (n: number) => `99000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const own = id(20);
 const workflow = { version: '029', normal_pause: true, finish_requires_started: true, pending_read_only: true, returns_priority: true };
-type Options = { legacy?: boolean; returns?: boolean; unassigned?: boolean; director?: boolean; resume?: boolean; unknown?: 'START' | 'PAUSE' | 'SAVE' | 'FINISH'; recovery?: boolean; computerWrong?: boolean };
+type Options = { legacy?: boolean; returns?: boolean; unassigned?: boolean; director?: boolean; resume?: boolean; unknown?: 'START' | 'PAUSE' | 'SAVE' | 'FINISH'; recovery?: boolean; computerWrong?: boolean; emailMode?: 'missing' | 'none' | 'empty' | 'long' | 'forbidden' | 'invalid' };
 async function setup(page: Page, options: Options = {}) {
   await page.clock.install({ time: new Date(options.computerWrong ? '2026-10-14T15:00:00Z' : initial) }); await page.clock.pauseAt(new Date(options.computerWrong ? '2026-10-14T15:00:01Z' : '2026-10-18T15:00:01Z'));
   const manager = options.unassigned, collector = !manager && !options.director;
@@ -13,7 +14,7 @@ async function setup(page: Page, options: Options = {}) {
   const make = (n: number, changes: Record<string, unknown> = {}) => ({ id: id(100 + n), customer_key: `name:ORGAO FLUXO ${n}`, document: `FLUXO-${n}`, client_name: `Órgão de fluxo ${n}`, client_document: null, branch: 'Filial sintética', due_date: '2026-10-08', amount_cents: 10000 + n, collector_id: own, collector_name: 'Operadora de teste', status: 'OPEN', validation_status: 'NONE', payment_source: null, payment_reported_date: null, revision: 1, operational_status: 'NOVO TÍTULO - COBRAR', case_revision: 0, observation: null, next_action_text: null, next_date: null, delay_days: 10, total_work_seconds: 0, finalized_at: null, ...changes });
   const rows: any[] = [make(1, options.unassigned ? { collector_id: null, collector_name: null } : options.returns ? { next_action_text: 'Retornar por telefone', next_date: '2026-10-17' } : {}), make(2), make(3, { next_action_text: 'Retorno futuro', next_date: '2026-10-19' }), make(4, { status: 'PENDING_VALIDATION', validation_status: 'PENDING', payment_source: 'COBRANCA', payment_reported_date: day })];
   for (const row of rows) row.agenda_date = row.next_date;
-  const state = { now: Date.parse(initial), runningId: options.resume || options.recovery ? rows[0].id as string | null : null, started: new Set<string>(options.resume ? [rows[0].id] : []), starts: new Map<string, number>(options.resume || options.recovery ? [[rows[0].id, Date.parse(initial) - 60000]] : []), totals: new Map<string, number>(), replies: new Map<string, any>(), unknown: options.unknown, inaccessible: !!options.recovery, events: [] as any[], financialWrites: 0, saves: 0 };
+  const state = { now: Date.parse(initial), runningId: options.resume || options.recovery ? rows[0].id as string | null : null, started: new Set<string>(options.resume ? [rows[0].id] : []), starts: new Map<string, number>(options.resume || options.recovery ? [[rows[0].id, Date.parse(initial) - 60000]] : []), totals: new Map<string, number>(), replies: new Map<string, any>(), unknown: options.unknown, inaccessible: !!options.recovery, events: [] as any[], financialWrites: 0, saves: 0, emailRevision: 0, emailEmails: ['financeiro@example.invalid', 'contato@example.invalid'] };
   const calls: { name: string; body: any }[] = [];
   const due = (row: any) => ['NEW', 'OPEN', 'NOT_LOCATED'].includes(row.status) && row.agenda_date && row.agenda_date <= day;
   const priority = () => { const pending = rows.filter(due); return { collector_id: collector ? own : null, due_count: pending.length, total_cents: pending.reduce((sum, row) => sum + row.amount_cents, 0), next_title_id: pending[0]?.id ?? null, next_due_date: pending[0]?.agenda_date ?? null }; };
@@ -33,6 +34,25 @@ async function setup(page: Page, options: Options = {}) {
     if (name === 'current_access') return reply(access);
     if (['collections_overdue_summary', 'receivables_management_summary', 'collection_work_summary', 'collection_customer_context'].includes(name)) return reply({ code: 'PGRST202' }, 404);
     if (name === 'collection_agents') return reply([{ id: own, display_name: 'Operadora de teste', enabled: true }]);
+    if (name === 'prepare_collection_customer_email') {
+      if (options.emailMode === 'missing') return reply({ code: 'PGRST202' }, 404);
+      if (options.emailMode === 'forbidden') return reply({ code: '42501', message: 'private source diagnostic' }, 403);
+      const finish = calls.find(call => call.name === 'save_collection_case' && call.body.p_request_id === body.p_finish_request_id && call.body.p_finish);
+      const anchor = rows.find(row => row.id === finish?.body.p_title_id);
+      if (!anchor || !state.replies.has(body.p_finish_request_id)) return reply({ code: '42501' }, 403);
+      const draftRows = options.emailMode === 'empty' ? [] : [
+        ...(!['VALIDATED', 'PENDING_VALIDATION'].includes(anchor.status) ? [{ title_id: anchor.id, document: anchor.document, branch: anchor.branch, due_date: anchor.due_date, amount_cents: anchor.amount_cents, category: 'OVERDUE' }] : []),
+        { title_id: id(9000 + Number(anchor.document.split('-').at(-1))), document: `FUTURO-${anchor.document}`, branch: anchor.branch, due_date: '2026-11-01', amount_cents: 25000, category: 'UPCOMING' },
+        ...(options.emailMode === 'long' ? Array.from({ length: 70 }, (_, index) => ({ title_id: id(2000 + index), document: `NF-ADICIONAL-${index}`, branch: anchor.branch, due_date: '2026-10-01', amount_cents: 10000, category: 'OVERDUE' })) : []),
+      ];
+      const overdue = draftRows.filter(row => row.category === 'OVERDUE'), upcoming = draftRows.filter(row => row.category === 'UPCOMING');
+      const total = (items: typeof draftRows) => items.reduce((sum, row) => sum + row.amount_cents, 0);
+      return reply({ request_id: body.p_finish_request_id, title_id: anchor.id, customer_key: anchor.customer_key, client_name: anchor.client_name, as_of_date: day,
+        emails: options.emailMode === 'none' ? [] : state.emailEmails, rows: draftRows,
+        overdue_count: overdue.length, upcoming_count: upcoming.length, total_count: draftRows.length,
+        overdue_cents: total(overdue), upcoming_cents: total(upcoming), total_cents: total(draftRows) + (options.emailMode === 'invalid' ? 1 : 0), revision: `email-${state.saves}-${state.emailRevision}` });
+    }
+
     if (name === 'collection_workbench') {
       let visible = rows.filter(row => !state.inaccessible || row.id !== rows[0].id);
       if (body.p_queue === 'returns') visible = visible.filter(due); else if (body.p_queue === 'active') visible = visible.filter(row => !['PENDING_VALIDATION', 'VALIDATED'].includes(row.status)); else if (body.p_queue === 'history') visible = visible.filter(row => row.status === 'VALIDATED');
@@ -68,6 +88,17 @@ const observation = (page: Page) => panel(page).getByRole('textbox', { name: 'Ob
 async function completeDraft(page: Page) { await observation(page).fill('Contato sintético confirmado'); await panel(page).getByRole('textbox', { name: 'Próxima ação', exact: true }).fill('Retornar ao cliente'); await panel(page).getByLabel('Data da próxima ação', { exact: true }).fill('2026-10-20'); }
 const workCalls = (calls: { name: string; body: any }[]) => calls.filter(call => call.name === 'collection_work_action');
 const saves = (calls: { name: string; body: any }[]) => calls.filter(call => call.name === 'save_collection_case');
+const emailPanel = (page: Page) => page.getByRole('region', { name: 'Rascunho de e-mail de cobrança', exact: true });
+const emailMessage = (page: Page) => emailPanel(page).getByRole('textbox', { name: 'Mensagem de cobrança', exact: true });
+const emailCalls = (calls: { name: string; body: any }[]) => calls.filter(call => call.name === 'prepare_collection_customer_email');
+async function finishForEmail(page: Page, n = 1) {
+  await open(page, n); await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled();
+  await completeDraft(page); await button(page, 'Finalizar atendimento').click();
+  await expect(emailPanel(page)).toBeVisible();
+}
+async function prepareEmail(page: Page) {
+  await emailPanel(page).getByRole('button', { name: 'Preparar e-mail de cobrança', exact: true }).click();
+}
 
 test('Iniciar independente de rascunho; Pausar e Salvar explicam claramente quando estão indisponíveis', async ({ page }) => {
   const seen = await setup(page); await open(page); await expect(button(page, 'Iniciar')).toBeEnabled(); await expect(button(page, 'Pausar')).toBeDisabled(); await expect(button(page, 'Salvar andamento')).toBeDisabled(); await expect(panel(page)).toContainText('após alterar os campos'); await expect(panel(page)).toContainText('Pausar fica disponível somente'); await expect(observation(page)).toBeEnabled(); await observation(page).fill('Rascunho antes de iniciar'); await expect(button(page, 'Salvar andamento')).toBeEnabled(); await expect(button(page, 'Iniciar')).toBeEnabled(); await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled(); await expect(observation(page)).toHaveValue('Rascunho antes de iniciar'); expect(workCalls(seen.calls).map(call => call.body.p_action)).toEqual(['START']);
@@ -114,4 +145,137 @@ for (const action of ['START', 'PAUSE', 'SAVE'] as const) test(`resposta incerta
 
 test('intervalo inacessível só oferece recuperação oficial e nunca confirma pagamento', async ({ page }) => {
   const seen = await setup(page, { recovery: true }); const recover = page.getByRole('button', { name: 'Finalizar intervalo indisponível', exact: true }); await expect(recover).toBeVisible(); page.once('dialog', dialog => dialog.accept()); await recover.click(); await expect(recover).toHaveCount(0); expect(workCalls(seen.calls).map(call => call.body.p_action)).toEqual(['FINISH']); expect(seen.state.runningId).toBeNull(); expect(saves(seen.calls)).toHaveLength(0);
+});
+
+test('finalização confirmada oferece rascunho com vencidos e a vencer, sem enviar nem repetir atendimento', async ({ page }) => {
+  const seen = await setup(page);
+  await expect(emailPanel(page)).toHaveCount(0);
+  await finishForEmail(page);
+  expect(emailCalls(seen.calls)).toHaveLength(0);
+  await prepareEmail(page);
+  await expect(emailMessage(page)).toHaveValue(/TÍTULOS VENCIDOS[\s\S]*TÍTULOS A VENCER/);
+  await expect(emailMessage(page)).toHaveValue(/Documento: FLUXO-1 \|/);
+  await expect(emailMessage(page)).toHaveValue(/Documento: FUTURO-FLUXO-1 \|/);
+  await expect(emailMessage(page)).toHaveValue(/R\$ 350,01/);
+  await expect(emailMessage(page)).not.toHaveValue(/Contato sintético confirmado|FLUXO-2/);
+  await expect(emailMessage(page)).toHaveAttribute('readonly', '');
+  const finish = saves(seen.calls).find(call => call.body.p_finish)!;
+  expect(emailCalls(seen.calls)[0].body).toEqual({ p_finish_request_id: finish.body.p_request_id });
+  const gmail = new URL((await emailPanel(page).getByRole('link', { name: 'Abrir no Gmail', exact: true }).getAttribute('href'))!);
+  expect(gmail.searchParams.get('body')).toBe(await emailMessage(page).inputValue());
+  expect(gmail.searchParams.get('to')).toBe('financeiro@example.invalid,contato@example.invalid');
+  await emailPanel(page).getByRole('checkbox', { name: 'contato@example.invalid', exact: true }).uncheck();
+  const narrowed = new URL((await emailPanel(page).getByRole('link', { name: 'Abrir no Gmail', exact: true }).getAttribute('href'))!);
+  expect(narrowed.searchParams.get('to')).toBe('financeiro@example.invalid');
+  expect(saves(seen.calls).filter(call => call.body.p_finish)).toHaveLength(1);
+  expect(seen.state.financialWrites).toBe(0);
+});
+
+test('pagamento informado mantém a opção fora da aba oculta e prepara somente outros títulos pendentes', async ({ page }) => {
+  const seen = await setup(page); await open(page); await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled();
+  await button(page, 'Marcar como título pago').click();
+  await observation(page).fill('Cliente informou liquidação');
+  await panel(page).getByLabel('Data do pagamento informado', { exact: false }).fill(day);
+  page.once('dialog', dialog => dialog.accept()); await button(page, 'Marcar como título pago').click();
+  await expect(page.getByRole('tab', { name: 'Validação financeira', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(emailPanel(page)).toBeVisible(); await prepareEmail(page);
+  await expect(emailMessage(page)).toHaveValue(/FUTURO-FLUXO-1/);
+  await expect(emailMessage(page)).not.toHaveValue(/Documento: FLUXO-1 \|/);
+  expect(seen.rows[0].status).toBe('PENDING_VALIDATION');
+  expect(seen.calls.some(call => call.name === 'validate_receivable_payment')).toBe(false);
+});
+
+test('confirmação incerta não cria opção até o replay e conserva o mesmo protocolo de finalização', async ({ page }) => {
+  const seen = await setup(page, { unknown: 'FINISH' }); await open(page); await button(page, 'Iniciar').click();
+  await expect(button(page, 'Pausar')).toBeEnabled(); await completeDraft(page); await button(page, 'Finalizar atendimento').click();
+  await expect(button(page, 'Repetir confirmação pendente')).toBeVisible();
+  await expect(emailPanel(page)).toHaveCount(0);
+  await button(page, 'Repetir confirmação pendente').click();
+  await expect(emailPanel(page)).toBeVisible(); await prepareEmail(page);
+  await expect(emailMessage(page)).toBeVisible();
+  const finishes = saves(seen.calls).filter(call => call.body.p_finish);
+  expect(finishes).toHaveLength(2); expect(finishes[1].body).toEqual(finishes[0].body);
+  expect(emailCalls(seen.calls)[0].body.p_finish_request_id).toBe(finishes[0].body.p_request_id);
+  expect(seen.state.events).toHaveLength(1);
+});
+
+test('novos atendimentos não substituem o rascunho de outro cliente e aguardam na fila', async ({ page }) => {
+  const seen = await setup(page); await finishForEmail(page); await prepareEmail(page);
+  await expect(emailMessage(page)).toHaveValue(/Cliente: Órgão de fluxo 1/);
+  await finishForEmail(page, 2);
+  await expect(emailMessage(page)).toHaveValue(/Cliente: Órgão de fluxo 1/);
+  await expect(page.getByText('2 atendimentos com opção de preparar e-mail.', { exact: false })).toBeVisible();
+  await emailPanel(page).getByRole('button', { name: 'Fechar rascunho', exact: true }).click();
+  await prepareEmail(page); await expect(emailMessage(page)).toHaveValue(/Cliente: Órgão de fluxo 2/);
+  await expect(emailMessage(page)).not.toHaveValue(/FLUXO-1/);
+  expect(emailCalls(seen.calls)).toHaveLength(2);
+});
+
+test('pagamento informado invalida uma prévia anterior antes de permitir abrir o e-mail', async ({ page }) => {
+  const seen = await setup(page); await finishForEmail(page); await prepareEmail(page);
+  await expect(emailMessage(page)).toBeVisible();
+  const firstRequest = emailCalls(seen.calls)[0].body.p_finish_request_id;
+  await open(page, 2); await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled();
+  await button(page, 'Marcar como título pago').click(); await observation(page).fill('Pagamento informado pelo cliente');
+  await panel(page).getByLabel('Data do pagamento informado', { exact: false }).fill(day);
+  page.once('dialog', dialog => dialog.accept()); await button(page, 'Marcar como título pago').click();
+  await expect(emailPanel(page).getByRole('status')).toHaveText('Dados de títulos ou contatos alterados. Prepare o rascunho novamente antes de abrir o e-mail.');
+  await expect(emailMessage(page)).toHaveCount(0);
+  await expect(emailPanel(page).getByRole('link')).toHaveCount(0);
+  expect(emailCalls(seen.calls)).toHaveLength(1);
+  await prepareEmail(page); await expect(emailMessage(page)).toHaveValue(/Cliente: Órgão de fluxo 1/);
+  expect(emailCalls(seen.calls)[1].body.p_finish_request_id).toBe(firstRequest);
+});
+
+test('sem contato salvo a mensagem pode ser copiada ou baixada sem abrir aplicativo sem destinatário', async ({ page }) => {
+  const seen = await setup(page, { emailMode: 'none' }); await finishForEmail(page); await prepareEmail(page);
+  await expect(emailPanel(page).getByText('Nenhum e-mail está cadastrado para este cliente.', { exact: false })).toBeVisible();
+  await expect(emailPanel(page).getByRole('button', { name: 'Abrir no Gmail', exact: true })).toBeDisabled();
+  await expect(emailPanel(page).getByRole('button', { name: 'Baixar rascunho (.eml)', exact: true })).toBeDisabled();
+  await expect(emailPanel(page).getByRole('button', { name: 'Copiar mensagem', exact: true })).toBeEnabled();
+  const download = page.waitForEvent('download');
+  await emailPanel(page).getByRole('button', { name: 'Baixar mensagem (.txt)', exact: true }).click();
+  expect(await readFile((await (await download).path())!, 'utf8')).toContain('FUTURO-FLUXO-1');
+  expect(seen.state.financialWrites).toBe(0);
+});
+
+test('sem títulos pendentes não oferece cobrança vazia', async ({ page }) => {
+  await setup(page, { emailMode: 'empty' }); await finishForEmail(page); await prepareEmail(page);
+  await expect(emailPanel(page).getByRole('status')).toHaveText('Não há títulos pendentes para este cliente nesta carteira.');
+  await expect(emailMessage(page)).toHaveCount(0);
+  await expect(emailPanel(page).getByRole('link')).toHaveCount(0);
+});
+
+test('mensagem longa conserva todos os títulos no rascunho EML sem cortar links ou texto', async ({ page }) => {
+  await setup(page, { emailMode: 'long' }); await finishForEmail(page); await prepareEmail(page);
+  await expect(emailMessage(page)).toHaveValue(/NF-ADICIONAL-69/);
+  await expect(emailPanel(page).getByRole('button', { name: 'Abrir no Gmail', exact: true })).toBeDisabled();
+  const download = page.waitForEvent('download');
+  await emailPanel(page).getByRole('button', { name: 'Baixar rascunho (.eml)', exact: true }).click();
+  const file = await download, source = await readFile((await file.path())!, 'utf8');
+  expect(file.suggestedFilename()).toBe('cobranca-pendencias.eml');
+  expect(source).toContain('X-Unsent: 1');
+  const body = Buffer.from(source.slice(source.indexOf('\r\n\r\n') + 4).replace(/\s/g, ''), 'base64').toString('utf8');
+  expect(body.replaceAll('\r\n', '\n')).toBe(await emailMessage(page).inputValue());
+});
+
+test('atualizar contatos retira destinatário antigo e exige selecionar o novo endereço oficial', async ({ page }) => {
+  const seen = await setup(page); await finishForEmail(page); await prepareEmail(page);
+  await expect(emailPanel(page).getByRole('checkbox', { name: 'financeiro@example.invalid', exact: true })).toBeChecked();
+  seen.state.emailEmails = ['novo@example.invalid']; seen.state.emailRevision++;
+  await emailPanel(page).getByRole('button', { name: 'Atualizar títulos e contatos', exact: true }).click();
+  await expect(emailPanel(page).getByRole('checkbox', { name: 'financeiro@example.invalid', exact: true })).toHaveCount(0);
+  await expect(emailPanel(page).getByRole('checkbox', { name: 'novo@example.invalid', exact: true })).not.toBeChecked();
+  await expect(emailPanel(page).getByRole('button', { name: 'Abrir no Gmail', exact: true })).toBeDisabled();
+  await emailPanel(page).getByRole('checkbox', { name: 'novo@example.invalid', exact: true }).check();
+  expect(new URL((await emailPanel(page).getByRole('link', { name: 'Abrir no Gmail', exact: true }).getAttribute('href'))!).searchParams.get('to')).toBe('novo@example.invalid');
+});
+
+for (const emailMode of ['missing', 'forbidden', 'invalid'] as const) test(`falha ${emailMode} não abre rascunho nem revela diagnóstico interno`, async ({ page }) => {
+  const seen = await setup(page, { emailMode }); await finishForEmail(page); await prepareEmail(page);
+  await expect(emailPanel(page).getByRole('alert')).toBeVisible();
+  if (emailMode === 'missing') await expect(emailPanel(page).getByRole('alert')).toHaveText('Ative a atualização de rascunhos de cobrança no banco.');
+  await expect(emailMessage(page)).toHaveCount(0);
+  await expect(page.getByText('private source diagnostic', { exact: false })).toHaveCount(0);
+  expect(seen.state.financialWrites).toBe(0);
 });

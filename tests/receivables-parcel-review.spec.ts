@@ -115,3 +115,59 @@ test('botão próximo das parcelas exige a declaração e é limpo ao trocar o a
   await expect(page.getByRole('checkbox')).not.toBeChecked();
   expect(seen.commits).toHaveLength(0);
 });
+
+test('503 ao validar escolhas mantém as seis parcelas visíveis e permite repetir somente a análise', async ({ page }) => {
+  const seen = await start(page, 'received');
+  await page.getByRole('button', { name: 'Marcar 6 linha(s) como novas parcelas', exact: true }).click();
+  let failed = false;
+  await page.route('**/functions/v1/receivables-import', async route => {
+    if (route.request().method() !== 'POST' || route.request().postDataJSON().action !== 'preview' || failed) return route.fallback();
+    failed = true;
+    return route.fulfill({ status: 503, headers: { 'access-control-allow-origin': 'http://127.0.0.1:4173' }, json: { error: 'private SQL details must never appear' } });
+  });
+  await page.getByRole('button', { name: 'Validar escolhas de parcelas', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'HTTP503' })).toBeVisible();
+  for (const line of ambiguousLines) await expect(page.getByLabel(`Vínculo da linha ${line + 1}`, { exact: true })).toHaveValue('NEW');
+  await expect(confirmation(page, 'received')).toBeDisabled();
+  await expect(page.getByText('private SQL details', { exact: false })).toHaveCount(0);
+  expect(seen.commits).toHaveLength(0);
+  await page.getByRole('button', { name: 'Validar escolhas de parcelas', exact: true }).click();
+  await expect(confirmation(page, 'received')).toBeEnabled();
+  expect(seen.previews.at(-1).title_mappings).toEqual(choices);
+  expect(seen.commits).toHaveLength(0);
+});
+
+test('resposta que não é JSON informa a falha do serviço sem expor o conteúdo nem permitir confirmação', async ({ page }) => {
+  const seen = await start(page, 'received');
+  await page.getByRole('button', { name: 'Marcar 6 linha(s) como novas parcelas', exact: true }).click();
+  await page.route('**/functions/v1/receivables-import', async route => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    return route.fulfill({ status: 502, headers: { 'access-control-allow-origin': 'http://127.0.0.1:4173' }, contentType: 'text/html', body: '<html>private SQL diagnostic</html>' });
+  });
+  await page.getByRole('button', { name: 'Validar escolhas de parcelas', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'HTTP502' })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'CR_INVALID_RESPONSE' })).toBeVisible();
+  await expect(page.getByText('private SQL diagnostic', { exact: false })).toHaveCount(0);
+  await expect(confirmation(page, 'received')).toBeDisabled();
+  expect(seen.commits).toHaveLength(0);
+});
+
+test('503 na confirmação conserva o envio como incerto e não afirma que nada foi alterado', async ({ page }) => {
+  const seen = await start(page, 'received');
+  await page.getByRole('button', { name: 'Marcar 6 linha(s) como novas parcelas', exact: true }).click();
+  await page.getByRole('button', { name: 'Validar escolhas de parcelas', exact: true }).click();
+  await expect(confirmation(page, 'received')).toBeEnabled();
+  await page.route('**/functions/v1/receivables-import', async route => {
+    if (route.request().method() !== 'POST' || route.request().postDataJSON().action !== 'commit') return route.fallback();
+    return route.fulfill({ status: 503, headers: { 'access-control-allow-origin': 'http://127.0.0.1:4173' }, json: { error: 'private commit information' } });
+  });
+  page.once('dialog', dialog => dialog.accept()); await confirmation(page, 'received').click();
+  const alert = page.getByRole('alert').filter({ hasText: 'HTTP503' });
+  await expect(alert).toBeVisible();
+  await expect(alert).not.toContainText('Nenhum dado foi alterado');
+  await expect(page.getByRole('status').filter({ hasText: 'A confirmação está pendente.' })).toBeVisible();
+  await expect(page.getByLabel('Relatório de títulos quitados de Contas a Receber', { exact: true })).toBeDisabled();
+  await expect(confirmation(page, 'received')).toBeDisabled();
+  await expect(page.getByText('private commit information', { exact: false })).toHaveCount(0);
+  expect(seen.commits).toHaveLength(0);
+});

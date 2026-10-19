@@ -22,5 +22,5 @@ Deno.serve(createReceivablesGateway({
     }
     return { matrix, excel1904: Boolean(workbook.properties.date1904) };
   },
-  log: (event: string) => console.warn(`receivables-import:${event}`),
+  log: (event: { event: string; stage: string; code: string; elapsed_ms: number; request_id: string }) => console.warn(JSON.stringify(event)),
 }));
