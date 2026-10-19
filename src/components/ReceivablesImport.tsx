@@ -77,7 +77,14 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
   const [historyLoading, setHistoryLoading] = useState(true), [historyError, setHistoryError] = useState('');
   const [error, setError] = useState(''), [success, setSuccess] = useState(''), [refresh, setRefresh] = useState(0);
   const controller = useRef<AbortController | null>(null), generation = useRef(0), inputRef = useRef<HTMLInputElement | null>(null);
+  const problemsRef = useRef<HTMLDivElement | null>(null), focusProblems = useRef(false);
   useEffect(() => () => { generation.current++; controller.current?.abort(); }, []);
+  useEffect(() => {
+    if (busy !== null || !problems.length || !focusProblems.current || !problemsRef.current) return;
+    focusProblems.current = false;
+    problemsRef.current.focus({ preventScroll: true });
+    problemsRef.current.scrollIntoView({ block: 'start' });
+  }, [busy, problems]);
   useEffect(() => {
     if (!supabase || !canImport || mode !== 'open') return;
     const abort = new AbortController(); let active = true;
@@ -106,7 +113,7 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
     }).catch(() => { if (active) setHistoryError('Não foi possível carregar o histórico de importações. Tente atualizar novamente.'); }).finally(() => { if (active) setHistoryLoading(false); });
     return () => { active = false; abort.abort(); };
   }, [canImport, refresh]);
-  function resetAnalysis() { generation.current++; controller.current?.abort(); setAnalysis(null); setProblems([]); setError(''); setSuccess(''); setBusy(null); }
+  function resetAnalysis() { generation.current++; controller.current?.abort(); focusProblems.current = false; setAnalysis(null); setProblems([]); setError(''); setSuccess(''); setBusy(null); }
   function changeMode(next: Mode) {
     if (busy || uncertain || next === mode) return;
     resetAnalysis(); setMode(next); setFile(null); setComplete(false); setMappings({}); setCollectorMappings({}); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); if (inputRef.current) inputRef.current.value = '';
@@ -116,11 +123,11 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
     if (!supabase || !file || !complete || !canImport || busy) return;
     const current = ++generation.current;
     controller.current?.abort(); const abort = new AbortController(); controller.current = abort;
-    setBusy('analyzing'); setProblems([]); setError(''); setSuccess('');
+    focusProblems.current = false; setBusy('analyzing'); setProblems([]); setError(''); setSuccess('');
     try {
       const parsed = mode === 'received' ? await analyzeReceivableReceivedFile(file, abort.signal) : await analyzeReceivableFile(file, abort.signal);
       if (current !== generation.current) return;
-      if (parsed.errors.length) { setAnalysis(null); setProblems(parsed.errors); return; }
+      if (parsed.errors.length) { setAnalysis(null); focusProblems.current = true; setProblems(parsed.errors); return; }
       let canonical: ServerPreview, recoveredCollectors = false;
       try {
         canonical = await receivableImportRequest<ServerPreview>({ action: 'preview', mode, file_name: file.name, file_base64: parsed.base64, title_mappings: mappings, ...(mode === 'open' ? { collector_mappings: collectorMappings } : {}) }, abort.signal);
@@ -141,11 +148,12 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
       setAnalysis({ file, mode, base64: parsed.base64, rows: canonical.rows, preview: canonical.preview, ...totals });
       // SQL preview identifies each financial item from 1; the header occupies
       // Excel row 1. Parser and HTTP 422 errors already use physical rows.
-      setProblems(safeProblems(canonical.preview.errors).map(problem => ({ ...problem, line: problem.line > 0 ? problem.line + 1 : problem.line }))); setMappingsDirty(recoveredCollectors);
+      const nextProblems = safeProblems(canonical.preview.errors).map(problem => ({ ...problem, line: problem.line > 0 ? problem.line + 1 : problem.line }));
+      focusProblems.current = nextProblems.length > 0; setProblems(nextProblems); setMappingsDirty(recoveredCollectors);
     } catch (failure) { if (current === generation.current && !abort.signal.aborted) {
       setAnalysis(null);
       const details = safeProblems(failure && typeof failure === 'object' && 'errors' in failure ? failure.errors : null);
-      if (details.length) setProblems(details); else setError(receivableError(failure, 'Não foi possível concluir a análise. Nenhum dado foi alterado.'));
+      if (details.length) { focusProblems.current = true; setProblems(details); } else setError(receivableError(failure, 'Não foi possível concluir a análise. Nenhum dado foi alterado.'));
     } } finally { if (current === generation.current) setBusy(null); }
   }
   async function commit() {
@@ -200,6 +208,15 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
         <label className="checkbox-field"><input type="checkbox" checked={complete} disabled={busy !== null || uncertain} onChange={event => { setComplete(event.target.checked); setAnalysis(null); }} />{mode === 'open' ? ' Confirmo que este arquivo contém títulos em aberto, a vencer e vencidos, do sistema de origem.' : ' Confirmo que todas as linhas deste arquivo são títulos quitados, com data e valor efetivamente recebidos.'}</label>
         <div className="inline-actions"><button type="submit" className="button" disabled={!file || !complete || busy !== null || historyLoading}>{busy === 'analyzing' ? 'Analisando cópia…' : 'Analisar arquivo'}</button>{busy === 'analyzing' && !uncertain && <button type="button" className="button secondary" onClick={resetAnalysis}>Cancelar análise</button>}</div>
       </form>
+      {problems.length > 0 && <div ref={problemsRef} tabIndex={-1} role="region" aria-label="Problemas encontrados na importação">
+        <div className="notice error" role="alert">
+          <p><strong>Importação bloqueada.</strong> Nenhum dado foi alterado. {problems.length} problema(s) encontrado(s) nesta análise.</p>
+          <p><strong>{problems[0].line > 0 ? `Linha ${problems[0].line} · ` : ''}{problems[0].column}:</strong> {problems[0].problem}</p>
+          <p><strong>Como corrigir:</strong> {problems[0].correction}</p>
+          <p>Confira os detalhes abaixo e analise o arquivo novamente.</p>
+        </div>
+        <div className="table-wrap"><table><caption>Problemas encontrados · até 100 erros por análise</caption><thead><tr><th>Linha</th><th>Coluna</th><th>Problema</th><th>Como corrigir</th></tr></thead><tbody>{problems.map((problem, index) => <tr key={index}><td>{problem.line || '—'}</td><td>{problem.column}</td><td>{problem.problem}</td><td>{problem.correction}</td></tr>)}</tbody></table></div>
+      </div>}
       {mode === 'open' && analysis && <section className="stack" aria-labelledby="import-collectors-title"><h3 id="import-collectors-title">Cobradoras responsáveis pela carteira</h3>
         <p className="help-text">A responsável é vinculada ao cliente e acompanha seus títulos. Os vínculos existentes ficam preservados. Você também pode reimportar o mesmo arquivo para completar carteiras sem responsável, sem duplicar os títulos.</p>
         {collectorsLoading && <p role="status">Consultando cobradoras…</p>}
@@ -219,7 +236,6 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
         <div className="table-wrap"><table><caption>Vínculo das parcelas antes da importação</caption><thead><tr><th>Linha</th><th>Cliente / NF</th><th>Vencimento / Valor original</th><th>Vínculo confirmado</th></tr></thead><tbody>{mappingRows.map(row => <tr key={row.line}><td>{row.line + 1}</td><td>{row.client_name} · {row.document} · Filial {row.branch}</td><td>{dateLabel(row.due_date)} · {formatCents(row.amount_cents)}</td><td><label className="field">Vínculo da linha {row.line + 1}<select aria-label={`Vínculo da linha ${row.line + 1}`} value={mappings[String(row.line)] ?? ''} disabled={busy !== null || uncertain} onChange={event => mapTitle(row.line, event.target.value)}><option value="">Selecione a parcela</option><option value="NEW">Nova parcela</option>{row.candidates?.map(candidate => <option key={candidate.id} value={candidate.id}>{dateLabel(candidate.due_date)} · {formatCents(candidate.amount_cents)} · {candidate.status === 'VALIDATED' ? 'Quitado' : 'Em aberto'}</option>)}</select></label></td></tr>)}</tbody></table></div>
         {mappingsDirty && <p className="notice">Vínculos alterados. Clique em Analisar arquivo novamente para conferir o resultado antes de concluir.</p>}
       </div>}
-      {problems.length > 0 && <div><p className="notice error" role="alert">Importação bloqueada. Nenhum dado foi alterado. Corrija os problemas ou confira os vínculos e analise novamente.</p><div className="table-wrap"><table><caption>Problemas encontrados · até 100 erros por análise</caption><thead><tr><th>Linha</th><th>Coluna</th><th>Problema</th><th>Como corrigir</th></tr></thead><tbody>{problems.map((problem, index) => <tr key={index}><td>{problem.line || '—'}</td><td>{problem.column}</td><td>{problem.problem}</td><td>{problem.correction}</td></tr>)}</tbody></table></div></div>}
       {analysis && <div className="stack"><h3>Conferência de Contas a Receber</h3><p>{analysis.preview.row_count} títulos · total original {formatCents(analysis.nominalTotal)} · {analysis.preview.new_count} novos títulos.</p>
         {mode === 'received' ? <><p><strong>Total recebido efetivo: {formatCents(analysis.receivedTotal)}</strong></p><p>{analysis.preview.received_count ?? 0} recebimentos novos · {analysis.preview.matched_count ?? 0} já registrados · {analysis.preview.correction_count ?? 0} correções · {analysis.preview.historical_count ?? 0} quitados do histórico.</p><p className="notice">A confirmação deste arquivo valida os recebimentos conferidos. A apuração de comissões usa o valor efetivamente recebido; importar não significa pagar comissão.</p></> : <p className="notice">{analysis.preview.changed_count ?? 0} títulos com alterações. Ausências permanecem como estão; nenhum recebimento será confirmado.</p>}
         {(analysis.preview.validated_in_source_count ?? 0) > 0 && <p className="notice">{analysis.preview.validated_in_source_count} título(s) já quitado(s) reaparecem no relatório. A importação não reabre esses títulos.</p>}

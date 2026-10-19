@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.14.0**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.14.1**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Diagnóstico da importação de Contas a Receber — 0.14.1
+
+Quando a análise bloqueia um arquivo, o aviso agora mostra imediatamente o primeiro erro com linha, coluna e orientação, seguido da tabela completa. A página traz esse diagnóstico para a área visível e preserva o arquivo selecionado. As regras de títulos, carteiras e recebimentos continuam em vigor. Esta melhoria de apresentação não confirma a causa de um novo arquivo sem analisar seus dados ou o erro específico.
 
 ## Identidade mensal e campanhas — 0.14.0
 

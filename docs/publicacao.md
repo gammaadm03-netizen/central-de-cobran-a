@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.14.0
+# Publicação e ativação — 0.14.1
+
+A atualização **0.14.1** apresenta o primeiro erro detalhado da importação de Contas a Receber perto do botão de análise, com foco automático e tabela completa preservada. Depende somente do site, sem mudança de banco ou função. A causa do novo arquivo informado pelo usuário depende de receber o erro específico ou as planilhas atuais.
 
 A atualização **0.14.0** renova a apresentação da tela inicial, amplia logo e nome da Central e mostra o crédito solicitado abaixo da versão. Usa campanhas mensais do calendário brasileiro, incluindo o laço de Outubro Rosa e uma mensagem compacta em todas as abas autorizadas. Basta o deploy do site e atualizar a página. Não há alterações de banco, funções ou importações.
 

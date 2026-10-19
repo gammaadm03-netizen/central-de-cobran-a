@@ -457,3 +457,19 @@ Verificação local em 19/10/2026:
 - O cenário de celular foi repetido após acrescentar a largura de 320 px, além de 390 px, e passou. Telas de entrada desktop/celular e card no painel com dados sintéticos foram inspecionados visualmente. Não foram observadas sobreposições ou rolagem horizontal.
 
 A atualização depende somente do site 0.14.0; não exige SQL, funções ou reimportação. O agente não confirmou o término do deploy Cloudflare.
+
+
+## Diagnóstico visível de Contas a Receber — 0.14.1
+
+O usuário informou bloqueio nos modos abertos e quitados. A imagem mostra somente o aviso geral e um nome de arquivo diferente dos anexos disponíveis. Os dois modelos anteriormente enviados foram lidos localmente pelos mesmos adaptadores Excel e parser usados no worker e no gateway: 962 títulos abertos e 178 quitados, sem erros de leitura. Isso não comprova a importação no banco nem identifica o motivo do novo bloqueio. Nenhum dado pessoal ou financeiro dos anexos foi adicionado ao repositório ou aos testes.
+
+A tela conserva os erros do parser, do HTTP 422 e da prévia SQL. O problema de apresentação confirmado era que o aviso genérico aparecia antes da tabela detalhada, fora do trecho visível da imagem. Agora o aviso inclui o primeiro erro com linha física, coluna e orientação; a tabela completa fica imediatamente após o formulário, antes das escolhas de carteira e parcela. Ao concluir uma análise com problemas, a página leva foco e rolagem ao diagnóstico. Editar uma escolha existente não desloca novamente o foco. Arquivo, declaração e vínculos permanecem disponíveis para nova análise.
+
+Validação local em 19/10/2026:
+
+- Build TypeScript/Vite da versão 0.14.1 aprovado; o aviso existente de tamanho dos chunks não impede a geração.
+- 22 cenários existentes de importação de quitados e cobradoras aprovados.
+- Seis cenários novos de navegador aprovados: erros locais e HTTP 422 nos dois modos, erro de arquivo sem linha e vínculo obrigatório de parcela. Conferidos aviso visível, foco, linhas físicas, tabela, preservação do arquivo, ausência de gravações e bloqueio da confirmação. Na primeira execução, as seis falhas eram de seleção/foco e tolerância de viewport no próprio teste; essas verificações foram corrigidas e os seis cenários repetidos passaram.
+- Nenhuma regra de valor, data, identidade, parcela, responsável, recebimento ou comissão foi alterada. Parser, gateway e migrations permanecem inalterados. Esta versão depende somente do site.
+
+A causa do arquivo atual continua pendente do erro específico ou dos relatórios atuais. Não há evidência para afrouxar validações financeiras nem para afirmar que a importação foi corrigida. O agente não executou importações no Supabase remoto nem confirmou o término do deploy Cloudflare.
