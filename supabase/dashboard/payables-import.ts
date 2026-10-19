@@ -33,9 +33,9 @@ function parseCivilDate(value, excel1904 = false) {
     const date = new Date(epoch + (value - (!excel1904 && value > 60 ? 1 : 0)) * 864e5);
     return civil(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
   }
-  const text = String(value ?? "").trim();
-  const br = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text);
-  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  const text2 = String(value ?? "").trim();
+  const br = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text2);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text2);
   if (!br && !iso) throw new Error("Use dd/mm/aaaa ou aaaa-mm-dd; datas abreviadas s\xE3o amb\xEDguas.");
   return br ? civil(+br[3], +br[2], +br[1]) : civil(+iso[1], +iso[2], +iso[3]);
 }
@@ -48,8 +48,8 @@ function parsePayableErpDate(value, excel1904) {
     if (!Number.isFinite(value) || value < 1 || value > 2958465) throw new Error("Data Excel inv\xE1lida.");
     return parseCivilDate(Math.floor(value), excel1904);
   }
-  const text = String(value ?? "").trim();
-  const timestamp = /^(\d{2}\/\d{2}\/\d{4}) +(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text);
+  const text2 = String(value ?? "").trim();
+  const timestamp = /^(\d{2}\/\d{2}\/\d{4}) +(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text2);
   if (!timestamp) return parseCivilDate(value, excel1904);
   if (+timestamp[2] > 23 || +timestamp[3] > 59 || +(timestamp[4] ?? 0) > 59) throw new Error("Hor\xE1rio inv\xE1lido. Use hh:mm ou hh:mm:ss, entre 00:00:00 e 23:59:59.");
   return parseCivilDate(timestamp[1], excel1904);
@@ -70,19 +70,20 @@ function parseMoneyCents(value) {
     if (cents2 > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Valor excede o limite seguro.");
     return Number(cents2);
   }
-  let text = String(value ?? "").trim().replace(/^R\$\s*/, "");
-  if (!text) throw new Error("Valor obrigat\xF3rio.");
-  if (!/^(?:\d+|\d{1,3}(?:\.\d{3})+)(?:,\d{1,2})?$/.test(text)) throw new Error("Use valor brasileiro, por exemplo 1.234,56, com at\xE9 duas casas decimais.");
-  text = text.replaceAll(".", "");
-  const [integer, decimal = ""] = text.split(",");
+  let text2 = String(value ?? "").trim().replace(/^R\$\s*/, "");
+  if (!text2) throw new Error("Valor obrigat\xF3rio.");
+  if (!/^(?:\d+|\d{1,3}(?:\.\d{3})+)(?:,\d{1,2})?$/.test(text2)) throw new Error("Use valor brasileiro, por exemplo 1.234,56, com at\xE9 duas casas decimais.");
+  text2 = text2.replaceAll(".", "");
+  const [integer, decimal = ""] = text2.split(",");
   const cents = BigInt(integer) * 100n + BigInt(decimal.padEnd(2, "0"));
   if (cents > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Valor excede o limite seguro.");
   return Number(cents);
 }
-function parseCsv(text) {
-  text = text.replace(/^\uFEFF/, "");
-  if (text.includes("\0")) throw new Error("CSV cont\xE9m bytes inv\xE1lidos. Salve uma c\xF3pia em UTF-8.");
-  const sample = text.split(/\r?\n/, 1)[0];
+function parseCsv(text2, { maxRows = MAX_ROWS + 1 } = {}) {
+  if (!Number.isSafeInteger(maxRows) || maxRows < 1 || maxRows > MAX_ROWS + 21) throw new Error("Limite de linhas do CSV inv\xE1lido.");
+  text2 = text2.replace(/^\uFEFF/, "");
+  if (text2.includes("\0")) throw new Error("CSV cont\xE9m bytes inv\xE1lidos. Salve uma c\xF3pia em UTF-8.");
+  const sample = text2.split(/\r?\n/, 1)[0];
   let quoted = false, commas = 0, semicolons = 0;
   for (let index = 0; index < sample.length; index++) {
     if (sample[index] === '"') {
@@ -103,13 +104,13 @@ function parseCsv(text) {
     finishField();
     rows.push(row);
     row = [];
-    if (rows.length > MAX_ROWS + 1) throw new Error("A base excede o limite de 5.000 linhas.");
+    if (rows.length > maxRows) throw new Error(maxRows === MAX_ROWS + 1 ? "A base excede o limite de 5.000 linhas." : "O arquivo CSV excede o limite de linhas permitido.");
   }
-  for (let index = 0; index < text.length; index++) {
-    const character = text[index];
+  for (let index = 0; index < text2.length; index++) {
+    const character = text2[index];
     if (inQuote) {
       if (character === '"') {
-        if (text[index + 1] === '"') {
+        if (text2[index + 1] === '"') {
           field += '"';
           index++;
         } else {
@@ -122,7 +123,7 @@ function parseCsv(text) {
       inQuote = true;
     } else if (character === delimiter) finishField();
     else if (character === "\r" || character === "\n") {
-      if (character === "\r" && text[index + 1] === "\n") index++;
+      if (character === "\r" && text2[index + 1] === "\n") index++;
       finishRow();
     } else {
       if (closedQuote) throw new Error("Texto ap\xF3s aspas de fechamento no CSV.");
@@ -213,23 +214,23 @@ function parseChequeNumber(value) {
     return String(primitive);
   }
   if (typeof primitive !== "string") throw new Error(INVALID_CHEQUE);
-  const text = primitive.trim();
-  if (text.length > 150) throw new Error("Limite de 150 caracteres excedido.");
-  if (/^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)[eE][+-]?\d+$/.test(text) || /^-\d+(?:[.,]\d+)?$/.test(text) || /^\d+[.,]\d+$/.test(text) || /[\u0000-\u001f\u007f]/.test(text)) throw new Error(INVALID_CHEQUE);
-  return text;
+  const text2 = primitive.trim();
+  if (text2.length > 150) throw new Error("Limite de 150 caracteres excedido.");
+  if (/^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)[eE][+-]?\d+$/.test(text2) || /^-\d+(?:[.,]\d+)?$/.test(text2) || /^\d+[.,]\d+$/.test(text2) || /[\u0000-\u001f\u007f]/.test(text2)) throw new Error(INVALID_CHEQUE);
+  return text2;
 }
 function isChequeNumberHeader(value) {
   return headerMap.get(normalize(scalar(value))) === "cheque_number";
 }
 function readPayableChequeCell(value, numFmt) {
   if (value instanceof Date) throw new Error(UNSUPPORTED_CHEQUE_FORMAT);
-  const text = parseChequeNumber(value);
-  if (typeof value !== "number") return text;
+  const text2 = parseChequeNumber(value);
+  if (typeof value !== "number") return text2;
   const format = String(numFmt ?? "").trim();
-  if (!format || format.toUpperCase() === "GENERAL" || format === "@") return text;
+  if (!format || format.toUpperCase() === "GENERAL" || format === "@") return text2;
   if (!/^0+$/.test(format)) throw new Error(UNSUPPORTED_CHEQUE_FORMAT);
   if (format.length > 150) throw new Error("Limite de 150 caracteres excedido.");
-  return text.padStart(format.length, "0");
+  return text2.padStart(format.length, "0");
 }
 function validatePayableRows(matrix, { excel1904 = false } = {}) {
   const errors = [], rows = [];
@@ -289,13 +290,13 @@ function validatePayableRows(matrix, { excel1904 = false } = {}) {
         errors.push({ line: index + 1, column: COLUMN_LABELS[key], problem: error.message, correction: "Corrija a c\xE9lula no arquivo original e selecione uma nova c\xF3pia." });
       }
     }
-    const identity = JSON.stringify([row.branch, row.entry_number, row.due_date, row.amount_cents]);
-    if (errors.length === before && keys.has(identity)) errors.push({ line: index + 1, column: "N\xBA lan\xE7amento", problem: "Chave de t\xEDtulo duplicada na mesma base.", correction: "Confira filial, lan\xE7amento, vencimento e valor. N\xE3o remova duplicados sem validar a origem." });
+    const identity2 = JSON.stringify([row.branch, row.entry_number, row.due_date, row.amount_cents]);
+    if (errors.length === before && keys.has(identity2)) errors.push({ line: index + 1, column: "N\xBA lan\xE7amento", problem: "Chave de t\xEDtulo duplicada na mesma base.", correction: "Confira filial, lan\xE7amento, vencimento e valor. N\xE3o remova duplicados sem validar a origem." });
     if (errors.length === before) {
       total += row.amount_cents;
       if (!Number.isSafeInteger(total)) errors.push({ line: index + 1, column: "Valor", problem: "Total do relat\xF3rio excede o limite de precis\xE3o.", correction: "Confira valores e origem da base antes de importar." });
       else {
-        keys.add(identity);
+        keys.add(identity2);
         rows.push(row);
       }
     }
@@ -359,32 +360,32 @@ function validatePayablePaidRows(matrix, { excel1904 = false } = {}) {
         else if (key === "cheque_number") row.cheque_number = parseChequeNumber(value);
         else if (key === "issued_on") row.issued_on = String(value).trim() ? timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904) : null;
         else {
-          const text = String(value ?? "").trim().replace(/\s+/g, " ");
+          const text2 = String(value ?? "").trim().replace(/\s+/g, " ");
           if (key === "source_status") {
-            if (!["", "PAGO", "CHEQUE", "QUITADO", "LIQUIDADO", "COMPENSADO"].includes(text.toUpperCase())) throw new Error("O relat\xF3rio de pagamentos cont\xE9m situa\xE7\xE3o incompat\xEDvel com pagamento confirmado.");
+            if (!["", "PAGO", "CHEQUE", "QUITADO", "LIQUIDADO", "COMPENSADO"].includes(text2.toUpperCase())) throw new Error("O relat\xF3rio de pagamentos cont\xE9m situa\xE7\xE3o incompat\xEDvel com pagamento confirmado.");
           } else if (key === "description" || key === "plan") {
             const maximum = key === "description" ? 1500 : 300;
-            if (text.length > maximum) throw new Error(`Limite de ${maximum} caracteres excedido.`);
-            if (text) row[key] = text;
+            if (text2.length > maximum) throw new Error(`Limite de ${maximum} caracteres excedido.`);
+            if (text2) row[key] = text2;
           } else {
-            if (!text) throw new Error("Campo obrigat\xF3rio vazio.");
+            if (!text2) throw new Error("Campo obrigat\xF3rio vazio.");
             const maximum = key === "bank_account" ? 300 : 150;
-            if (text.length > maximum) throw new Error(`Limite de ${maximum} caracteres excedido.`);
-            if (key === "bank_account") row.paid_bank = text;
-            else row[key] = text;
+            if (text2.length > maximum) throw new Error(`Limite de ${maximum} caracteres excedido.`);
+            if (key === "bank_account") row.paid_bank = text2;
+            else row[key] = text2;
           }
         }
       } catch (error) {
         errors.push({ line: index + 1, column: COLUMN_LABELS[key], problem: error.message, correction: "Confira o comprovante e corrija o relat\xF3rio de pagamentos; n\xE3o use datas ou bancos previstos." });
       }
     }
-    const identity = JSON.stringify([row.branch.toUpperCase(), row.entry_number.toUpperCase()]);
-    if (errors.length === before && identities.has(identity)) errors.push({ line: index + 1, column: "N\xBA lan\xE7amento", problem: "Lan\xE7amento repetido no relat\xF3rio de pagamentos.", correction: "Mantenha um \xFAnico pagamento integral por filial e n\xFAmero de lan\xE7amento." });
+    const identity2 = JSON.stringify([row.branch.toUpperCase(), row.entry_number.toUpperCase()]);
+    if (errors.length === before && identities.has(identity2)) errors.push({ line: index + 1, column: "N\xBA lan\xE7amento", problem: "Lan\xE7amento repetido no relat\xF3rio de pagamentos.", correction: "Mantenha um \xFAnico pagamento integral por filial e n\xFAmero de lan\xE7amento." });
     if (errors.length === before) {
       total += row.amount_paid_cents;
       if (!Number.isSafeInteger(total)) errors.push({ line: index + 1, column: "Valor", problem: "Total do relat\xF3rio excede o limite de precis\xE3o.", correction: "Confira valores e origem da base antes de importar." });
       else {
-        identities.add(identity);
+        identities.add(identity2);
         rows.push(row);
       }
     }
@@ -394,10 +395,59 @@ function validatePayablePaidRows(matrix, { excel1904 = false } = {}) {
   return { rows: errors.length ? [] : rows, errors };
 }
 
+// supabase/functions/payables-import/reconciliation.mjs
+var UUID = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i;
+var ROW_KEY = /^row:([1-9]\d{0,3})$/;
+var ACTIONS = /* @__PURE__ */ new Set(["WRITE_OFF", "PAID", "REOPEN"]);
+var object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+var safeAmount = (value) => Number.isSafeInteger(value) && value >= 0;
+var text = (value, max) => typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
+var identity = (value) => String(value ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+function validReconciliationDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value < "1900-01-01" || value > "2199-12-31") return false;
+  const date = /* @__PURE__ */ new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+function validResolutionKey(value, rowCount = 5e3) {
+  if (typeof value !== "string") return false;
+  const row = ROW_KEY.exec(value);
+  return row ? Number(row[1]) <= rowCount : value.startsWith("title:") && UUID.test(value.slice(6));
+}
+function validResolutionChoices(value, rowCount = 5e3) {
+  if (!object(value) || Object.keys(value).length > 1e4) return false;
+  return Object.entries(value).every(([key, choice]) => {
+    if (!validResolutionKey(key, rowCount) || !object(choice) || !ACTIONS.has(choice.action) || !text(choice.reason, 1e3) || choice.reason !== choice.reason.trim()) return false;
+    const fields = choice.action === "PAID" ? ["action", "reason", "paid_on", "amount_paid_cents", "bank_account_id"] : ["action", "reason"];
+    if (Object.keys(choice).some((field) => !fields.includes(field))) return false;
+    return choice.action !== "PAID" || validReconciliationDate(choice.paid_on) && Number.isSafeInteger(choice.amount_paid_cents) && choice.amount_paid_cents > 0 && typeof choice.bank_account_id === "string" && UUID.test(choice.bank_account_id);
+  });
+}
+function validReconciliationPreview(preview, { rowCount, mode, fullReport, sourceRows, resolutionChoices = {} } = {}) {
+  if (!object(preview) || preview.reconciliation_version !== "043" || preview.row_count !== rowCount || preview.mode !== mode || !text(preview.financial_revision, 256) || preview.financial_revision !== preview.financial_revision.trim() || typeof preview.can_commit !== "boolean" || !Array.isArray(preview.reconciliation_items) || preview.reconciliation_items.length > 15e3 || !Array.isArray(preview.resolution_errors) || preview.resolution_errors.length > 15e3 || preview.can_commit && preview.resolution_errors.length !== 0 || mode === "forecast" && preview.full_report !== fullReport) return false;
+  const keys = /* @__PURE__ */ new Set();
+  for (const item of preview.reconciliation_items) {
+    if (!object(item) || !validResolutionKey(item.key, rowCount) || keys.has(item.key) || !["CENT", "MISSING", "REAPPEARED"].includes(item.kind) || !(item.line === null || Number.isSafeInteger(item.line) && item.line >= 1 && item.line <= rowCount) || !(item.title_id === null || typeof item.title_id === "string" && UUID.test(item.title_id)) || !text(item.branch, 300) || !text(item.entry_number, 300) || typeof item.description !== "string" || item.description.length > 1500 || !(validReconciliationDate(item.due_date) || !preview.can_commit && item.title_id === null && item.due_date === null) || !(safeAmount(item.amount_cents) || !preview.can_commit && item.title_id === null && item.amount_cents === null) || !Array.isArray(item.allowed_actions) || item.allowed_actions.length > 3 || new Set(item.allowed_actions).size !== item.allowed_actions.length || item.allowed_actions.some((action) => !ACTIONS.has(action)) || !(item.selected_action === null || item.allowed_actions.includes(item.selected_action)) || typeof item.requires_resolution !== "boolean" || !(item.problem === null || typeof item.problem === "string" && item.problem.length <= 2e3) || item.kind === "CENT" && item.allowed_actions.some((action) => action !== "WRITE_OFF")) return false;
+    if (preview.can_commit && item.requires_resolution && !item.selected_action) return false;
+    if (item.selected_action !== (resolutionChoices[item.key]?.action ?? null)) return false;
+    if (preview.can_commit && item.problem) return false;
+    if (item.kind === "CENT") {
+      if (item.line === null || item.key !== `row:${item.line}`) return false;
+    } else if (item.title_id === null || item.key !== `title:${item.title_id}` || mode !== "forecast" || item.kind === "MISSING" && (!fullReport || item.line !== null) || item.kind === "REAPPEARED" && item.line === null) return false;
+    if (Array.isArray(sourceRows) && item.line !== null) {
+      const row = sourceRows[item.line - 1];
+      if (!row || identity(item.branch) !== identity(row.branch) || identity(item.entry_number) !== identity(row.entry_number) || item.kind === "CENT" && (mode === "payments" ? row.amount_paid_cents : row.amount_cents) !== 1) return false;
+    }
+    keys.add(item.key);
+  }
+  if (Array.isArray(sourceRows) && sourceRows.some((row, index) => (mode === "payments" ? row.amount_paid_cents : row.amount_cents) === 1 && !preview.reconciliation_items.some((item) => item.key === `row:${index + 1}` && item.kind === "CENT"))) return false;
+  if (preview.can_commit && Object.keys(resolutionChoices).some((key) => !keys.has(key))) return false;
+  return true;
+}
+
 // supabase/functions/payables-import/handler.mjs
-var MAX_BODY_BYTES = 3 * 1024 * 1024;
+var MAX_BODY_BYTES = 12 * 1024 * 1024;
 var MAX_BASE64_LENGTH = 4 * Math.ceil(MAX_FILE_BYTES / 3);
-var UUID = /^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/;
+var UUID2 = /^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/;
 var SERVICE_FAILURE = "N\xE3o foi poss\xEDvel confirmar a opera\xE7\xE3o. Atualize o hist\xF3rico antes de tentar novamente.";
 var INVALID_REQUEST = "Solicita\xE7\xE3o inv\xE1lida. Selecione novamente o relat\xF3rio completo.";
 var PARSE_FAILURE = "N\xE3o foi poss\xEDvel analisar o arquivo. Salve uma c\xF3pia somente com valores e confira os cabe\xE7alhos.";
@@ -505,7 +555,7 @@ function verifiedSessionId(token, userId) {
   const part = token.split(".")[1];
   if (!part) throw new Error("invalid_session");
   const payload = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/")));
-  if (payload.sub !== userId || typeof payload.session_id !== "string" || !UUID.test(payload.session_id)) throw new Error("invalid_session");
+  if (payload.sub !== userId || typeof payload.session_id !== "string" || !UUID2.test(payload.session_id)) throw new Error("invalid_session");
   return payload.session_id;
 }
 function problemsFor(errors) {
@@ -558,7 +608,7 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
     } catch {
       return respond(503, { error: SERVICE_FAILURE });
     }
-    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(1e4)]);
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(5e4)]);
     async function call(path, { service = false, method = "POST", data } = {}) {
       const result = await fetcher(`${base}${path}`, {
         method,
@@ -581,6 +631,8 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
       if (code === "P0016") return respond(409, { code, error: "H\xE1 lan\xE7amentos repetidos ou vers\xF5es hist\xF3ricas amb\xEDguas para a mesma filial e n\xFAmero. Confira parcelas e o hist\xF3rico. Nenhum dado foi alterado." });
       if (code === "P0019") return respond(409, { code, error: "Ative a atualiza\xE7\xE3o dos n\xFAmeros de cheque no banco de dados antes de importar esta coluna. Nenhum dado foi alterado." });
       if (code === "P0021") return respond(409, { code, error: "Ative a atualiza\xE7\xE3o de previs\xF5es e pagamentos no banco de dados antes de usar este modo. Nenhum dado foi alterado." });
+      if (code === "P0042") return respond(409, { code, error: "Confira a baixa sem pagamento e os dados atuais do t\xEDtulo antes de confirmar." });
+      if (code === "P0043") return respond(409, { code, error: "Confira as escolhas da concilia\xE7\xE3o e atualize o banco e a fun\xE7\xE3o de importa\xE7\xE3o quando solicitado." });
       if (code === "22023" || code === "23514") return respond(400, { code, error: "A importa\xE7\xE3o foi recusada. Confira as linhas, a origem completa e a classifica\xE7\xE3o de todos os planos." });
       if (result.status === 401) return respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." });
       log("upstream_unavailable");
@@ -589,7 +641,7 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
     try {
       const auth = await call("/auth/v1/user", { method: "GET" });
       if (!auth.ok) return auth.status === 401 || auth.status === 403 ? respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." }) : upstreamFailure(auth);
-      if (typeof auth.payload?.id !== "string" || !UUID.test(auth.payload.id)) throw new Error("invalid_identity");
+      if (typeof auth.payload?.id !== "string" || !UUID2.test(auth.payload.id)) throw new Error("invalid_identity");
       let sessionId;
       try {
         sessionId = verifiedSessionId(token, auth.payload.id);
@@ -607,15 +659,16 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
       } catch {
         return respond(400, { error: INVALID_REQUEST });
       }
-      if (Object.keys(body).some((key) => !["action", "file_name", "file_base64", "mappings", "complete", "previous_import_id", "mode", "bank_mappings", "confirm_corrections", "previous_financial_revision"].includes(key)) || !["preview", "commit"].includes(body.action) || Object.hasOwn(body, "mode") && !["forecast", "payments"].includes(body.mode) || body.mode !== "payments" && (Object.hasOwn(body, "bank_mappings") || Object.hasOwn(body, "confirm_corrections") || Object.hasOwn(body, "previous_financial_revision")) || typeof body.file_name !== "string" || body.file_name.length < 1 || body.file_name.length > 250 || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name)) return respond(400, { error: INVALID_REQUEST });
+      const reconciled = body.reconciliation_version === "043";
+      if (Object.keys(body).some((key) => !["action", "file_name", "file_base64", "mappings", "complete", "previous_import_id", "mode", "bank_mappings", "confirm_corrections", "previous_financial_revision", "reconciliation_version", "full_report", "resolution_choices", "request_id"].includes(key)) || !["preview", "commit"].includes(body.action) || Object.hasOwn(body, "mode") && !["forecast", "payments"].includes(body.mode) || Object.hasOwn(body, "reconciliation_version") && !reconciled || Object.hasOwn(body, "request_id") && (typeof body.request_id !== "string" || !UUID2.test(body.request_id)) || !reconciled && ["full_report", "resolution_choices", "request_id"].some((key) => Object.hasOwn(body, key)) || reconciled && (!["forecast", "payments"].includes(body.mode) || !validResolutionChoices(body.resolution_choices ?? {}) || body.mode === "forecast" && typeof body.full_report !== "boolean" || body.mode === "payments" && Object.hasOwn(body, "full_report") && body.full_report !== false) || body.mode !== "payments" && (Object.hasOwn(body, "bank_mappings") || Object.hasOwn(body, "confirm_corrections") || !reconciled && Object.hasOwn(body, "previous_financial_revision")) || typeof body.file_name !== "string" || body.file_name.length < 1 || body.file_name.length > 250 || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name)) return respond(400, { error: INVALID_REQUEST });
       const validPlanMappings = (mappings) => mappings && typeof mappings === "object" && !Array.isArray(mappings) && Object.keys(mappings).length <= MAX_ROWS && !Object.entries(mappings).some(([key, value]) => !key.trim() || key.length > 300 || typeof value !== "string" || !value.trim() || value.length > 100);
-      if (Object.hasOwn(body, "mappings") && !validPlanMappings(body.mappings) || body.mode === "payments" && Object.hasOwn(body, "bank_mappings") && (!body.bank_mappings || typeof body.bank_mappings !== "object" || Array.isArray(body.bank_mappings) || Object.keys(body.bank_mappings).length > MAX_ROWS || Object.entries(body.bank_mappings).some(([key, value]) => !key.trim() || key.length > 1e3 || typeof value !== "string" || !UUID.test(value))) || Object.hasOwn(body, "confirm_corrections") && typeof body.confirm_corrections !== "boolean" || Object.hasOwn(body, "previous_financial_revision") && body.previous_financial_revision !== null && (typeof body.previous_financial_revision !== "string" || !body.previous_financial_revision || body.previous_financial_revision !== body.previous_financial_revision.trim() || body.previous_financial_revision.length > 256)) return respond(400, { error: INVALID_REQUEST });
-      if (body.mode === "payments" && !["read", "write"].every((action) => access.payload.permissions.some((permission) => permission?.resource === "contas_pagar" && permission.action === action))) {
+      if (Object.hasOwn(body, "mappings") && !validPlanMappings(body.mappings) || body.mode === "payments" && Object.hasOwn(body, "bank_mappings") && (!body.bank_mappings || typeof body.bank_mappings !== "object" || Array.isArray(body.bank_mappings) || Object.keys(body.bank_mappings).length > MAX_ROWS || Object.entries(body.bank_mappings).some(([key, value]) => !key.trim() || key.length > 1e3 || typeof value !== "string" || !UUID2.test(value))) || Object.hasOwn(body, "confirm_corrections") && typeof body.confirm_corrections !== "boolean" || Object.hasOwn(body, "previous_financial_revision") && body.previous_financial_revision !== null && (typeof body.previous_financial_revision !== "string" || !body.previous_financial_revision || body.previous_financial_revision !== body.previous_financial_revision.trim() || body.previous_financial_revision.length > 256)) return respond(400, { error: INVALID_REQUEST });
+      if ((body.mode === "payments" || reconciled) && !["read", "write"].every((action) => access.payload.permissions.some((permission) => permission?.resource === "contas_pagar" && permission.action === action))) {
         return respond(403, { code: "42501", error: "Seu perfil n\xE3o tem permiss\xE3o para esta opera\xE7\xE3o." });
       }
       if (/\.xls$/i.test(body.file_name)) return respond(400, { error: "O formato .xls antigo ainda n\xE3o \xE9 aceito. No Excel, salve uma c\xF3pia como .xlsx." });
       if (!/\.(xlsx|xlsm|csv)$/i.test(body.file_name)) return respond(400, { error: "Selecione um arquivo .xlsx, .xlsm ou .csv." });
-      if (body.action === "commit" && (body.complete !== true || body.mode !== "payments" && !validPlanMappings(body.mappings) || body.mode === "payments" && (typeof body.previous_financial_revision !== "string" || !body.previous_financial_revision) || !(body.previous_import_id === null || typeof body.previous_import_id === "string" && UUID.test(body.previous_import_id)))) return respond(400, { error: INVALID_REQUEST });
+      if (body.action === "commit" && (body.complete !== true || body.mode !== "payments" && !validPlanMappings(body.mappings) || (body.mode === "payments" || reconciled) && (typeof body.previous_financial_revision !== "string" || !body.previous_financial_revision) || reconciled && (typeof body.request_id !== "string" || !UUID2.test(body.request_id)) || !(body.previous_import_id === null || typeof body.previous_import_id === "string" && UUID2.test(body.previous_import_id)))) return respond(400, { error: INVALID_REQUEST });
       let bytes;
       try {
         bytes = decodeFile(body.file_base64);
@@ -642,11 +695,15 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
         return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: [{ line: 0, column: "Arquivo", problem: safeMessage(error instanceof Error ? error.message : ""), correction: CORRECTION }] });
       }
       if (parsed.errors.length) return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: problemsFor(parsed.errors) });
+      if (reconciled && !validResolutionChoices(body.resolution_choices ?? {}, parsed.rows.length)) return respond(400, { error: INVALID_REQUEST });
       const hasCheque = parsed.rows.some((row) => Object.hasOwn(row, "cheque_number"));
       if (body.mode || hasCheque) {
         const capabilities = await call("/rest/v1/rpc/payables_import_capabilities", { data: {} });
         const required = body.mode === "forecast" ? "forecast_incremental" : body.mode === "payments" ? "paid_import" : "cheque_number";
         const missingSchema = !capabilities.ok && ["PGRST202", "42883"].includes(capabilities.payload?.code);
+        if (reconciled && (missingSchema || capabilities.ok && (capabilities.payload?.reconciliation_version !== "043" || capabilities.payload?.import_reconciliation !== true))) {
+          return respond(409, { code: "P0043", activation_required: true, error: "Ative a concilia\xE7\xE3o na importa\xE7\xE3o no banco e atualize a fun\xE7\xE3o payables-import antes de confirmar." });
+        }
         if (missingSchema || capabilities.ok && capabilities.payload?.[required] !== true) {
           const code = body.mode ? "P0021" : "P0019";
           return upstreamFailure({ status: 409, payload: { code } });
@@ -657,20 +714,23 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
       const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
       if (signal.aborted) throw new Error("request_timed_out");
       if (body.action === "preview") {
-        const path2 = body.mode === "payments" ? "preview_payables_paid_import" : body.mode === "forecast" ? "preview_payables_forecast_import" : "preview_payables_import";
+        const path2 = body.mode === "payments" ? reconciled ? "preview_payables_paid_import_v2" : "preview_payables_paid_import" : body.mode === "forecast" ? reconciled ? "preview_payables_forecast_import_v2" : "preview_payables_forecast_import" : "preview_payables_import";
         const preview = await call(`/rest/v1/rpc/${path2}`, { data: {
           p_scope: "grupo-consolidado",
           p_rows: parsed.rows,
-          ...body.mode === "payments" ? { p_bank_mappings: body.bank_mappings ?? {}, p_mappings: body.mappings ?? {} } : {}
+          ...body.mode === "payments" ? { p_bank_mappings: body.bank_mappings ?? {}, p_mappings: body.mappings ?? {} } : {},
+          ...reconciled ? { p_resolution_choices: body.resolution_choices ?? {}, ...body.mode === "forecast" ? { p_full_report: body.full_report } : {} } : {}
         } });
+        if (!preview.ok && reconciled && ["PGRST202", "42883", "42P01"].includes(preview.payload?.code)) return respond(409, { code: "P0043", activation_required: true, error: "Atualize a estrutura de concilia\xE7\xE3o na importa\xE7\xE3o antes de analisar novamente." });
         if (!preview.ok) return upstreamFailure(preview);
         if (!preview.payload || preview.payload.row_count !== parsed.rows.length) throw new Error("invalid_preview");
+        if (reconciled && !validReconciliationPreview(preview.payload, { rowCount: parsed.rows.length, mode: body.mode, fullReport: body.full_report, sourceRows: parsed.rows, resolutionChoices: body.resolution_choices ?? {} })) throw new Error("invalid_preview");
         if (body.mode === "payments") {
-          if (preview.payload.mode !== "payments" || !["new_payment_count", "matched_payment_count", "correction_count", "conflict_count"].every((key) => Number.isSafeInteger(preview.payload[key]) && preview.payload[key] >= 0) || typeof preview.payload.financial_revision !== "string" || !preview.payload.financial_revision || preview.payload.financial_revision !== preview.payload.financial_revision.trim() || preview.payload.financial_revision.length > 256 || typeof preview.payload.can_commit !== "boolean" || !Array.isArray(preview.payload.rows) || !Array.isArray(preview.payload.errors) || preview.payload.rows.length !== parsed.rows.length || preview.payload.rows.some((row, index) => !row || typeof row !== "object" || Array.isArray(row) || row.line !== index + 1 || !["NEW_PAYMENT", "MATCHED", "CORRECTION", "UNKNOWN_TITLE", "CONFLICT", "UNCLASSIFIED_PLAN", "UNMAPPED_BANK"].includes(row.outcome) || !(row.title_id === null || typeof row.title_id === "string" && UUID.test(row.title_id)) || !(row.forecast_due_date === null || typeof row.forecast_due_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(row.forecast_due_date)) || typeof row.bank_mapping_key !== "string" || !row.bank_mapping_key || row.bank_mapping_key.length > 1e3 || ["branch", "entry_number", "paid_on", "amount_paid_cents", "paid_bank"].some((key) => row[key] !== parsed.rows[index][key])) || !Array.isArray(preview.payload.unmapped_banks) || !Array.isArray(preview.payload.bank_options) || !Array.isArray(preview.payload.unclassified_plans)) throw new Error("invalid_preview");
+          if (preview.payload.mode !== "payments" || !["new_payment_count", "matched_payment_count", "correction_count", "conflict_count"].every((key) => Number.isSafeInteger(preview.payload[key]) && preview.payload[key] >= 0) || typeof preview.payload.financial_revision !== "string" || !preview.payload.financial_revision || preview.payload.financial_revision !== preview.payload.financial_revision.trim() || preview.payload.financial_revision.length > 256 || typeof preview.payload.can_commit !== "boolean" || !Array.isArray(preview.payload.rows) || !Array.isArray(preview.payload.errors) || preview.payload.rows.length !== parsed.rows.length || preview.payload.rows.some((row, index) => !row || typeof row !== "object" || Array.isArray(row) || row.line !== index + 1 || !["NEW_PAYMENT", "MATCHED", "CORRECTION", "UNKNOWN_TITLE", "CONFLICT", "UNCLASSIFIED_PLAN", "UNMAPPED_BANK", ...reconciled ? ["WRITE_OFF", "WRITE_OFF_PENDING", "ADMIN_WRITEOFF"] : []].includes(row.outcome) || reconciled && row.amount_paid_cents === 1 && !["WRITE_OFF", "WRITE_OFF_PENDING", "UNKNOWN_TITLE", "CONFLICT"].includes(row.outcome) || reconciled && row.outcome === "WRITE_OFF" && row.amount_paid_cents !== 1 || reconciled && preview.payload.can_commit && !["NEW_PAYMENT", "MATCHED", "CORRECTION", "WRITE_OFF"].includes(row.outcome) || !(row.title_id === null || typeof row.title_id === "string" && UUID2.test(row.title_id)) || !(row.forecast_due_date === null || typeof row.forecast_due_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(row.forecast_due_date)) || typeof row.bank_mapping_key !== "string" || !row.bank_mapping_key || row.bank_mapping_key.length > 1e3 || ["branch", "entry_number", "paid_on", "amount_paid_cents", "paid_bank"].some((key) => row[key] !== parsed.rows[index][key])) || !Array.isArray(preview.payload.unmapped_banks) || !Array.isArray(preview.payload.bank_options) || !Array.isArray(preview.payload.unclassified_plans)) throw new Error("invalid_preview");
         } else if (!Number.isSafeInteger(preview.payload.new_count) || !Number.isSafeInteger(preview.payload.open_count) || !Number.isSafeInteger(preview.payload.settled_count) || body.mode === "forecast" && (preview.payload.mode !== "forecast" || preview.payload.settled_count !== 0)) throw new Error("invalid_preview");
         return respond(200, { rows: body.mode === "payments" ? preview.payload.rows : parsed.rows, preview: preview.payload, file_sha256: hash });
       }
-      const path = body.mode === "payments" ? "commit_payables_paid_import_from_gateway" : body.mode === "forecast" ? "commit_payables_forecast_import_from_gateway" : "commit_payables_import_from_gateway";
+      const path = body.mode === "payments" ? reconciled ? "commit_payables_paid_import_v2_from_gateway" : "commit_payables_paid_import_from_gateway" : body.mode === "forecast" ? reconciled ? "commit_payables_forecast_import_v2_from_gateway" : "commit_payables_forecast_import_from_gateway" : "commit_payables_import_from_gateway";
       const committed = await call(`/rest/v1/rpc/${path}`, { service: true, data: {
         p_user_id: auth.payload.id,
         p_session_id: sessionId,
@@ -681,10 +741,16 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
         p_rows: parsed.rows,
         p_mappings: body.mappings ?? {},
         p_previous_import_id: body.previous_import_id,
-        ...body.mode === "payments" ? { p_bank_mappings: body.bank_mappings ?? {}, p_confirm_corrections: body.confirm_corrections ?? false, p_previous_financial_revision: body.previous_financial_revision ?? null } : body.mode === "forecast" ? {} : { p_complete: true }
+        ...body.mode === "payments" ? { p_bank_mappings: body.bank_mappings ?? {}, p_confirm_corrections: body.confirm_corrections ?? false, p_previous_financial_revision: body.previous_financial_revision ?? null } : body.mode === "forecast" ? {} : { p_complete: true },
+        ...reconciled ? {
+          p_resolution_choices: body.resolution_choices ?? {},
+          p_request_id: body.request_id,
+          ...body.mode === "forecast" ? { p_full_report: body.full_report, p_previous_financial_revision: body.previous_financial_revision } : {}
+        } : {}
       } });
+      if (!committed.ok && reconciled && ["PGRST202", "42883", "42P01"].includes(committed.payload?.code)) return respond(409, { code: "P0043", activation_required: true, error: "Atualize a estrutura de concilia\xE7\xE3o na importa\xE7\xE3o antes de confirmar novamente." });
       if (!committed.ok) return upstreamFailure(committed);
-      if (!committed.payload || committed.payload.row_count !== parsed.rows.length || typeof committed.payload.import_id !== "string" || !UUID.test(committed.payload.import_id) || body.mode && (committed.payload.mode !== body.mode || committed.payload.settled_count !== 0)) throw new Error("invalid_commit_response");
+      if (!committed.payload || committed.payload.row_count !== parsed.rows.length || typeof committed.payload.import_id !== "string" || !UUID2.test(committed.payload.import_id) || reconciled && (committed.payload.reconciliation_version !== "043" || committed.payload.request_id !== body.request_id) || body.mode && (committed.payload.mode !== body.mode || committed.payload.settled_count !== 0)) throw new Error("invalid_commit_response");
       return respond(200, committed.payload);
     } catch {
       log("request_unavailable");

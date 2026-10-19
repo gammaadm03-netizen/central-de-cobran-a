@@ -1,6 +1,12 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.15.0**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.16.0**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Conciliação durante a importação de Contas a Pagar — 0.16.0
+
+A previsão distingue relatório completo de inclusões e atualizações. No completo, os títulos ausentes exigem escolha individual entre pagamento com data, valor e conta efetivos ou baixa administrativa sem pagamento. Títulos indicados por R$ 0,01 exigem confirmação individual nos fluxos de previsão e pagamentos, sem seleção global e sem converter a baixa em realizado. Arquivo e escolhas são aplicados atomicamente; confirmação incerta mantém o mesmo protocolo para consulta segura.
+
+Baixas aparecem como **BAIXADO SEM PAGAMENTO**, com auditoria e valor original preservados, fora dos valores financeiros e dos totais de Excel. Reaparecimento com valor real exige reabertura explícita. Pagamentos reais anteriores permanecem até estorno justificado. Ativação: [combinado SQL 042/043, função payables-import existente e site 0.16.0](docs/conciliacao-importacao-cp.md), independente das atualizações 040/041. O código publicado não aplica o SQL nem confirma importações remotas.
 
 ## Análise de Contas a Receber e revalidação — 0.15.0
 
@@ -162,6 +168,11 @@ npm run test:payable-full-payment-sql
 npm run test:payable-cheques-sql
 npm run test:payables-management-sql
 npm run test:payable-paid-import-sql
+npm run test:payable-administrative-writeoff-sql
+npm run test:payable-forecast-reconciliation-sql
+npm run test:payable-paid-reconciliation-sql
+npm run bundle:payable-import-reconciliation
+npm run bundle:payables-gateway
 npm run test:payables-operations-sql
 npm run test:treasury-sql
 npm run test:director-sql

@@ -59,19 +59,21 @@ function setup(options = {}) {
     if (path === '/rest/v1/rpc/payables_import_capabilities') {
       assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
       if (options.capabilityError) return json(options.capabilityError, options.capabilityStatus ?? 404);
-      return json(options.capabilities ?? { cheque_number:true, forecast_incremental:true, paid_import:true });
+      return json(options.capabilities ?? { cheque_number:true, forecast_incremental:true, paid_import:true, import_reconciliation:true, reconciliation_version:'043' });
     }
-    if (['/rest/v1/rpc/preview_payables_import', '/rest/v1/rpc/preview_payables_forecast_import', '/rest/v1/rpc/preview_payables_paid_import'].includes(path)) {
+    if (['/rest/v1/rpc/preview_payables_import', '/rest/v1/rpc/preview_payables_forecast_import', '/rest/v1/rpc/preview_payables_paid_import', '/rest/v1/rpc/preview_payables_forecast_import_v2', '/rest/v1/rpc/preview_payables_paid_import_v2'].includes(path)) {
       assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
       if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
       if (options.previewPayload) return json(options.previewPayload);
-      if (path.endsWith('/preview_payables_paid_import')) return json({ mode:'payments', previous_import_id:null, financial_revision:'17', row_count:data.p_rows.length, rows:data.p_rows.map((row, index) => ({ ...row, line:index+1, title_id:IMPORT, outcome:'NEW_PAYMENT', forecast_due_date:'2026-10-10', bank_mapping_key:JSON.stringify([row.branch.toUpperCase(), row.paid_bank.toUpperCase()]), bank_account_id:BANK, title_amount_cents:row.amount_paid_cents, problem:'' })), new_payment_count:data.p_rows.length, matched_payment_count:0, correction_count:0, conflict_count:0, errors:[], unmapped_banks:[], bank_options:[], unclassified_plans:[], can_commit:true });
-      return json({ previous_import_id: null, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, settled_count: 0, ...(path.endsWith('/preview_payables_forecast_import') ? { mode:'forecast', changed_count:0 } : {}) });
+      const defaultDecisions = Object.entries(data.p_resolution_choices ?? {}).map(([key,choice]) => ({ key,kind:'MISSING',line:null,title_id:key.slice(6),branch:'Filial sintética',entry_number:'AUSENTE-SINTETICO',description:'Título sintético ausente',due_date:'2026-10-18',amount_cents:10000,allowed_actions:['PAID','WRITE_OFF'],selected_action:choice.action,requires_resolution:true,problem:null }));
+      const reconciliation = path.endsWith('_v2') ? { reconciliation_version:'043', financial_revision:'17', full_report:data.p_full_report ?? false, reconciliation_items:options.reconciliationItems ?? defaultDecisions, resolution_errors:[], can_commit:options.reconciliationCanCommit ?? true, bank_accounts:[] } : {};
+      if (path.includes('/preview_payables_paid_import')) return json({ mode:'payments', previous_import_id:null, financial_revision:'17', row_count:data.p_rows.length, rows:data.p_rows.map((row, index) => ({ ...row, line:index+1, title_id:IMPORT, outcome:options.paidOutcome ?? 'NEW_PAYMENT', forecast_due_date:'2026-10-10', bank_mapping_key:JSON.stringify([row.branch.toUpperCase(), row.paid_bank.toUpperCase()]), bank_account_id:BANK, title_amount_cents:row.amount_paid_cents, problem:'' })), new_payment_count:data.p_rows.length, matched_payment_count:0, correction_count:0, conflict_count:0, errors:[], unmapped_banks:[], bank_options:[], unclassified_plans:[], can_commit:true, ...reconciliation });
+      return json({ previous_import_id: null, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, settled_count: 0, ...(path.includes('/preview_payables_forecast_import') ? { mode:'forecast', changed_count:0 } : {}), ...reconciliation });
     }
-    if (['/rest/v1/rpc/commit_payables_import_from_gateway', '/rest/v1/rpc/commit_payables_forecast_import_from_gateway', '/rest/v1/rpc/commit_payables_paid_import_from_gateway'].includes(path)) {
+    if (['/rest/v1/rpc/commit_payables_import_from_gateway', '/rest/v1/rpc/commit_payables_forecast_import_from_gateway', '/rest/v1/rpc/commit_payables_paid_import_from_gateway', '/rest/v1/rpc/commit_payables_forecast_import_v2_from_gateway', '/rest/v1/rpc/commit_payables_paid_import_v2_from_gateway'].includes(path)) {
       assert.equal(init.headers.apikey, SERVICE); assert.equal(init.headers.Authorization, `Bearer ${SERVICE}`);
       if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
-      return json(options.commitPayload ?? { import_id: IMPORT, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, settled_count: 0, ...(path.endsWith('/commit_payables_forecast_import_from_gateway') ? { mode:'forecast' } : path.endsWith('/commit_payables_paid_import_from_gateway') ? { mode:'payments' } : {}) });
+      return json(options.commitPayload ?? { import_id: IMPORT, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, settled_count: 0, ...(path.includes('/commit_payables_forecast_import') ? { mode:'forecast' } : path.includes('/commit_payables_paid_import') ? { mode:'payments' } : {}), ...(path.includes('_v2_') ? { reconciliation_version:'043', request_id:data.p_request_id } : {}) });
     }
     throw new Error('Unexpected upstream path');
   };
@@ -212,9 +214,90 @@ test('upstream failures never expose credentials, SQL, responses or raw exceptio
 
 test('actual streamed body bytes are bounded even when Content-Length lies', async () => {
   const app = setup(); let canceled = false, emitted = 0;
-  const stream = new ReadableStream({ pull(controller) { emitted++; if (emitted > 8) return controller.close(); controller.enqueue(new Uint8Array(512 * 1024).fill(32)); }, cancel() { canceled = true; } });
+  const stream = new ReadableStream({ pull(controller) { emitted++; if (emitted > 28) return controller.close(); controller.enqueue(new Uint8Array(512 * 1024).fill(32)); }, cancel() { canceled = true; } });
   const response = await app.handle(new Request(`${BASE}/functions/v1/payables-import`, { method: 'POST', headers: { Origin: ORIGIN, Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'Content-Length': '1' }, body: stream, duplex: 'half' }));
   assert.equal(response.status, 400); assert.equal(canceled, true); assert.equal(app.calls.length, 2);
+});
+
+test('043 full and incremental forecasts forward only canonical source rows and individual decisions', async () => {
+  for (const full_report of [false, true]) {
+    const app = setup(), resolution_choices = full_report ? { [`title:${IMPORT}`]: { action:'WRITE_OFF', reason:'Baixa sintética confirmada individualmente.' } } : {};
+    const response = await app.send(body('preview', { mode:'forecast', reconciliation_version:'043', full_report, resolution_choices }));
+    assert.equal(response.status, 200);
+    const call = app.calls.at(-1);
+    assert.equal(call.path, '/rest/v1/rpc/preview_payables_forecast_import_v2');
+    assert.equal(call.data.p_scope, 'grupo-consolidado'); assert.equal(call.data.p_full_report, full_report);
+    assert.deepEqual(call.data.p_resolution_choices, resolution_choices);
+    assert.equal(call.data.p_rows[0].amount_cents, 123456);
+    assert.equal((await response.json()).preview.reconciliation_version, '043');
+  }
+});
+
+test('043 is activation gated and never falls back to the old forecast or paid writer', async () => {
+  for (const mode of ['forecast','payments']) {
+    const app = setup({ capabilities:{ forecast_incremental:true, paid_import:true, cheque_number:true } });
+    const response = await app.send(body('preview', { mode, reconciliation_version:'043', ...(mode === 'forecast' ? { full_report:true } : { file_base64:encode(PAID_CSV) }) }));
+    assert.equal(response.status,409); assert.equal((await response.json()).code,'P0043');
+    assert(!app.calls.some(call => /preview_payables_/.test(call.path)));
+  }
+  const missing = setup({ rpcError:{ code:'PGRST202', message:'private SQL diagnostic' }, rpcStatus:404 });
+  const response = await missing.send(body('preview', { mode:'forecast', reconciliation_version:'043', full_report:true }));
+  assert.equal(response.status,409); const payload = await response.json();
+  assert.equal(payload.code,'P0043'); assert.equal(payload.activation_required,true); assert(!JSON.stringify(payload).includes('private'));
+});
+
+test('043 rejects undeclared file kinds, spoofed decisions, real cash of one cent, and import-only access before RPC', async () => {
+  const base = { mode:'forecast', reconciliation_version:'043', full_report:true };
+  for (const changes of [{ full_report:undefined }, { full_report:'true' }, { reconciliation_version:'044' }, { resolution_choices:{ 'row:0':{ action:'WRITE_OFF',reason:'Confirmação.' } } }, { resolution_choices:{ 'row:2':{ action:'WRITE_OFF',reason:'Confirmação.' } } }, { resolution_choices:{ [`title:${IMPORT}`]:{ action:'PAID',reason:'Confirmação.',paid_on:'2026-10-19',amount_paid_cents:0,bank_account_id:BANK } } }, { resolution_choices:{ 'row:1':{ action:'WRITE_OFF',reason:'Confirmação.',amount_paid_cents:1 } } }]) {
+    const app = setup(), response = await app.send(body('preview', { ...base, ...changes }));
+    assert.equal(response.status,400); assert(!app.calls.some(call => /preview_payables_/.test(call.path)));
+  }
+  const app = setup({ permissions:[{ resource:'contas_pagar',action:'import' }] });
+  assert.equal((await app.send(body('preview',base))).status,403);
+  assert.equal(app.calls.length,2);
+});
+
+test('043 commit forwards a stable protocol and financial revision without deriving payment facts from the forecast', async () => {
+  const app = setup(), request_id = '70000000-0000-4000-8000-000000000001';
+  const resolution_choices = { [`title:${IMPORT}`]:{ action:'PAID',reason:'Pagamento sintético confirmado.',paid_on:'2026-10-19',amount_paid_cents:10000,bank_account_id:BANK } };
+  const data = body('commit',{ mode:'forecast',reconciliation_version:'043',full_report:true,resolution_choices,request_id,previous_financial_revision:'17' });
+  assert.equal((await app.send(data)).status,200);
+  const call = app.calls.at(-1);
+  assert.equal(call.path,'/rest/v1/rpc/commit_payables_forecast_import_v2_from_gateway');
+  assert.equal(call.data.p_user_id,USER); assert.equal(call.data.p_session_id,SESSION);
+  assert.equal(call.data.p_request_id,request_id); assert.equal(call.data.p_previous_financial_revision,'17');
+  assert.deepEqual(call.data.p_resolution_choices,resolution_choices);
+  for (const changes of [{ request_id:undefined },{ request_id:'invalid' },{ previous_financial_revision:undefined }]) {
+    const denied = setup(); assert.equal((await denied.send({ ...data,...changes })).status,400);
+    assert(!denied.calls.some(entry=>entry.path.includes('commit_')));
+  }
+});
+
+test('043 paid reports preserve administrative cent rows without accepting a real cent payment', async () => {
+  const cent = { key:'row:1',kind:'CENT',line:1,title_id:IMPORT,branch:'2 - TESTE',entry_number:'ABC-1',description:'Título sintético',due_date:'2026-10-10',amount_cents:123456,source_amount_cents:1,allowed_actions:['WRITE_OFF'],selected_action:'WRITE_OFF',requires_resolution:true,problem:null };
+  const app = setup({ reconciliationItems:[cent],paidOutcome:'WRITE_OFF' });
+  const resolution_choices = { 'row:1':{ action:'WRITE_OFF',reason:'Baixa sintética sem pagamento confirmada.' } };
+  const data = body('preview',{ mode:'payments',reconciliation_version:'043',file_base64:encode(PAID_CSV.replace('1.234,56','0,01')),resolution_choices });
+  assert.equal((await app.send(data)).status,200);
+  assert.equal(app.calls.at(-1).path,'/rest/v1/rpc/preview_payables_paid_import_v2');
+  assert.equal(app.calls.at(-1).data.p_rows[0].amount_paid_cents,1);
+  assert.deepEqual(app.calls.at(-1).data.p_resolution_choices,resolution_choices);
+  const invalid = setup({ reconciliationItems:[cent] });
+  assert.equal((await invalid.send(data)).status,503);
+  const absentDecision = setup({ paidOutcome:'WRITE_OFF' });
+  assert.equal((await absentDecision.send(data)).status,503);
+});
+
+test('043 rejects an inconsistent preview and an unconfirmed commit response without forwarding internal diagnostics', async () => {
+  const data = body('preview',{ mode:'forecast',reconciliation_version:'043',full_report:true });
+  const app = setup({ previewPayload:{ mode:'forecast',row_count:1,new_count:1,open_count:0,settled_count:0,can_commit:true } });
+  const response = await app.send(data); assert.equal(response.status,503);
+  const request_id = '70000000-0000-4000-8000-000000000001';
+  for (const changes of [{ request_id:IMPORT },{ reconciliation_version:'021' }]) {
+    const unknown = setup({ commitPayload:{ mode:'forecast',import_id:IMPORT,row_count:1,settled_count:0,reconciliation_version:'043',request_id,...changes } });
+    const result = await unknown.send(body('commit',{ ...data,action:'commit',request_id,previous_financial_revision:'17' }));
+    assert.equal(result.status,503); assert(!JSON.stringify(await result.json()).includes('synthetic-server-only-key'));
+  }
 });
 
 test('CORS matches exact origins and only allows approved preflight headers and methods', async () => {

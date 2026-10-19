@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.15.0",
+  "version": "0.16.0",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -67,7 +67,12 @@
     "test:hr-report-model-sql": "node scripts/test-hr-report-model-sql.mjs",
     "test:hr-total-sql": "node scripts/test-hr-total-sql.mjs",
     "test:hr-prolabore-sql": "node scripts/test-hr-prolabore-sql.mjs",
-    "test:hr-sheet-totals-sql": "node scripts/test-hr-sheet-totals-sql.mjs"
+    "test:hr-sheet-totals-sql": "node scripts/test-hr-sheet-totals-sql.mjs",
+    "bundle:payable-administrative-writeoff": "node scripts/bundle-payable-administrative-writeoff.mjs",
+    "test:payable-administrative-writeoff-sql": "node scripts/test-payable-administrative-writeoff-sql.mjs",
+    "bundle:payable-import-reconciliation": "node scripts/bundle-payable-import-reconciliation.mjs",
+    "test:payable-forecast-reconciliation-sql": "node scripts/test-payable-forecast-reconciliation-sql.mjs",
+    "test:payable-paid-reconciliation-sql": "node scripts/test-payable-paid-reconciliation-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

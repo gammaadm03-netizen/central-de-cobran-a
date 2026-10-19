@@ -4,6 +4,7 @@ import { comparisonRanges, financialWeekLabel, monthBounds, previousMonth } from
 export const MAX_PAYABLE_WORKBOOK_ROWS = 20000;
 export const PAYABLE_EXPORT_HEADERS = ['Centro de Custo Macro', 'Nº Lançamento', 'Histórico/Favorecido', 'Plano de Contas', 'Filial', 'Banco/Conta', 'Emissão', 'Vencimento', 'Semana Financeira', 'Valor', 'Status', 'Situação', 'Origem', 'Data baixa automática'] as const;
 export const PAYABLE_FINANCIAL_HEADERS = ['Valor pago histórico', 'Saldo em aberto', 'Status financeiro', 'Último pagamento', 'Banco do último pagamento', 'Crédito por pagamento excedente'] as const;
+export const PAYABLE_ADMINISTRATIVE_HEADERS = ['Baixa sem pagamento', 'Data da baixa administrativa', 'Responsável pela baixa administrativa', 'Motivo da baixa administrativa', 'Importação da baixa administrativa', 'Participa dos totais', 'Valor considerado nos totais'] as const;
 const CURRENCY = '"R$" #,##0.00;[Red]-"R$" #,##0.00';
 const PERCENTAGE = '0.00%;[Red]-0.00%';
 const MAX_EXCEL_CENTS = 999999999999999n;
@@ -11,7 +12,7 @@ const statusLabels: Record<PayableTitle['status'], string> = { NEW: 'Novo', OPEN
 const TIMEZONE = 'America/Sao_Paulo';
 const SETTLEMENT_NOTE = 'A data de baixa automática registra quando o título desapareceu de um relatório completo importado; não é a data real de pagamento e não comprova pagamento ou compensação bancária.';
 const UNKNOWN_FINANCIAL = 'INFORMAÇÃO INDISPONÍVEL';
-const financialStatusLabels = { OPEN: 'Em aberto', PARTIAL: 'Pendência de registro anterior', PAID: 'Pago', OVERPAID: 'Pagamento excedente — revisar', PENDING_RECONCILIATION: 'Aguardando conciliação' } as const;
+const financialStatusLabels = { OPEN: 'Em aberto', PARTIAL: 'Pendência de registro anterior', PAID: 'Pago', OVERPAID: 'Pagamento excedente — revisar', PENDING_RECONCILIATION: 'Aguardando conciliação', ADMIN_WRITEOFF: 'BAIXADO SEM PAGAMENTO' } as const;
 
 export interface PaymentExportRow {
   id: string;
@@ -65,7 +66,13 @@ function checkedCents(value: bigint): number {
   return Number(value) / 100;
 }
 
+function administrativeWriteoff(row: PayableTitle): boolean {
+  return row.administrative_writeoff_id != null || row.financial_status === 'ADMIN_WRITEOFF' || row.closing_exclusion_reason === 'ADMIN_WRITEOFF';
+}
+function excludedFromTotals(row: PayableTitle): boolean { return administrativeWriteoff(row) || row.closing_eligible === false; }
+
 function add(totals: Totals, row: PayableTitle) {
+  if (excludedFromTotals(row)) return;
   const value = BigInt(row.amount_cents), financial = row as PayableTitle & FinancialFields;
   totals.count++; totals.total += value;
   if (row.status === 'SETTLED_IMPORT') { totals.settledCount++; totals.settled += value; }
@@ -138,11 +145,16 @@ function aggregate(rows: PayableTitle[], month: string, selected: { start: strin
     excelCivilDate(row.due_date);
     if (row.issued_on !== null) excelCivilDate(row.issued_on);
     if (row.settled_at !== null) excelSaoPauloTime(row.settled_at);
+    if (row.administrative_writeoff_at != null) excelSaoPauloTime(row.administrative_writeoff_at);
+    for (const key of ['administrative_writeoff_id', 'administrative_writeoff_by', 'administrative_writeoff_reason', 'administrative_writeoff_import_id'] as const) {
+      if (row[key] != null && typeof row[key] !== 'string') throw new Error('A informação de baixa administrativa está inválida. Atualize os títulos e tente novamente.');
+    }
     if ((row.status === 'SETTLED_IMPORT') !== (row.settled_at !== null)) throw new Error('O histórico de baixa de um título está incompleto. Atualize a lista e tente novamente.');
     checkedCents(BigInt(row.amount_cents));
     chequeText((row as PayableTitle & ChequeFields).cheque_number);
     validateFinancial(row);
     ids.add(row.id);
+    if (excludedFromTotals(row)) continue;
     const group = macros.get(row.macro) ?? emptyTotals();
     add(group, row); macros.set(row.macro, group); add(total, row);
   }
@@ -187,14 +199,16 @@ export async function buildPayablesWorkbook(currentRows: PayableTitle[], previou
   const current = aggregate(currentRows, options.month, selectedRange), prior = aggregate(previousRows, priorMonth, comparisonRange);
   const payments = options.payments === undefined ? null : aggregatePayments(options.payments, selectedRange);
   const hasCheque = currentRows.some(row => Object.hasOwn(row, 'cheque_number'));
+  const hasAdministrative = currentRows.some(row => Object.hasOwn(row, 'administrative_writeoff_id') || administrativeWriteoff(row) || row.closing_eligible === false);
   const hasPaymentCheque = hasCheque || (options.payments ?? []).some(row => Object.hasOwn(row, 'cheque_number'));
   const generated = excelSaoPauloTime(options.generatedAt);
   const { default: ExcelJS } = await import('exceljs');
   const book = new ExcelJS.Workbook();
   book.creator = 'Central Financeira · Grupo Ecoplast'; book.created = new Date(options.generatedAt);
   const lines = book.addWorksheet('TODOS OS LANÇAMENTOS');
-  const detailHeaders = [...PAYABLE_EXPORT_HEADERS, ...(payments ? PAYABLE_FINANCIAL_HEADERS : []), ...(hasCheque ? ['Nº cheque'] : [])];
-  lines.columns = detailHeaders.map((header, index) => ({ header, width: index === detailHeaders.length - 1 && hasCheque ? 25 : [26, 19, 48, 36, 24, 28, 15, 15, 29, 22, 29, 22, 24, 24, 25, 23, 31, 22, 31, 34][index] }));
+  const detailHeaders = [...PAYABLE_EXPORT_HEADERS, ...(payments ? PAYABLE_FINANCIAL_HEADERS : []), ...(hasAdministrative ? PAYABLE_ADMINISTRATIVE_HEADERS : []), ...(hasCheque ? ['Nº cheque'] : [])];
+  const administrativeOffset = PAYABLE_EXPORT_HEADERS.length + (payments ? PAYABLE_FINANCIAL_HEADERS.length : 0);
+  lines.columns = detailHeaders.map((header, index) => ({ header, width: index === detailHeaders.length - 1 && hasCheque ? 25 : hasAdministrative && index >= administrativeOffset ? [29, 25, 40, 55, 40, 31, 28][index - administrativeOffset] : [26, 19, 48, 36, 24, 28, 15, 15, 29, 22, 29, 22, 24, 24, 25, 23, 31, 22, 31, 34][index] }));
   const ordered = [...currentRows].sort((a, b) => a.due_date < b.due_date ? -1 : a.due_date > b.due_date ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const relatedEntries = new Map<string, number>();
   for (const item of ordered) {
@@ -211,6 +225,13 @@ export async function buildPayablesWorkbook(currentRows: PayableTitle[], previou
       for (const [index, value] of [amount(financial.paid_cents), amount(financial.outstanding_cents), financial.financial_status === undefined ? UNKNOWN_FINANCIAL : financialStatusLabels[financial.financial_status], financial.last_payment_date === undefined ? UNKNOWN_FINANCIAL : financial.last_payment_date === null ? null : excelCivilDate(financial.last_payment_date), financial.last_payment_bank === undefined ? UNKNOWN_FINANCIAL : financial.last_payment_bank, amount(financial.overpaid_cents)].entries()) row.getCell(15 + index).value = value;
       for (const column of [15, 16, 20]) row.getCell(column).numFmt = CURRENCY;
       row.getCell(18).numFmt = 'dd/mm/yyyy';
+    }
+    if (hasAdministrative) {
+      const start = 15 + (payments ? PAYABLE_FINANCIAL_HEADERS.length : 0);
+      const values = [administrativeWriteoff(item) ? 'BAIXADO SEM PAGAMENTO' : null, item.administrative_writeoff_at == null ? null : excelSaoPauloTime(item.administrative_writeoff_at), item.administrative_writeoff_by ?? null, item.administrative_writeoff_reason ?? null, item.administrative_writeoff_import_id ?? null, excludedFromTotals(item) ? 'NÃO — histórico preservado' : 'SIM', excludedFromTotals(item) ? 0 : checkedCents(BigInt(item.amount_cents))];
+      values.forEach((value, index) => { row.getCell(start + index).value = value; });
+      row.getCell(start + 1).numFmt = 'dd/mm/yyyy hh:mm';
+      row.getCell(start + 6).numFmt = CURRENCY;
     }
     if (hasCheque) {
       row.getCell(detailHeaders.length).value = chequeText((item as PayableTitle & ChequeFields).cheque_number);
@@ -270,6 +291,12 @@ export async function buildPayablesWorkbook(currentRows: PayableTitle[], previou
   info('Gerado em — America/Sao_Paulo', generated, 'dd/mm/yyyy hh:mm');
   info('Semana financeira', 'Sábado a sexta-feira');
   info('Quantidade de lançamentos', current.total.count);
+  if (currentRows.some(excludedFromTotals) || previousRows.some(excludedFromTotals)) {
+    info('Quantidade de registros no detalhamento', currentRows.length);
+    info('Quantidade fora dos totais', currentRows.filter(excludedFromTotals).length);
+    info('Baixas sem pagamento no detalhamento', currentRows.filter(administrativeWriteoff).length);
+    info('Critério das exclusões', 'Baixas administrativas e versões fora do fechamento permanecem no detalhamento com seu valor original, mas não compõem quantidades, valores, participações ou comparativos. Baixa administrativa não registra pagamento nem entra no realizado.');
+  }
   info('Quantidade em aberto', current.total.openCount);
   info('Quantidade quitada por importação', current.total.settledCount);
   info('Total dos lançamentos', checkedCents(current.total.total), CURRENCY);
@@ -289,7 +316,7 @@ export async function buildPayablesWorkbook(currentRows: PayableTitle[], previou
     info('Realizado: total pago no período', checkedCents(payments.total), CURRENCY);
     info('Critério do realizado', 'Data real de pagamento (paid_on), independente do vencimento do título. Somente pagamentos ativos; histórico de pagamentos anteriores preservado; novos registros exigem quitação integral. Mantém macro, filial e pesquisa; filtros de status da importação, situação financeira e conferência, quando preenchidos, também restringem os pagamentos pela situação atual dos respectivos títulos.');
     info('Macro do realizado', 'Classificação efetiva de eventual correção auditada (effective_macro); sem correção, usa a classificação original do pagamento (macro_snapshot). A classificação original permanece no detalhe e não acompanha mudanças da importação.');
-    info('Valor nominal e valor realizado', 'Total dos lançamentos representa valores nominais dos registros preservados. Valor pago histórico reúne todos os pagamentos ativos dos títulos selecionados, inclusive de outros períodos. O realizado reúne somente pagamentos com data real no período selecionado e pode incluir títulos vencendo em outros meses.');
+    info('Valor nominal e valor realizado', 'Total dos lançamentos representa os valores nominais elegíveis. Baixas administrativas e versões fora do fechamento aparecem somente no detalhe. Valor pago histórico reúne pagamentos ativos dos títulos elegíveis, inclusive de outros períodos. O realizado reúne somente pagamentos com data real no período selecionado e pode incluir títulos vencendo em outros meses.');
   }
   const relatedGroupCount = [...relatedEntries.values()].filter(count => count > 1).length;
   if (relatedGroupCount) info('Atenção: possíveis versões ou parcelas', `${relatedGroupCount} grupo(s) com a mesma filial e número de lançamento possuem mais de um registro no período selecionado. Possíveis versões ou parcelas do mesmo lançamento: confira os registros antes de interpretar os totais. Todos foram preservados, sem deduplicação automática; os totais representam registros preservados, não comprovam pagamento.`);

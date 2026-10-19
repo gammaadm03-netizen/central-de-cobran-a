@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
 import { addCivilDays, financialWeek, financialWeekLabel, monthBounds, previousMonth, comparisonRanges } from './financial-dates.ts';
-import { buildPayablesWorkbook, payablesWorkbookFilename, MAX_PAYABLE_WORKBOOK_ROWS, PAYABLE_EXPORT_HEADERS, PAYABLE_FINANCIAL_HEADERS } from './payables-excel.ts';
+import { buildPayablesWorkbook, payablesWorkbookFilename, MAX_PAYABLE_WORKBOOK_ROWS, PAYABLE_EXPORT_HEADERS, PAYABLE_FINANCIAL_HEADERS, PAYABLE_ADMINISTRATIVE_HEADERS } from './payables-excel.ts';
 
 const filters = { scope: 'grupo-consolidado', search: '', start: '', end: '', status: '', macro: '', branch: '' };
 const options = { month: '2026-10', filters, fullMonth: true, generatedAt: '2026-10-18T01:15:32.000Z', importId: 'synthetic-import-1' };
@@ -20,6 +20,65 @@ const findMacro = (book, sheetName, name) => {
   book.getWorksheet(sheetName).eachRow(row => { if (row.getCell(1).value === name) result = row; });
   return result;
 };
+
+test('administrative writeoffs preserve original values and audit in detail while every title summary excludes them', async () => {
+  const financial = { paid_cents: 0, outstanding_cents: 0, overpaid_cents: 0, financial_status: 'ADMIN_WRITEOFF', last_payment_date: null, last_payment_bank: null,
+    closing_eligible: false, closing_exclusion_reason: 'ADMIN_WRITEOFF', administrative_writeoff_id: '10000000-0000-4000-8000-000000000001', administrative_writeoff_at: '2026-10-18T12:00:00Z', administrative_writeoff_by: '10000000-0000-4000-8000-000000000002', administrative_writeoff_reason: '=Motivo sintético preservado', administrative_writeoff_import_id: '10000000-0000-4000-8000-000000000003' };
+  const rows = [title('eligible', { amount_cents: 10000, paid_cents: 0, outstanding_cents: 10000, overpaid_cents: 0, financial_status: 'OPEN', closing_eligible: true }),
+    title('one-cent-written-off', { ...financial, amount_cents: 1, macro: 'VARIÁVEL', cheque_number: '00015' }),
+    title('prior-version', { amount_cents: 90000, closing_eligible: false, macro: 'HISTÓRICO' })];
+  const previousRows = [previous('prior-written-off', { ...financial, amount_cents: 50000, macro: 'VARIÁVEL' })];
+  const original = await buildPayablesWorkbook(rows, previousRows, { ...options, payments: [] });
+  const book = new ExcelJS.Workbook(); await book.xlsx.load(await original.xlsx.writeBuffer());
+  assert.equal(summaryValue(book, 'Total dos lançamentos'), 100);
+  assert.equal(summaryValue(book, 'Total em aberto'), 100);
+  assert.equal(summaryValue(book, 'Quantidade de lançamentos'), 1);
+  assert.equal(summaryValue(book, 'Quantidade de registros no detalhamento'), 3);
+  assert.equal(summaryValue(book, 'Quantidade fora dos totais'), 2);
+  assert.equal(summaryValue(book, 'Baixas sem pagamento no detalhamento'), 1);
+  assert.equal(summaryValue(book, 'Total do mês anterior'), 0);
+  assert.equal(summaryValue(book, 'Realizado: quantidade de pagamentos'), 0);
+  assert.equal(summaryValue(book, 'Realizado: total pago no período'), 0);
+  assert.equal(findMacro(book, 'Resumo por Macro', 'VARIÁVEL'), undefined);
+  assert.equal(findMacro(book, 'Comparativo por Macro', 'VARIÁVEL'), undefined);
+  const details = book.getWorksheet('TODOS OS LANÇAMENTOS'), headers = details.getRow(1).values.slice(1);
+  assert.deepEqual(headers, [...PAYABLE_EXPORT_HEADERS, ...PAYABLE_FINANCIAL_HEADERS, ...PAYABLE_ADMINISTRATIVE_HEADERS, 'Nº cheque']);
+  const row = [...details.getRows(2, 3)].find(r => r.getCell(2).value === 'N-one-cent-written-off');
+  const column = label => headers.indexOf(label) + 1;
+  assert.equal(row.getCell(10).value, .01);
+  assert.equal(row.getCell(column('Status financeiro')).value, 'BAIXADO SEM PAGAMENTO');
+  assert.equal(row.getCell(column('Baixa sem pagamento')).value, 'BAIXADO SEM PAGAMENTO');
+  assert.equal(row.getCell(column('Motivo da baixa administrativa')).value, '=Motivo sintético preservado');
+  assert.equal(row.getCell(column('Motivo da baixa administrativa')).type, ExcelJS.ValueType.String);
+  assert.ok(row.getCell(column('Data da baixa administrativa')).value instanceof Date);
+  assert.equal(row.getCell(column('Responsável pela baixa administrativa')).value, financial.administrative_writeoff_by);
+  assert.equal(row.getCell(column('Participa dos totais')).value, 'NÃO — histórico preservado');
+  assert.equal(row.getCell(column('Valor considerado nos totais')).value, 0);
+  assert.equal(row.getCell(headers.length).value, '00015');
+  assert.equal(book.getWorksheet('Pagamentos realizados').rowCount, 1);
+});
+
+test('a genuine one-cent title and its real historical payment remain in nominal and realized totals', async () => {
+  const genuine = title('genuine-cent', { amount_cents: 1, closing_eligible: true, paid_cents: 1, outstanding_cents: 0, overpaid_cents: 0, financial_status: 'PAID' });
+  const writtenOff = title('administrative-cent', { amount_cents: 1, closing_eligible: false, financial_status: 'ADMIN_WRITEOFF', paid_cents: 0, outstanding_cents: 0, overpaid_cents: 0 });
+  const book = await buildPayablesWorkbook([genuine, writtenOff], [], { ...options, payments: [payment('actual-one-cent', { title_id: genuine.id, amount_cents: 1 })] });
+  assert.equal(summaryValue(book, 'Total dos lançamentos'), .01);
+  assert.equal(summaryValue(book, 'Valor pago histórico dos títulos selecionados'), .01);
+  assert.equal(summaryValue(book, 'Realizado: total pago no período'), .01);
+  assert.equal(summaryValue(book, 'Realizado: quantidade de pagamentos'), 1);
+  const sheet = book.getWorksheet('TODOS OS LANÇAMENTOS'), headers = sheet.getRow(1).values.slice(1), considered = headers.indexOf('Valor considerado nos totais') + 1;
+  const values = new Map(sheet.getRows(2, 2).map(row => [row.getCell(2).value, row.getCell(considered).value]));
+  assert.equal(values.get('N-genuine-cent'), .01); assert.equal(values.get('N-administrative-cent'), 0);
+});
+
+test('administrative indicators alone also exclude a stale row and invalid audit dates stop export', async () => {
+  const row = title('writeoff-status', { amount_cents: 1, financial_status: 'ADMIN_WRITEOFF' });
+  const book = await buildPayablesWorkbook([row], [], options);
+  assert.equal(summaryValue(book, 'Total dos lançamentos'), 0);
+  assert.equal(summaryValue(book, 'Quantidade de lançamentos'), 0);
+  assert.equal(book.getWorksheet('TODOS OS LANÇAMENTOS').getCell('J2').value, .01);
+  await assert.rejects(buildPayablesWorkbook([{ ...row, administrative_writeoff_at: 'not-an-instant' }], [], options), /data e hora/);
+});
 
 test('financial week is Saturday through Friday across month, year and leap boundaries', () => {
   assert.deepEqual(financialWeek('2026-10-17'), { start: '2026-10-17', end: '2026-10-23' });

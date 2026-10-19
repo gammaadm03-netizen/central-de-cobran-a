@@ -7,16 +7,22 @@ export interface PayablePaidRow { branch: string; entry_number: string; source_s
 export interface PayableTitle extends PayableImportRow {
   id: string; scope: string; source_key: string; macro: string; status: 'NEW' | 'OPEN' | 'SETTLED_IMPORT'; settled_at: string | null;
   last_import_id?: string; paid_cents?: number; outstanding_cents?: number; payment_remaining_cents?: number;
-  overpaid_cents?: number; financial_status?: 'OPEN' | 'PARTIAL' | 'PAID' | 'OVERPAID' | 'PENDING_RECONCILIATION';
+  overpaid_cents?: number; financial_status?: 'OPEN' | 'PARTIAL' | 'PAID' | 'OVERPAID' | 'PENDING_RECONCILIATION' | 'ADMIN_WRITEOFF';
   last_payment_date?: string | null; last_payment_bank?: string | null; payment_revision?: string | null;
-  review_status?: 'A_CONCILIAR' | 'CONCILIADO'; review_id?: string | null; reviewed_by?: string | null; reviewed_at?: string | null; review_fingerprint?: string; closing_eligible?: boolean; closing_exclusion_reason?: string | null;
+  review_status?: 'A_CONCILIAR' | 'CONCILIADO' | 'BAIXADO_ADMINISTRATIVAMENTE'; review_id?: string | null; reviewed_by?: string | null; reviewed_at?: string | null; review_fingerprint?: string; closing_eligible?: boolean; closing_exclusion_reason?: string | null;
+  administrative_writeoff_id?: string | null; administrative_writeoff_at?: string | null;
+  administrative_writeoff_by?: string | null; administrative_writeoff_reason?: string | null;
+  administrative_writeoff_import_id?: string | null;
+}
+export function isPayableAdministrativeWriteoff(row: PayableTitle) {
+  return row.financial_status === 'ADMIN_WRITEOFF' || row.closing_exclusion_reason === 'ADMIN_WRITEOFF' || !!row.administrative_writeoff_id;
 }
 export interface ImportProblem { line: number; column: string; problem: string; correction: string }
 export interface ImportPreview { previous_import_id: string | null; row_count: number; new_count: number; open_count: number; settled_count: number; changed_count?: number }
 export interface PayableFilters { scope: string; search: string; start: string; end: string; status: string; macro: string; branch: string; financialStatus?: string; reviewStatus?: string; outstandingOnly?: boolean; canonicalOnly?: boolean }
 export interface PayableServerPreview { rows: PayableImportRow[]; preview: ImportPreview; file_sha256: string }
 export const payableStatus: Record<string, string> = { NEW: 'Novo', OPEN: 'Em aberto', SETTLED_IMPORT: 'Quitado por importação' };
-export const payableFinancialStatus: Record<string, string> = { OPEN: 'Em aberto', PARTIAL: 'Pendência de pagamento anterior', PAID: 'Totalmente pago', OVERPAID: 'Pagamento acima do valor atualizado', PENDING_RECONCILIATION: 'Baixado por importação — a conciliar' };
+export const payableFinancialStatus: Record<string, string> = { OPEN: 'Em aberto', PARTIAL: 'Pendência de pagamento anterior', PAID: 'Totalmente pago', OVERPAID: 'Pagamento acima do valor atualizado', PENDING_RECONCILIATION: 'Baixado por importação — a conciliar', ADMIN_WRITEOFF: 'Baixado sem pagamento' };
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 export function formatCents(value: number) {
   if (!Number.isSafeInteger(value)) return 'Valor indisponível';
@@ -33,6 +39,10 @@ export function payableError(error: unknown, fallback: string) {
   if (code === '40001') return 'A base mudou desde a análise. Analise o arquivo novamente antes de concluir.';
   if (code === '23505') return 'Este arquivo já foi importado para esta origem. Nenhum dado foi alterado.';
   if (code === 'P0021') return 'Ative a atualização das importações de previsão e pagamentos no banco de dados. Nenhum dado foi alterado.';
+  if (code === 'P0042') return 'Confira a baixa sem pagamento e as possíveis alterações deste título antes de confirmar a importação.';
+  if (code === 'P0043') return error && typeof error === 'object' && 'activation_required' in error && error.activation_required === true
+    ? 'Ative a atualização de conciliação na importação no banco e na função payables-import. Preserve o arquivo e as escolhas para analisar novamente.'
+    : 'Confira as decisões de pagamento e baixa de cada título e valide novamente as escolhas antes de confirmar a importação.';
   if (code === 'P0019') return 'Ative a atualização dos números de cheque no banco de dados antes de importar esta coluna. Nenhum dado foi alterado.';
   if (code === 'P0016') return 'Há lançamentos repetidos ou versões históricas ambíguas para a mesma filial e número. Confira parcelas e o histórico. Nenhum dado foi alterado.';
   if (code === '23514' || code === '22023') return 'A importação foi recusada. Confira as linhas, a origem completa e a classificação de todos os planos.';
@@ -40,14 +50,25 @@ export function payableError(error: unknown, fallback: string) {
   return fallback;
 }
 
-export async function payableImportRequest<T>(body: { action: 'preview' | 'commit'; file_name: string; file_base64: string; mappings?: Record<string,string>; complete?: boolean; previous_import_id?: string | null; mode?: 'forecast' | 'payments'; bank_mappings?: Record<string,string>; confirm_corrections?: boolean; previous_financial_revision?: string | null }, signal?: AbortSignal): Promise<T> {
+export interface PayableResolutionChoice {
+  action: 'WRITE_OFF' | 'PAID' | 'REOPEN'; reason: string;
+  paid_on?: string; amount_paid_cents?: number; bank_account_id?: string;
+}
+export interface PayableImportRequest {
+  action: 'preview' | 'commit'; file_name: string; file_base64: string;
+  mappings?: Record<string,string>; complete?: boolean; previous_import_id?: string | null;
+  mode?: 'forecast' | 'payments'; bank_mappings?: Record<string,string>; confirm_corrections?: boolean;
+  previous_financial_revision?: string | null; reconciliation_version?: '043'; full_report?: boolean;
+  resolution_choices?: Record<string, PayableResolutionChoice>; request_id?: string;
+}
+export async function payableImportRequest<T>(body: PayableImportRequest, signal?: AbortSignal): Promise<T> {
   const client = supabase;
   if (!client) throw { code: 'PGRST301' };
   const { data: { session } } = await client.auth.getSession();
   if (!session?.access_token) throw { code: 'PGRST301' };
   const abort = new AbortController(), cancel = () => abort.abort();
   signal?.addEventListener('abort', cancel, { once: true }); if (signal?.aborted) abort.abort();
-  const timer = window.setTimeout(cancel,30000);
+  const timer = window.setTimeout(cancel,60000);
   try {
     const response = await fetch(`${supabaseUrl}/functions/v1/payables-import`, {
       method: 'POST', headers: { apikey: publishableKey, Authorization: `Bearer ${session.access_token}`, 'Content-Type':'application/json' },
@@ -56,7 +77,7 @@ export async function payableImportRequest<T>(body: { action: 'preview' | 'commi
     const result = await response.json();
     if (!response.ok) {
       const errors: ImportProblem[] = response.status === 422 && Array.isArray(result?.errors) ? result.errors.slice(0,100).filter((item:unknown) => item !== null && typeof item === 'object' && 'line' in item && Number.isSafeInteger(item.line) && 'column' in item && typeof item.column === 'string' && 'problem' in item && typeof item.problem === 'string' && 'correction' in item && typeof item.correction === 'string').map((item:ImportProblem) => ({ line:item.line, column:item.column.slice(0,300), problem:item.problem.slice(0,500), correction:item.correction.slice(0,500) })) : [];
-      throw { code: typeof result?.code === 'string' ? result.code : response.status === 401 ? 'PGRST301' : response.status === 403 ? '42501' : '', errors };
+      throw { activation_required: result?.activation_required === true, code: typeof result?.code === 'string' ? result.code : response.status === 401 ? 'PGRST301' : response.status === 403 ? '42501' : '', errors };
     }
     return result as T;
   } finally { window.clearTimeout(timer); signal?.removeEventListener('abort',cancel); }
@@ -150,9 +171,19 @@ export function downloadCsv(rows: PayableTitle[], name: string) {
   if (reviewed) headers.push('Revisão do título', 'Data da conferência', 'Responsável pela conferência');
   const hasCheques = rows.some(row => Object.hasOwn(row, 'cheque_number'));
   if (hasCheques) headers.push('Nº cheque');
+  const administrative = rows.some(row => Object.hasOwn(row, 'administrative_writeoff_id'));
+  if (administrative) headers.push('Valor considerado nos totais', 'Baixa sem pagamento', 'Motivo da baixa sem pagamento', 'Data da baixa sem pagamento', 'Responsável pela baixa sem pagamento', 'Importação da baixa sem pagamento');
   const safe = (value: unknown) => { let text = String(value ?? ''); if (/^[\s]*[=+\-@\t\r]/.test(text)) text = `'${text}`; return `"${text.replaceAll('"','""')}"`; };
   const decimal = (value:number) => { const cents=BigInt(value); return `${cents/100n},${String(cents%100n).padStart(2,'0')}`; };
-  const lines = rows.map(row => [row.macro,row.entry_number,row.description,row.plan,row.branch,row.bank_account,dateLabel(row.issued_on),dateLabel(row.due_date),financialWeekLabel(row.due_date),decimal(row.amount_cents),payableStatus[row.status],row.source_status,'IMPORTAÇÃO DIÁRIA',dateLabel(row.settled_at), ...(financial ? [Number.isSafeInteger(row.paid_cents) ? decimal(row.paid_cents!) : 'Indisponível', Number.isSafeInteger(row.outstanding_cents) ? decimal(row.outstanding_cents!) : 'Indisponível', payableFinancialStatus[row.financial_status!] ?? 'Indisponível', dateLabel(row.last_payment_date ?? null), row.last_payment_bank ?? '', Number.isSafeInteger(row.overpaid_cents) ? decimal(row.overpaid_cents!) : 'Indisponível'] : []), ...(reviewed ? [row.closing_eligible === false ? 'VERSÃO ANTERIOR — HISTÓRICO FORA DO FECHAMENTO' : row.review_status === 'CONCILIADO' ? 'CONCILIADO' : 'A CONCILIAR', dateLabel(row.reviewed_at ?? null), row.reviewed_by ?? ''] : []), ...(hasCheques ? [row.cheque_number ?? ''] : [])].map(safe).join(';'));
+  const lines = rows.map(row => {
+    const writtenOff = isPayableAdministrativeWriteoff(row);
+    return [row.macro,row.entry_number,row.description,row.plan,row.branch,row.bank_account,dateLabel(row.issued_on),dateLabel(row.due_date),financialWeekLabel(row.due_date),decimal(row.amount_cents),payableStatus[row.status],row.source_status,'IMPORTAÇÃO DIÁRIA',dateLabel(row.settled_at),
+      ...(financial ? [Number.isSafeInteger(row.paid_cents) ? decimal(row.paid_cents!) : 'Indisponível', Number.isSafeInteger(row.outstanding_cents) ? decimal(row.outstanding_cents!) : 'Indisponível', payableFinancialStatus[row.financial_status!] ?? 'Indisponível', dateLabel(row.last_payment_date ?? null), row.last_payment_bank ?? '', Number.isSafeInteger(row.overpaid_cents) ? decimal(row.overpaid_cents!) : 'Indisponível'] : []),
+      ...(reviewed ? [writtenOff ? 'BAIXADO SEM PAGAMENTO' : row.closing_eligible === false ? 'VERSÃO ANTERIOR — HISTÓRICO FORA DO FECHAMENTO' : row.review_status === 'CONCILIADO' ? 'CONCILIADO' : 'A CONCILIAR', dateLabel(row.reviewed_at ?? null), row.reviewed_by ?? ''] : []),
+      ...(hasCheques ? [row.cheque_number ?? ''] : []),
+      ...(administrative ? [decimal(writtenOff || row.closing_eligible === false ? 0 : row.amount_cents), writtenOff ? 'BAIXADO SEM PAGAMENTO' : '', row.administrative_writeoff_reason ?? '', dateLabel(row.administrative_writeoff_at ?? null), row.administrative_writeoff_by ?? '', row.administrative_writeoff_import_id ?? ''] : []),
+    ].map(safe).join(';');
+  });
   const url = URL.createObjectURL(new Blob(['\uFEFF' + headers.map(safe).join(';') + '\r\n' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
   const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import PayablePaidImport from './PayablePaidImport';
-import { analyzePayableFile, dateLabel, formatCents, normalizePlan, PAYABLE_SCOPE, payableError, payableImportRequest, type ImportPreview, type ImportProblem, type PayableImportRow, type PayableServerPreview } from '../lib/payables';
+import PayableImportReconciliation, { resolutionChoices, validReconciliationItems, payableUuid, type ReconciliationItem, type ImportBank, type ResolutionDraft, type ResolutionChoice } from './PayableImportReconciliation';
+import { officialToday } from './Treasury';
+import { analyzePayableFile, dateLabel, formatCents, normalizePlan, PAYABLE_SCOPE, payableError, payableImportRequest, type ImportPreview, type ImportProblem, type PayableImportRow } from '../lib/payables';
 
 interface PlanGroup { plan: string; count: number; cents: number; macro: string }
 interface Batch { id: string; file_name: string; created_at: string; row_count: number; new_count: number; open_count: number; settled_count: number }
-interface Analysis { file: File; hash: string; base64: string; rows: PayableImportRow[]; preview: ImportPreview; groups: PlanGroup[] }
+interface ForecastPreview extends ImportPreview { reconciliation_version: '043'; financial_revision: string; full_report: boolean; reconciliation_items: ReconciliationItem[]; resolution_errors: ImportProblem[]; can_commit: boolean; bank_options: ImportBank[]; bank_accounts?: ImportBank[] }
+interface Analysis { file: File; hash: string; base64: string; rows: PayableImportRow[]; preview: ForecastPreview; groups: PlanGroup[]; choices: Record<string, ResolutionChoice> }
+type ForecastRequest = Parameters<typeof payableImportRequest>[0] & { reconciliation_version: '043'; full_report: boolean; resolution_choices: Record<string, ResolutionChoice>; request_id?: string };
+interface FrozenForecast { body: ForecastRequest; rowCount: number }
 
 export default function PayablesImport({ canImport }: { canImport: boolean }) {
   const [mode, setMode] = useState<'forecast' | 'payments'>('forecast');
@@ -19,31 +24,31 @@ export default function PayablesImport({ canImport }: { canImport: boolean }) {
         <button type="button" className={`button${mode === 'forecast' ? '' : ' secondary'}`} aria-pressed={mode === 'forecast'} disabled={importBusy} onClick={() => setMode('forecast')}>Previsões / novos títulos</button>
         <button type="button" className={`button${mode === 'payments' ? '' : ' secondary'}`} aria-pressed={mode === 'payments'} disabled={importBusy} onClick={() => setMode('payments')}>Pagamentos realizados</button>
       </div>
-      <p className="help-text">Rotina: segunda-feira, novos títulos e alterações da previsão; terça a sexta, pagamentos realizados. Você também pode reprocessar um arquivo em outro dia. Títulos ausentes no arquivo permanecem na base.</p>
+      <p className="help-text">Rotina: segunda-feira, novos títulos e alterações da previsão; terça a sexta, pagamentos realizados. Você também pode reprocessar um arquivo em outro dia. Na previsão, identifique se o relatório é completo ou contém somente inclusões e atualizações.</p>
     </section>
     {mode === 'forecast' ? <ForecastImport canImport={canImport} onBusyChange={setImportBusy} /> : <PayablePaidImport canImport={canImport} onBusyChange={setImportBusy} />}
   </>;
 }
 
 function ForecastImport({ canImport, onBusyChange }: { canImport: boolean; onBusyChange: (busy: boolean) => void }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [complete, setComplete] = useState(false);
-  const [busy, setBusy] = useState<'analyzing' | 'saving' | null>(null);
-  const [writeUncertain, setWriteUncertain] = useState(false);
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [problems, setProblems] = useState<ImportProblem[]>([]);
-  const [macros, setMacros] = useState<string[]>([]);
-  const [history, setHistory] = useState<Batch[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(true);
-  const [historyError, setHistoryError] = useState('');
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [refresh, setRefresh] = useState(0);
-  const controller = useRef<AbortController | null>(null);
-  const generation = useRef(0);
+  const [file, setFile] = useState<File | null>(null), [reportKind, setReportKind] = useState<'' | 'FULL' | 'INCREMENTAL'>('');
+  const [complete, setComplete] = useState(false), [busy, setBusy] = useState<'analyzing' | 'saving' | null>(null);
+  const [analysis, setAnalysis] = useState<Analysis | null>(null), [needsReview, setNeedsReview] = useState(false);
+  const [drafts, setDrafts] = useState<Record<string, ResolutionDraft>>({}), [planChoices, setPlanChoices] = useState<Record<string, string>>({});
+  const [pending, setPending] = useState<FrozenForecast | null>(null), [problems, setProblems] = useState<ImportProblem[]>([]);
+  const [macros, setMacros] = useState<string[]>([]), [history, setHistory] = useState<Batch[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true), [historyError, setHistoryError] = useState('');
+  const [error, setError] = useState(''), [success, setSuccess] = useState(''), [refresh, setRefresh] = useState(0);
+  const controller = useRef<AbortController | null>(null), generation = useRef(0), input = useRef<HTMLInputElement | null>(null);
+  const source = useRef<{ file: File; hash: string; base64: string } | null>(null);
+  const frozenRef = useRef<FrozenForecast | null>(null);
   useEffect(() => () => { generation.current++; controller.current?.abort(); }, []);
-  useEffect(() => { onBusyChange(!!busy || writeUncertain); return () => onBusyChange(false); }, [busy, writeUncertain, onBusyChange]);
-
+  useEffect(() => { onBusyChange(!!busy || !!pending); return () => onBusyChange(false); }, [busy, pending, onBusyChange]);
+  useEffect(() => {
+    if (!pending && busy !== 'saving') return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
+  }, [pending, busy]);
   useEffect(() => {
     if (!supabase || !canImport) { setHistoryLoading(false); return; }
     const client = supabase, abort = new AbortController(); let active = true;
@@ -54,108 +59,125 @@ function ForecastImport({ canImport, onBusyChange }: { canImport: boolean; onBus
     ]).then(([batches, classifications]) => {
       if (!active) return;
       if (batches.error || classifications.error) throw batches.error ?? classifications.error;
-      setHistory((batches.data ?? []) as Batch[]);
-      setMacros((classifications.data ?? []).map(item => String(item.name)));
-    }).catch(loadError => { if (active) setHistoryError(payableError(loadError, 'Não foi possível carregar as classificações e o histórico de importações.')); }).finally(() => { if (active) setHistoryLoading(false); });
+      setHistory((batches.data ?? []) as Batch[]); setMacros((classifications.data ?? []).map(item => String(item.name)));
+    }).catch(failure => { if (active) setHistoryError(payableError(failure, 'Não foi possível consultar as classificações e o histórico.')); }).finally(() => { if (active) setHistoryLoading(false); });
     return () => { active = false; abort.abort(); };
   }, [canImport, refresh]);
-
-  function resetAnalysis() { generation.current++; controller.current?.abort(); setAnalysis(null); setProblems([]); setError(''); setSuccess(''); setBusy(null); setWriteUncertain(false); }
-
-  async function analyze(event: FormEvent) {
-    event.preventDefault();
-    if (!supabase || !file || !complete || !canImport || busy) return;
-    const client = supabase; const current = ++generation.current;
+  function importError(failure: unknown, fallback: string) {
+    const code = failure && typeof failure === 'object' && 'code' in failure ? String(failure.code) : '';
+    if (['PGRST202', '42883', '42P01'].includes(code) || code === 'P0043' && failure && typeof failure === 'object' && 'activation_required' in failure && failure.activation_required === true) return 'Ative a atualização 043 no banco e na função payables-import para conciliar as escolhas junto com o arquivo.';
+    if (code === 'P0042') return 'Este título possui pagamento ou baixa anterior que precisa de conferência. Reanalise o arquivo e confira a situação antes de conciliar.';
+    return payableError(failure, fallback);
+  }
+  function clearPreparation() {
+    generation.current++; controller.current?.abort(); setAnalysis(null); setDrafts({}); setPlanChoices({}); setProblems([]); setNeedsReview(false); setError(''); setSuccess(''); setBusy(null); source.current = null;
+  }
+  function markChoices() { setNeedsReview(true); setError(''); setSuccess(''); }
+  async function analyze(event?: FormEvent) {
+    event?.preventDefault();
+    if (!supabase || !file || !complete || !reportKind || !canImport || busy || pending || frozenRef.current) return;
+    const current = ++generation.current, client = supabase;
     controller.current?.abort(); const abort = new AbortController(); controller.current = abort;
-    setBusy('analyzing'); setAnalysis(null); setProblems([]); setError(''); setSuccess('');
+    const prior = analysis?.file === file && analysis.preview.full_report === (reportKind === 'FULL') ? analysis : null;
+    const chosen = prior ? resolutionChoices(prior.preview.reconciliation_items, drafts, prior.preview.bank_options, officialToday()).choices : {};
+    setBusy('analyzing'); setProblems([]); setError(''); setSuccess(''); setNeedsReview(true);
     try {
-      const parsed = await analyzePayableFile(file, abort.signal);
-      if (current !== generation.current) return;
+      const parsed = source.current?.file === file ? { ...source.current, errors: [] as ImportProblem[] } : await analyzePayableFile(file, abort.signal);
+      if (current !== generation.current || abort.signal.aborted) return;
       if (parsed.errors.length) { setProblems(parsed.errors); return; }
+      source.current = { file, hash: parsed.hash, base64: parsed.base64 };
       const [mappingResult, canonical] = await Promise.all([
         client.from('payable_plan_mappings').select('plan,macro').abortSignal(abort.signal),
-        payableImportRequest<PayableServerPreview>({ action:'preview',mode:'forecast',file_name:file.name,file_base64:parsed.base64 },abort.signal),
+        payableImportRequest<{ rows: PayableImportRow[]; preview: ForecastPreview; file_sha256: string }>({ action: 'preview', mode: 'forecast', reconciliation_version: '043', full_report: reportKind === 'FULL', resolution_choices: chosen, file_name: file.name, file_base64: parsed.base64 } as ForecastRequest, abort.signal),
       ]);
-      if (current !== generation.current) return;
+      if (current !== generation.current || abort.signal.aborted) return;
       if (mappingResult.error) throw mappingResult.error;
-      if (!canonical || !Array.isArray(canonical.rows) || canonical.rows.length < 1 || canonical.rows.length > 5000 || !/^[a-f0-9]{64}$/.test(canonical.file_sha256)) throw new Error('Não foi possível confirmar a análise do arquivo no servidor. Nenhum dado foi alterado.');
-      const known = new Map((mappingResult.data ?? []).map(item => [normalizePlan(String(item.plan)), String(item.macro)]));
-      const groups = new Map<string, PlanGroup>();
-      for (const row of canonical.rows) {
-        const key = normalizePlan(row.plan);
-        const group = groups.get(key) ?? { plan: row.plan, count: 0, cents: 0, macro: known.get(key) ?? '' };
-        group.count++; group.cents += row.amount_cents;
-        if (!Number.isSafeInteger(group.cents)) throw new Error('Total do plano excede o limite seguro.');
-        groups.set(key, group);
-      }
+      if (canonical?.preview?.reconciliation_version !== '043') throw { code: 'P0043', activation_required: true };
       const preview = canonical.preview;
-      if (!preview || preview.settled_count !== 0 || !Number.isSafeInteger(preview.row_count) || preview.row_count !== canonical.rows.length || ['new_count','open_count','settled_count'].some(key => !Number.isSafeInteger(preview[key as keyof ImportPreview])) || (preview.changed_count !== undefined && (!Number.isSafeInteger(preview.changed_count) || preview.changed_count < 0 || preview.changed_count > preview.open_count))) throw new Error('Não foi possível confirmar o resumo da análise. Nenhum dado foi alterado.');
-      setWriteUncertain(false);
-      setAnalysis({ file, hash: canonical.file_sha256, base64: parsed.base64, rows: canonical.rows, preview, groups: Array.from(groups.values()).sort((a,b) => a.plan.localeCompare(b.plan,'pt-BR')) });
-    } catch (analyzeError) { if (current === generation.current && !abort.signal.aborted) {
-      if (analyzeError && typeof analyzeError === 'object' && 'errors' in analyzeError && Array.isArray(analyzeError.errors) && analyzeError.errors.length) setProblems(analyzeError.errors as ImportProblem[]);
-      else setError(payableError(analyzeError, analyzeError instanceof Error ? analyzeError.message : 'Não foi possível concluir a análise. Nenhum dado foi alterado.'));
-    } }
-    finally { if (current === generation.current) setBusy(null); }
-  }
-
-  async function commit() {
-    if (!supabase || !analysis || !complete || !canImport || busy || writeUncertain || analysis.groups.some(group => !macros.includes(group.macro))) return;
-    const question = `Confirma a atualização das PREVISÕES do Grupo consolidado?\n\n${analysis.preview.new_count} novos; ${analysis.preview.open_count} títulos existentes${analysis.preview.changed_count === undefined ? '' : ` (${analysis.preview.changed_count} com dados atualizados)`}.\n\nOs títulos ausentes permanecem na base. Nenhum pagamento será criado por ausência no arquivo.`;
-    if (!window.confirm(question)) return;
-    setBusy('saving'); setError(''); setSuccess('');
-    const current = generation.current;
-    try {
-      const mappings = Object.fromEntries(analysis.groups.map(group => [group.plan, group.macro]));
-      const summary = await payableImportRequest<ImportPreview>({
-        action:'commit', mode:'forecast', file_name: analysis.file.name, file_base64: analysis.base64, mappings, complete: true,
-        previous_import_id: analysis.preview.previous_import_id,
-      });
-      if (current !== generation.current) return;
-      if (!summary || !Number.isSafeInteger(summary.row_count)) throw new Error('Resposta não confirmada.');
-      setSuccess(`Importação concluída: ${summary.row_count} títulos, ${summary.new_count} novos, ${summary.open_count} em aberto${summary.changed_count === undefined ? '' : ` (${summary.changed_count} com valor, data, banco ou outros dados atualizados)`}. Títulos ausentes e histórico preservados.`);
-      setAnalysis(null); setComplete(false); setFile(null); setRefresh(value => value + 1);
-      const input = document.getElementById('payable-file') as HTMLInputElement | null; if (input) input.value = '';
-    } catch (writeError) {
-      if (current === generation.current) {
-        const code = writeError && typeof writeError === 'object' && 'code' in writeError ? String(writeError.code) : '';
-        setWriteUncertain(!['23505', '23514', '22023', '42501', '40001', 'P0016', 'P0019', 'P0021', 'PGRST202', 'PGRST301', 'PGRST303', '42P01', '42883'].includes(code));
-        setError(payableError(writeError, 'Não foi possível confirmar a importação. Atualize o histórico antes de tentar novamente.'));
-        if (writeError && typeof writeError === 'object' && 'code' in writeError && writeError.code === '40001') setAnalysis(null);
-        setRefresh(value => value + 1);
+      const banks = preview.bank_options ?? preview.bank_accounts;
+      if (!Array.isArray(canonical.rows) || canonical.rows.length < 1 || canonical.rows.length > 5000 || canonical.file_sha256 !== parsed.hash
+        || preview.full_report !== (reportKind === 'FULL') || preview.row_count !== canonical.rows.length
+        || !(preview.previous_import_id === null || payableUuid(preview.previous_import_id)) || typeof preview.financial_revision !== 'string' || !preview.financial_revision.trim() || preview.financial_revision.length > 256
+        || typeof preview.can_commit !== 'boolean' || !validReconciliationItems(preview.reconciliation_items) || !Array.isArray(preview.resolution_errors)
+        || !Array.isArray(banks) || banks.some(bank => !payableUuid(bank.id) || typeof bank.display_name !== 'string')
+        || ['new_count', 'open_count', 'settled_count'].some(key => !Number.isSafeInteger(preview[key as keyof ImportPreview]) || Number(preview[key as keyof ImportPreview]) < 0)
+        || preview.reconciliation_items.some(item => chosen[item.key] && item.selected_action !== chosen[item.key].action)) throw new Error('invalid-preview');
+      const known = new Map((mappingResult.data ?? []).map(item => [normalizePlan(String(item.plan)), String(item.macro)])), groups = new Map<string, PlanGroup>();
+      for (const row of canonical.rows) {
+        if (!Number.isSafeInteger(row.amount_cents) || row.amount_cents < 0 || typeof row.plan !== 'string') throw new Error('invalid-row');
+        const key = normalizePlan(row.plan), group = groups.get(key) ?? { plan: row.plan, count: 0, cents: 0, macro: planChoices[key] ?? known.get(key) ?? '' };
+        group.count++; group.cents += row.amount_cents; if (!Number.isSafeInteger(group.cents)) throw new Error('invalid-total'); groups.set(key, group);
       }
+      const issues = preview.resolution_errors.slice(0,100).filter(item => Number.isSafeInteger(item.line) && typeof item.column === 'string' && typeof item.problem === 'string' && typeof item.correction === 'string');
+      if (preview.can_commit && (issues.length || preview.reconciliation_items.some(item => item.requires_resolution && !chosen[item.key]))) throw new Error('invalid-resolution');
+      setAnalysis({ file, hash: parsed.hash, base64: parsed.base64, rows: canonical.rows, preview: { ...preview, bank_options: banks }, choices: chosen, groups: [...groups.values()].sort((a,b) => a.plan.localeCompare(b.plan,'pt-BR')) });
+      setProblems(issues); setNeedsReview(false);
+    } catch (failure) {
+      if (current !== generation.current || abort.signal.aborted) return;
+      setNeedsReview(true);
+      if (failure && typeof failure === 'object' && 'errors' in failure && Array.isArray(failure.errors)) setProblems(failure.errors.slice(0,100) as ImportProblem[]);
+      setError(importError(failure, 'Não foi possível validar esta análise. O arquivo e as escolhas foram preservados. Confira os problemas e tente novamente.'));
     } finally { if (current === generation.current) setBusy(null); }
   }
-
-  if (!canImport) return <p className="notice">Seu perfil não permite importar bases de Contas a Pagar.</p>;
   const unclassified = analysis?.groups.filter(group => !macros.includes(group.macro)).length ?? 0;
+  const resolution = analysis ? resolutionChoices(analysis.preview.reconciliation_items, drafts, analysis.preview.bank_options, officialToday()) : { choices: {}, unresolved: 0 };
+  const canCommit = !!analysis && complete && !!reportKind && !busy && !pending && !needsReview && !unclassified && !problems.length && !resolution.unresolved && analysis.preview.can_commit;
+  async function execute(request: FrozenForecast) {
+    if (busy) return;
+    frozenRef.current = request; const current = generation.current;
+    setBusy('saving'); setError(''); setSuccess('');
+    try {
+      const result = await payableImportRequest<ImportPreview & { import_id: string; request_id?: string; idempotent?: boolean }>(request.body);
+      if (current !== generation.current) return;
+      if (!result || !payableUuid(result.import_id) || result.row_count !== request.rowCount || result.request_id !== request.body.request_id) throw new Error('unconfirmed');
+      frozenRef.current = null; setPending(null);
+      setSuccess(`Importação concluída: ${result.row_count} título(s) conferido(s). As conciliações escolhidas foram aplicadas junto com o arquivo; pagamentos efetivos compõem o realizado e baixas administrativas ficam fora dos valores financeiros. Histórico preservado.`);
+      setAnalysis(null); setFile(null); setComplete(false); setReportKind(''); setDrafts({}); setPlanChoices({}); setProblems([]); setNeedsReview(false); source.current = null; setRefresh(value => value + 1); if (input.current) input.current.value = '';
+    } catch (failure) {
+      if (current !== generation.current) return;
+      const code = failure && typeof failure === 'object' && 'code' in failure ? String(failure.code) : '';
+      const known = ['23505','23514','22023','42501','40001','P0016','P0019','P0021','P0042','P0043','PGRST202','PGRST301','PGRST303','42P01','42883'].includes(code);
+      if (known) { frozenRef.current = null; setPending(null); setNeedsReview(true); }
+      else setPending(request);
+      setError(importError(failure, 'A confirmação do resultado não chegou. O mesmo arquivo, tipo de relatório, escolhas e protocolo foram preservados. Repita a confirmação pendente para conferir esse envio sem criar outro protocolo.'));
+      setRefresh(value => value + 1);
+    } finally { if (current === generation.current) setBusy(null); }
+  }
+  function commit() {
+    if (!canCommit || !analysis || frozenRef.current) return;
+    const paid = Object.values(analysis.choices).filter(choice => choice.action === 'PAID').length, writtenOff = Object.values(analysis.choices).filter(choice => choice.action === 'WRITE_OFF').length;
+    if (!window.confirm(`Concluir esta importação e suas conciliações em uma única confirmação?\n\nArquivo: ${analysis.file.name}\nTipo: ${analysis.preview.full_report ? 'Relatório completo' : 'Somente novos títulos e atualizações'}\nTítulos no arquivo: ${analysis.preview.row_count}\nPagamentos efetivos informados: ${paid}\nBaixas sem pagamento confirmadas individualmente: ${writtenOff}\n\nOs pagamentos usarão as datas, valores e contas efetivos informados. Somente baixado não cria pagamento nem realizado. Todas as escolhas e o histórico serão preservados.`)) return;
+    const request: FrozenForecast = { rowCount: analysis.preview.row_count, body: { action: 'commit', mode: 'forecast', reconciliation_version: '043', full_report: analysis.preview.full_report, resolution_choices: analysis.choices, file_name: analysis.file.name, file_base64: analysis.base64, mappings: Object.fromEntries(analysis.groups.map(group => [group.plan, group.macro])), complete: true, previous_import_id: analysis.preview.previous_import_id, previous_financial_revision: analysis.preview.financial_revision, request_id: crypto.randomUUID() } };
+    void execute(request);
+  }
   return <>
     <section className="panel" aria-labelledby="payable-import-title">
-      <div className="panel-header"><div><h2 id="payable-import-title">Importar Contas a Pagar</h2><p className="muted">Origem: Grupo consolidado · análise da cópia e conclusão atômica no banco central.</p></div></div>
-      <p className="notice"><strong>Previsões de pagamento.</strong> Inclua a primeira base ou atualize os títulos do relatório. Pagamentos são importados na opção Pagamentos realizados.</p>
-      <p className="help-text">O número do lançamento junto com a filial identifica cada título. Valor, vencimento, conta, histórico e demais informações fornecidas atualizam o mesmo registro, preservando o histórico. A ausência no arquivo não indica pagamento.</p>
-      <details className="import-format-help"><summary>Colunas do relatório de Contas a Pagar</summary><p className="help-text">As colunas podem aparecer em outra ordem. O plano de contas será vinculado a um Centro de Custo Macro na conferência. A conta informada no relatório é preservada no título; o banco efetivo é trazido pelo relatório de pagamentos realizados.</p><div className="table-wrap"><table><caption>Correspondência das informações do relatório</caption><thead><tr><th>Coluna do relatório</th><th>Informação na Central</th></tr></thead><tbody><tr><td>Lançamento</td><td>Número do título, identificado junto com a filial</td></tr><tr><td>Histórico</td><td>Histórico / favorecido</td></tr><tr><td>Plano cp - Conta: nome</td><td>Plano de Contas para classificação no Macro</td></tr><tr><td>Plano cc - Conta: nome</td><td>Banco / conta informado no título</td></tr><tr><td>Emissão: valor do lançamento</td><td>Valor integral, com centavos</td></tr><tr><td>Emissão: data</td><td>Data de emissão</td></tr><tr><td>Vencimento: data</td><td>Data de vencimento usada nos filtros e na semana financeira</td></tr><tr><td>Filial</td><td>Filial oficial do lançamento; não é deduzida do nome do banco</td></tr><tr><td>Cheque: número</td><td>Número próprio do cheque, preservado como texto, inclusive zeros à esquerda</td></tr><tr><td>Situação</td><td>Situação da origem, incluindo a identificação de CHEQUE quando informada</td></tr></tbody></table></div><p className="help-text">Datas do modelo podem conter horário. A Central usa o dia civil informado para emissão e vencimento e preserva o arquivo original com o horário.</p></details>
-      {error && <p className="notice error" role="alert">{error}</p>}
-      {success && <p className="notice success" role="status">{success}</p>}
+      <div className="panel-header"><div><h2 id="payable-import-title">Importar Contas a Pagar</h2><p className="muted">Previsão e conciliação do relatório, em uma única importação.</p></div></div>
+      <p className="notice">Identifique o tipo de relatório. Na conferência você decide sobre cada baixa, sem precisar abrir os títulos depois de importar.</p>
+      <fieldset className="payable-import-report-kind" disabled={!!busy || !!pending}><legend>Conteúdo do relatório de previsões</legend>
+        <label><input type="radio" name="payable-report-kind" aria-label="Relatório completo de títulos em aberto" checked={reportKind === 'FULL'} onChange={() => { if (pending) return; clearPreparation(); setReportKind('FULL'); setComplete(false); }} /><span>Relatório completo de títulos em aberto<small>Mostra também os títulos da base que não constam mais no arquivo, para você escolher Pago ou Somente baixado.</small></span></label>
+        <label><input type="radio" name="payable-report-kind" aria-label="Somente novos títulos e atualizações" checked={reportKind === 'INCREMENTAL'} onChange={() => { if (pending) return; clearPreparation(); setReportKind('INCREMENTAL'); setComplete(false); }} /><span>Somente novos títulos e atualizações<small>Preserva os títulos ausentes deste arquivo, sem presumir pagamento ou baixa.</small></span></label>
+      </fieldset>
+      {error && <p className="notice error" role="alert">{error}</p>}{success && <p className="notice success" role="status">{success}</p>}
+      {pending && <div className="notice" role="status"><p>A confirmação está pendente. O arquivo, o tipo de relatório e as escolhas estão congelados até conferir este mesmo envio.</p><button type="button" className="button secondary" disabled={!!busy} onClick={() => void execute(pending)}>Repetir confirmação pendente</button></div>}
       <form className="stack" onSubmit={event => void analyze(event)}>
-        <label className="field" htmlFor="payable-file">Relatório de previsões de Contas a Pagar<input id="payable-file" type="file" accept=".xlsx,.xlsm,.csv,.xls" disabled={busy !== null} onChange={event => { resetAnalysis(); setComplete(false); setFile(event.target.files?.[0] ?? null); }} /></label>
-        <p className="help-text">Até 2 MiB e 5.000 títulos. Formatos: .xlsx, .xlsm e .csv UTF-8. Para .xls antigo, salve uma cópia como .xlsx. Fórmulas são recusadas; macros nunca são executadas.</p>
-        <label className="checkbox-field"><input type="checkbox" checked={complete} disabled={busy !== null} onChange={event => { setComplete(event.target.checked); setAnalysis(null); }} /> Confirmo que este arquivo contém previsões de pagamento do Grupo consolidado.</label>
-        <div className="inline-actions"><button type="submit" className="button" disabled={!file || !complete || busy !== null || historyLoading || macros.length === 0}>{busy === 'analyzing' ? 'Analisando cópia…' : writeUncertain ? 'Reanalisar arquivo' : 'Analisar arquivo'}</button>{busy === 'analyzing' && <button type="button" className="button secondary" onClick={resetAnalysis}>Cancelar análise</button>}</div>
+        <label className="field" htmlFor="payable-file">Relatório de previsões de Contas a Pagar<input ref={input} id="payable-file" type="file" accept=".xlsx,.xlsm,.csv,.xls" disabled={!!busy || !!pending} onChange={event => { if (pending) return; clearPreparation(); setComplete(false); setFile(event.target.files?.[0] ?? null); }} /></label>
+        <p className="help-text">Até 2 MiB e 5.000 títulos. .xlsx, .xlsm ou .csv UTF-8. O original será preservado; macros não são executadas.</p>
+        <label className="checkbox-field"><input type="checkbox" checked={complete} disabled={!!busy || !!pending} onChange={event => { setComplete(event.target.checked); setNeedsReview(true); }} />Confirmo o conteúdo do relatório e o tipo de importação selecionado.</label>
+        <div className="inline-actions"><button type="submit" className="button" disabled={!file || !reportKind || !complete || !!busy || !!pending || historyLoading || !macros.length}>{busy === 'analyzing' ? 'Analisando cópia…' : analysis ? 'Reanalisar arquivo' : 'Analisar arquivo'}</button>{busy === 'analyzing' && <button type="button" className="button secondary" onClick={() => { generation.current++; controller.current?.abort(); setBusy(null); setNeedsReview(true); }}>Cancelar análise</button>}</div>
       </form>
-      {problems.length > 0 && <div><p className="notice error" role="alert">Importação bloqueada. Nenhum dado foi alterado. Corrija todos os problemas abaixo e analise novamente.</p><div className="table-wrap"><table><caption>Problemas encontrados · até 100 erros por análise</caption><thead><tr><th>Linha</th><th>Coluna</th><th>Problema</th><th>Como corrigir</th></tr></thead><tbody>{problems.map((problem,index) => <tr key={index}><td>{problem.line || '—'}</td><td>{problem.column}</td><td>{problem.problem}</td><td>{problem.correction}</td></tr>)}</tbody></table></div></div>}
-      {analysis && <div className="stack">
-        <h3>Conferência antes da importação</h3><p>{analysis.preview.row_count} títulos · {analysis.preview.new_count} novos · {analysis.preview.open_count} em aberto{analysis.preview.changed_count === undefined ? '' : ` (${analysis.preview.changed_count} com dados atualizados)`}. Títulos ausentes permanecem na base.</p>
-        <div className="table-wrap"><table><caption>Prévia dos títulos · {Math.min(analysis.rows.length, 10)} de {analysis.rows.length} lançamentos</caption><thead><tr><th>Nº lançamento</th><th>Nº cheque</th><th>Histórico / favorecido</th><th>Plano de Contas</th><th>Banco / conta da origem</th><th>Valor integral</th><th>Emissão</th><th>Vencimento</th><th>Filial</th><th>Situação da origem</th></tr></thead><tbody>{analysis.rows.slice(0, 10).map((row, index) => <tr key={index}><td>{row.entry_number}</td><td>{row.cheque_number || (row.source_status?.trim().toUpperCase() === 'CHEQUE' ? 'Não informado' : '—')}</td><td>{row.description}</td><td>{row.plan}</td><td>{row.bank_account || 'Não informado'}</td><td>{formatCents(row.amount_cents)}</td><td>{dateLabel(row.issued_on)}</td><td>{dateLabel(row.due_date)}</td><td>{row.branch}</td><td>{row.source_status || 'Não informada'}</td></tr>)}</tbody></table></div>
-        <p className="help-text">Classifique cada Plano de Contas. Planos conhecidos mantêm o mapeamento anterior; planos novos exigem sua escolha uma vez.</p>
-        <div className="table-wrap"><table><caption>Classificação dos Planos de Contas</caption><thead><tr><th>Plano</th><th>Quantidade</th><th>Valor total</th><th>Centro de Custo Macro</th></tr></thead><tbody>{analysis.groups.map((group,index) => <tr key={normalizePlan(group.plan)}><td>{group.plan}</td><td>{group.count}</td><td>{formatCents(group.cents)}</td><td><label className="sr-only" htmlFor={`payable-macro-${index}`}>Macro para {group.plan}</label><select id={`payable-macro-${index}`} value={macros.includes(group.macro) ? group.macro : ''} disabled={busy !== null} onChange={event => { const macro = event.target.value; setAnalysis(previous => previous ? { ...previous, groups: previous.groups.map((item,itemIndex) => itemIndex === index ? { ...item, macro } : item) } : null); }}><option value="">NÃO CLASSIFICADO</option>{macros.map(macro => <option key={macro}>{macro}</option>)}</select></td></tr>)}</tbody></table></div>
-        {unclassified > 0 && <p className="notice" role="status">{unclassified} plano(s) sem classificação. A conclusão está bloqueada.</p>}
-        <button className="button" type="button" disabled={busy !== null || unclassified > 0 || !complete || writeUncertain} onClick={() => void commit()}>{busy === 'saving' ? 'Concluindo importação…' : 'Atualizar previsões'}</button>
+      <details className="import-format-help"><summary>Colunas do relatório de Contas a Pagar</summary><p className="help-text">Lançamento, Histórico, Plano cp - Conta: nome, Plano cc - Conta: nome, Emissão: valor do lançamento, Emissão: data, Vencimento: data, Filial, Situação e Cheque: número. Número e filial identificam o título; o número do cheque é preservado separadamente.</p></details>
+      {analysis && <div className="stack"><h3>Conferência antes da importação</h3><p>{analysis.preview.row_count} títulos no arquivo · {analysis.preview.new_count} novos · {analysis.preview.open_count} títulos existentes.</p>
+        <p className="help-text">Os valores da prévia são nominais. Os títulos confirmados como Somente baixado serão preservados no histórico e excluídos dos valores financeiros.</p>
+        {needsReview && <p className="notice" role="status">Escolhas ou dados alterados. Valide novamente antes de concluir. A conferência exibida é a anterior.</p>}
+        <div className="table-wrap"><table><caption>Prévia dos títulos · {Math.min(analysis.rows.length,10)} de {analysis.rows.length} lançamentos</caption><thead><tr><th>Nº lançamento</th><th>Nº cheque</th><th>Histórico / favorecido</th><th>Plano de Contas</th><th>Banco informado</th><th>Valor nominal</th><th>Emissão</th><th>Vencimento</th><th>Filial</th><th>Situação da origem</th></tr></thead><tbody>{analysis.rows.slice(0,10).map((row,index) => <tr key={index}><td>{row.entry_number}</td><td>{row.cheque_number || '—'}</td><td>{row.description}</td><td>{row.plan}</td><td>{row.bank_account || '—'}</td><td>{formatCents(row.amount_cents)}</td><td>{dateLabel(row.issued_on)}</td><td>{dateLabel(row.due_date)}</td><td>{row.branch}</td><td>{row.source_status || 'Não informada'}</td></tr>)}</tbody></table></div>
+        <div className="table-wrap"><table><caption>Classificação dos Planos de Contas</caption><thead><tr><th>Plano</th><th>Quantidade</th><th>Valor nominal</th><th>Centro de Custo Macro</th></tr></thead><tbody>{analysis.groups.map(group => <tr key={normalizePlan(group.plan)}><td>{group.plan}</td><td>{group.count}</td><td>{formatCents(group.cents)}</td><td><select aria-label={`Macro para ${group.plan}`} value={macros.includes(group.macro) ? group.macro : ''} disabled={!!busy || !!pending} onChange={event => { const macro = event.target.value, key = normalizePlan(group.plan); setPlanChoices(previous => ({ ...previous, [key]: macro })); setAnalysis(previous => previous ? { ...previous, groups: previous.groups.map(item => normalizePlan(item.plan) === key ? { ...item, macro } : item) } : null); markChoices(); }}><option value="">NÃO CLASSIFICADO</option>{macros.map(macro => <option key={macro}>{macro}</option>)}</select></td></tr>)}</tbody></table></div>
+        <PayableImportReconciliation items={analysis.preview.reconciliation_items} banks={analysis.preview.bank_options} drafts={drafts} disabled={!!busy || !!pending} today={officialToday()} onChange={(key,value) => { setDrafts(previous => ({ ...previous, [key]: value })); markChoices(); }} />
+        {unclassified > 0 && <p className="notice" role="status">{unclassified} plano(s) sem Centro de Custo Macro.</p>}
+        <div className="inline-actions"><button type="button" className="button secondary" disabled={!!busy || !!pending || !complete} onClick={() => void analyze()}>Validar escolhas da importação</button><button type="button" className="button" disabled={!canCommit} onClick={commit}>{busy === 'saving' ? 'Concluindo importação…' : 'Importar e conciliar títulos'}</button></div>
       </div>}
+      {!!problems.length && <div><p className="notice error" role="alert">{needsReview ? 'Confira os problemas da análise e valide as escolhas novamente.' : 'A importação ainda precisa de conferência.'} Nenhum pagamento foi registrado por esta análise.</p><div className="table-wrap"><table><caption>Problemas encontrados · até 100 erros por análise</caption><thead><tr><th>Linha</th><th>Coluna</th><th>Problema</th><th>Como corrigir</th></tr></thead><tbody>{problems.map((problem,index) => <tr key={index}><td>{problem.line || '—'}</td><td>{problem.column}</td><td>{problem.problem}</td><td>{problem.correction}</td></tr>)}</tbody></table></div></div>}
     </section>
-    <section className="panel" aria-labelledby="payable-import-history"><div className="panel-header"><div><h2 id="payable-import-history">Histórico de importações de Contas a Pagar</h2><p className="muted">20 importações mais recentes da origem Grupo consolidado.</p></div><button className="button secondary" type="button" disabled={busy !== null || historyLoading} onClick={() => setRefresh(value => value + 1)}>Atualizar histórico</button></div>
-      {historyError && <p className="notice error" role="alert">{historyError}</p>}
-      <div className="table-wrap" aria-busy={historyLoading}><table><thead><tr><th>Data / hora</th><th>Arquivo</th><th>Títulos</th><th>Novos</th><th>Em aberto</th><th>Quitados</th></tr></thead><tbody>{historyLoading ? <tr><td className="empty-state" colSpan={6}>Carregando histórico…</td></tr> : history.length ? history.map(batch => <tr key={batch.id}><td>{dateLabel(batch.created_at)}</td><td>{batch.file_name}</td><td>{batch.row_count}</td><td>{batch.new_count}</td><td>{batch.open_count}</td><td>{batch.settled_count}</td></tr>) : <tr><td className="empty-state" colSpan={6}>{historyError ? 'Histórico indisponível.' : 'Nenhuma base de Contas a Pagar importada.'}</td></tr>}</tbody></table></div>
-    </section>
+    <section className="panel" aria-labelledby="payable-import-history"><div className="panel-header"><h2 id="payable-import-history">Histórico de importações de Contas a Pagar</h2><button type="button" className="button secondary" disabled={!!busy || historyLoading} onClick={() => setRefresh(value => value + 1)}>Atualizar histórico</button></div>{historyError && <p className="notice error" role="alert">{historyError}</p>}<div className="table-wrap"><table><thead><tr><th>Data / hora</th><th>Arquivo</th><th>Títulos</th><th>Novos</th><th>Em aberto</th><th>Quitados</th></tr></thead><tbody>{historyLoading ? <tr><td colSpan={6}>Carregando histórico…</td></tr> : history.map(batch => <tr key={batch.id}><td>{dateLabel(batch.created_at)}</td><td>{batch.file_name}</td><td>{batch.row_count}</td><td>{batch.new_count}</td><td>{batch.open_count}</td><td>{batch.settled_count}</td></tr>)}</tbody></table></div></section>
   </>;
 }
