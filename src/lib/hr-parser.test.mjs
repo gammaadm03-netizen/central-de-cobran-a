@@ -10,9 +10,39 @@ test('RH preserves both repeated salary columns and exact cents',()=>{
 test('RH detects header after a report title without replacing salary fields',()=>{
  const result=validateHrRows([['Relatório sintético'],[],header,row]);assert.equal(result.errors.length,0);assert.equal(result.rows[0].source_row,4);
 });
-test('RH unknown fields stay null and blank branch and sector can be corrected in the source',()=>{
+test('RH keeps unknown salaries and dates while present benefit columns treat blank cells as zero',()=>{
  const source=[...row];source[0]='';source[2]='';source[3]='';source[4]='';source[5]='';source[7]='';source[8]='';source[9]='';source[10]='';
- const result=validateHrRows([header,source]);assert.equal(result.errors.length,0);for(const key of ['admitted_on','birthday_on','salary_base_cents','payroll_salary_cents','transport_cents','advance_cents','total_cents'])assert.equal(result.rows[0][key],null);
+ const result=validateHrRows([header,source]);assert.equal(result.errors.length,0);for(const key of ['admitted_on','birthday_on','salary_base_cents','payroll_salary_cents','cost_allowance_cents','total_cents'])assert.equal(result.rows[0][key],null);
+ for(const key of ['transport_cents','advance_cents'])assert.equal(result.rows[0][key],0);
+});
+
+const reportHeader=['FILIAL','ADMISSAO','ANIVERSARIO','Salário Base','VT TOTAL','Salário','Adiantamento','Ajuda de Custo','SETOR','Funcionário'];
+const reportRow=['Unidade sintética','01/03/2020','20/05/1990','2.500,00','R$ -','1.850,75','','R$ 480,25','Financeiro','Pessoa sintética'];
+test('RH actual report maps named Salário Base and Salário independently and imports Ajuda de Custo',()=>{
+ const result=validateHrRows([reportHeader,reportRow]);assert.deepEqual(result.errors,[]);
+ const parsed=result.rows[0];assert.equal(parsed.salary_base_cents,250000);assert.equal(parsed.payroll_salary_cents,185075);
+ assert.equal(parsed.cost_allowance_cents,48025);assert.equal(parsed.transport_cents,0);assert.equal(parsed.advance_cents,0);
+ assert.equal(parsed.total_cents,null);assert.equal(parsed.admitted_on,'2020-03-01');assert.equal(parsed.birthday_on,'1990-05-20');
+ assert.equal(Object.keys(parsed).length,13);
+});
+test('RH salary names take priority regardless of their positions and preserve the legacy repeated salary layout',()=>{
+ const base=['FILIAL','FUNCIONÁRIO','SETOR'];
+ for(const [cols,values]of [[['Salário','Salário Base'],['1.100,10','2.200,20']],[['Salário da folha','Salário'],['1.100,10','2.200,20']],[['Salário Base','Salário Folha'],['2.200,20','1.100,10']],[['Salário','Salário'],['2.200,20','1.100,10']]]){
+  const result=validateHrRows([[...base,...cols],['Unidade','Pessoa sintética','Área',...values]]);assert.deepEqual(result.errors,[]);
+  assert.equal(result.rows[0].salary_base_cents,220020);assert.equal(result.rows[0].payroll_salary_cents,110010);
+ }
+ for(const cols of [['Salário Base','Salário Base'],['Salário Base','Salário','Salário'],['Salário Base','Salário Folha','Salário']])assert(validateHrRows([[...base,...cols],['Unidade','Pessoa sintética','Área',...cols.map(()=>1)]]).errors.length>0);
+});
+test('RH present optional benefits accept blank or accounting zero without inventing absent columns or salary values',()=>{
+ for(const value of ['',null,undefined,0,'0,00','-','R$ -','R$  —']){
+  const source=[...reportRow];source[3]='';source[4]=value;source[5]='';source[6]=value;source[7]=value;
+  const result=validateHrRows([reportHeader,source]);assert.deepEqual(result.errors,[]);
+  for(const key of ['transport_cents','advance_cents','cost_allowance_cents'])assert.equal(result.rows[0][key],0);
+  assert.equal(result.rows[0].salary_base_cents,null);assert.equal(result.rows[0].payroll_salary_cents,null);assert.equal(result.rows[0].total_cents,null);
+ }
+ const sparse=validateHrRows([['FILIAL','SETOR','FUNCIONÁRIO'],['Unidade','Área','Pessoa sintética']]);assert.deepEqual(sparse.errors,[]);
+ for(const key of ['transport_cents','advance_cents','cost_allowance_cents'])assert.equal(sparse.rows[0][key],null);
+ const partner=[...reportRow];partner[1]='';partner[8]='SOCIO';assert.equal(validateHrRows([reportHeader,partner]).rows[0].admitted_on,null);
 });
 test('RH rejects impossible dates, abbreviated years, unsupported formulas and third salary before import',()=>{
  for(const change of [[2,'31/02/2020'],[3,'01/01/99'],[4,{formula:'SUM(A1)',result:1}],[6,'=HYPERLINK("x")'],[6,'']]){

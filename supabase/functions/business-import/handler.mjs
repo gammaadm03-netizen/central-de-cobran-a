@@ -54,11 +54,11 @@ export function createBusinessGateway({env,fetch:fetcher=globalThis.fetch,loadWo
   const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(b=>b.toString(16).padStart(2,'0')).join('');
   const referenceArgument=commercial?{p_month:reference}:{p_reference_date:reference};
   if(body.action==='preview'){
-   const preview=await call(`/rest/v1/rpc/${commercial?'preview_commercial_import':'preview_hr_import'}`,{data:{p_rows:parsed.rows,...referenceArgument}});if(!preview.ok)return fail(preview);
+   const preview=await call(`/rest/v1/rpc/${commercial?'preview_commercial_import':'preview_hr_report_import'}`,{data:{p_rows:parsed.rows,...referenceArgument}});if(!preview.ok)return fail(preview);
    if(preview.payload?.row_count!==parsed.rows.length||!(preview.payload.previous_import_id===null||UUID.test(preview.payload.previous_import_id??'')))throw Error('preview');
    return respond(200,{rows:parsed.rows,preview:preview.payload,file_sha256:hash});
   }
-  const committed=await call(`/rest/v1/rpc/${commercial?'commit_commercial_import_from_gateway':'commit_hr_import_from_gateway'}`,{service:true,data:{p_user_id:auth.payload.id,p_session_id:verifiedSession,p_file_name:body.file_name,p_file_sha256:hash,p_file_base64:body.file_base64,p_rows:parsed.rows,...referenceArgument,p_previous_import_id:body.previous_import_id}});
+  const committed=await call(`/rest/v1/rpc/${commercial?'commit_commercial_import_from_gateway':'commit_hr_report_import_from_gateway'}`,{service:true,data:{p_user_id:auth.payload.id,p_session_id:verifiedSession,p_file_name:body.file_name,p_file_sha256:hash,p_file_base64:body.file_base64,p_rows:parsed.rows,...referenceArgument,p_previous_import_id:body.previous_import_id}});
   if(!committed.ok)return fail(committed);if(!UUID.test(committed.payload?.import_id??'')||committed.payload.row_count!==parsed.rows.length)throw Error('commit');return respond(200,committed.payload);
  }catch{log('request_unavailable');return respond(503,{error:FAILURE});}
 };}

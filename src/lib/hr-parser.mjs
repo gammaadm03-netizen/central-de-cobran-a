@@ -1,9 +1,12 @@
 import { MAX_ROWS, parseCivilDate, parseMoneyCents } from './payables-parser.mjs';
 
 const normalize = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-const LABELS = { branch:'Filial', employee:'Funcionário', sector:'Setor', admitted_on:'Admissão', birthday_on:'Aniversário', salary_base_cents:'Primeiro Salário — base', payroll_salary_cents:'Segundo Salário — folha', transport_cents:'VT TOTAL', advance_cents:'Adiantamento', total_cents:'Total', count_label:'Contagem' };
-const HEADERS = { FILIAL:'branch', FUNCIONARIO:'employee', SETOR:'sector', ADMISSAO:'admitted_on', ANIVERSARIO:'birthday_on', VTTOTAL:'transport_cents', VT:'transport_cents', ADIANTAMENTO:'advance_cents', TOTAL:'total_cents', CONTAGEM:'count_label', SALARIOBASE:'salary_base_cents', SALARIODAFOLHA:'payroll_salary_cents', SALARIOFOLHA:'payroll_salary_cents' };
-const MONEY = ['salary_base_cents','payroll_salary_cents','transport_cents','advance_cents','total_cents'];
+const LABELS = { branch:'Filial', employee:'Funcionário', sector:'Setor', admitted_on:'Admissão', birthday_on:'Aniversário', salary_base_cents:'Salário Base', payroll_salary_cents:'Salário da folha', transport_cents:'VT TOTAL', advance_cents:'Adiantamento', cost_allowance_cents:'Ajuda de Custo', total_cents:'Total', count_label:'Contagem' };
+const HEADERS = { FILIAL:'branch', FUNCIONARIO:'employee', SETOR:'sector', ADMISSAO:'admitted_on', ANIVERSARIO:'birthday_on', VTTOTAL:'transport_cents', VT:'transport_cents', ADIANTAMENTO:'advance_cents', AJUDADECUSTO:'cost_allowance_cents', AJUDACUSTO:'cost_allowance_cents', TOTAL:'total_cents', CONTAGEM:'count_label', SALARIOBASE:'salary_base_cents', SALARIODAFOLHA:'payroll_salary_cents', SALARIOFOLHA:'payroll_salary_cents' };
+const MONEY = ['salary_base_cents','payroll_salary_cents','transport_cents','advance_cents','cost_allowance_cents','total_cents'];
+// Confirmado pela operação: vazio é zero nestas colunas quando presentes no arquivo.
+// A ausência da coluna, dos salários ou do TOTAL permanece desconhecida.
+const BLANK_IS_ZERO = new Set(['transport_cents','advance_cents','cost_allowance_cents']);
 const blank = value => value === null || value === undefined || typeof value === 'string' && !value.trim();
 function scalar(value) {
   if (blank(value)) return '';
@@ -24,7 +27,8 @@ function date(value, excel1904) {
   return parseCivilDate(value, excel1904);
 }
 function money(value, key) {
-  if (blank(value)) return null;
+  if (blank(value)) return BLANK_IS_ZERO.has(key) ? 0 : null;
+  if (typeof value === 'string' && /^(?:R\$\s*)?[-–—]$/.test(value.trim())) return 0;
   let sign = 1, source = value;
   if (typeof value === 'number' && value < 0) { sign = -1; source = -value; }
   else if (typeof value === 'string' && /^\s*(?:-\s*R\$|R\$\s*-|-)/.test(value)) {
@@ -34,8 +38,9 @@ function money(value, key) {
   return sign * parseMoneyCents(source);
 }
 
-// The two repeated SALÁRIO columns are deliberately positional. Converting the
-// sheet to objects first would overwrite one and corrupt base/payroll totals.
+// Named salary fields take priority; remaining SALÁRIO columns fill base then
+// payroll. This supports SALÁRIO BASE + SALÁRIO and the legacy repeated SALÁRIO
+// layout without overwriting either value when converting the sheet to rows.
 export function validateHrRows(matrix, { excel1904 = false } = {}) {
   const errors = [], rows = [];
   const problem = (line,column,message) => errors.push({line,column,problem:message,correction:'Corrija a célula no arquivo original e selecione uma nova cópia.'});
@@ -47,15 +52,18 @@ export function validateHrRows(matrix, { excel1904 = false } = {}) {
     try { head=matrix[line].map(value=>normalize(scalar(value))); } catch { continue; }
     if (head.includes('FILIAL') && head.includes('FUNCIONARIO') && head.includes('SETOR')) candidates.push({line,head});
   }
-  if (!candidates.length) return {rows,errors:[{line:1,column:'Cabeçalho',problem:'Não encontrei FILIAL, SETOR e FUNCIONÁRIO na mesma linha.',correction:'Inclua os três cabeçalhos e mantenha os dois SALÁRIO na ordem: base e folha.'}]};
+  if (!candidates.length) return {rows,errors:[{line:1,column:'Cabeçalho',problem:'Não encontrei FILIAL, SETOR e FUNCIONÁRIO na mesma linha.',correction:'Inclua os três cabeçalhos. Use Salário Base e Salário, ou dois SALÁRIO na ordem base e folha.'}]};
   const {line:headerLine,head}=candidates[0];
   if (head.length>100) problem(headerLine+1,'Cabeçalho','A base excede 100 colunas.');
-  const columns=new Map(); let salary=0;
+  const columns=new Map(), unnamedSalaries=[];
   head.forEach((header,index)=>{
-    let key=HEADERS[header];
-    if(header==='SALARIO') { salary++;key=salary===1?'salary_base_cents':salary===2?'payroll_salary_cents':null;if(salary>2)problem(headerLine+1,'Salário','Há mais de duas colunas SALÁRIO.'); }
+    if(header==='SALARIO') { unnamedSalaries.push(index);return; }
+    const key=HEADERS[header];
     if(key&&columns.has(key))problem(headerLine+1,LABELS[key],'Coluna duplicada ou ambígua.');else if(key)columns.set(key,index);
   });
+  const remainingSalaries=['salary_base_cents','payroll_salary_cents'].filter(key=>!columns.has(key));
+  if(unnamedSalaries.length>remainingSalaries.length)problem(headerLine+1,'Salário','Há mais de duas colunas de salário ou a identificação está ambígua.');
+  else unnamedSalaries.forEach((column,index)=>columns.set(remainingSalaries[index],column));
   if(errors.length)return{rows,errors};
   let count=0;const total=Object.fromEntries(MONEY.map(key=>[key,0n]));
   for(let index=headerLine+1;index<matrix.length;index++){
@@ -66,7 +74,7 @@ export function validateHrRows(matrix, { excel1904 = false } = {}) {
     const before=errors.length;
     if(source.length>100||source.slice(head.length).some(value=>!blank(value)))problem(index+1,'Arquivo','Há valores fora das colunas do cabeçalho.');
     for(let column=0;column<source.length;column++)try{scalar(source[column]);}catch(error){problem(index+1,`Coluna ${column+1}`,error.message);}
-    const row={source_row:index+1,branch:'',employee:'',sector:'',admitted_on:null,birthday_on:null,salary_base_cents:null,payroll_salary_cents:null,transport_cents:null,advance_cents:null,total_cents:null,count_label:null};
+    const row={source_row:index+1,branch:'',employee:'',sector:'',admitted_on:null,birthday_on:null,salary_base_cents:null,payroll_salary_cents:null,transport_cents:null,advance_cents:null,cost_allowance_cents:null,total_cents:null,count_label:null};
     for(const[key,column]of columns){try{
       const value=scalar(source[column]);
       if(MONEY.includes(key))row[key]=money(value,key);

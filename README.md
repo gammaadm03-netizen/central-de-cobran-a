@@ -1,6 +1,12 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.13.0**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.13.1**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Correção do modelo de RH / DP — 0.13.1
+
+O relatório com **Salário Base**, **Salário** e **Ajuda de Custo** passa a ser reconhecido sem confundir salários ou perder a ajuda. VT, adiantamento e ajuda vazios valem zero quando a coluna existe, conforme confirmação do usuário. TOTAL ausente permanece desconhecido, sem soma presumida. Prévia, tela e Excel apresentam os campos separadamente; posições anteriores continuam preservadas.
+
+Ativação: [correção da importação de RH](docs/corrigir-importacao-rh.md). O combinado atual **031..035** aplica somente versões faltantes; atualizar a função existente **business-import**, conferir o site **0.13.1** e reimportar a mesma base. A versão de leitura do arquivo permite recuperar campos antes ignorados sem duplicar os totais.
 
 ## Quatro abas recuperadas da V75 — 0.13.0
 

@@ -289,9 +289,10 @@ function validateCommercialRows(matrix, { excel1904 = false } = {}) {
 
 // src/lib/hr-parser.mjs
 var normalize = (value) => String(value ?? "").normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-var LABELS = { branch: "Filial", employee: "Funcion\xE1rio", sector: "Setor", admitted_on: "Admiss\xE3o", birthday_on: "Anivers\xE1rio", salary_base_cents: "Primeiro Sal\xE1rio \u2014 base", payroll_salary_cents: "Segundo Sal\xE1rio \u2014 folha", transport_cents: "VT TOTAL", advance_cents: "Adiantamento", total_cents: "Total", count_label: "Contagem" };
-var HEADERS = { FILIAL: "branch", FUNCIONARIO: "employee", SETOR: "sector", ADMISSAO: "admitted_on", ANIVERSARIO: "birthday_on", VTTOTAL: "transport_cents", VT: "transport_cents", ADIANTAMENTO: "advance_cents", TOTAL: "total_cents", CONTAGEM: "count_label", SALARIOBASE: "salary_base_cents", SALARIODAFOLHA: "payroll_salary_cents", SALARIOFOLHA: "payroll_salary_cents" };
-var MONEY = ["salary_base_cents", "payroll_salary_cents", "transport_cents", "advance_cents", "total_cents"];
+var LABELS = { branch: "Filial", employee: "Funcion\xE1rio", sector: "Setor", admitted_on: "Admiss\xE3o", birthday_on: "Anivers\xE1rio", salary_base_cents: "Sal\xE1rio Base", payroll_salary_cents: "Sal\xE1rio da folha", transport_cents: "VT TOTAL", advance_cents: "Adiantamento", cost_allowance_cents: "Ajuda de Custo", total_cents: "Total", count_label: "Contagem" };
+var HEADERS = { FILIAL: "branch", FUNCIONARIO: "employee", SETOR: "sector", ADMISSAO: "admitted_on", ANIVERSARIO: "birthday_on", VTTOTAL: "transport_cents", VT: "transport_cents", ADIANTAMENTO: "advance_cents", AJUDADECUSTO: "cost_allowance_cents", AJUDACUSTO: "cost_allowance_cents", TOTAL: "total_cents", CONTAGEM: "count_label", SALARIOBASE: "salary_base_cents", SALARIODAFOLHA: "payroll_salary_cents", SALARIOFOLHA: "payroll_salary_cents" };
+var MONEY = ["salary_base_cents", "payroll_salary_cents", "transport_cents", "advance_cents", "cost_allowance_cents", "total_cents"];
+var BLANK_IS_ZERO = /* @__PURE__ */ new Set(["transport_cents", "advance_cents", "cost_allowance_cents"]);
 var blank = (value) => value === null || value === void 0 || typeof value === "string" && !value.trim();
 function scalar2(value) {
   if (blank(value)) return "";
@@ -310,7 +311,8 @@ function date2(value, excel1904) {
   return parseCivilDate(value, excel1904);
 }
 function money2(value, key) {
-  if (blank(value)) return null;
+  if (blank(value)) return BLANK_IS_ZERO.has(key) ? 0 : null;
+  if (typeof value === "string" && /^(?:R\$\s*)?[-–—]$/.test(value.trim())) return 0;
   let sign = 1, source = value;
   if (typeof value === "number" && value < 0) {
     sign = -1;
@@ -337,21 +339,22 @@ function validateHrRows(matrix, { excel1904 = false } = {}) {
     }
     if (head2.includes("FILIAL") && head2.includes("FUNCIONARIO") && head2.includes("SETOR")) candidates.push({ line, head: head2 });
   }
-  if (!candidates.length) return { rows, errors: [{ line: 1, column: "Cabe\xE7alho", problem: "N\xE3o encontrei FILIAL, SETOR e FUNCION\xC1RIO na mesma linha.", correction: "Inclua os tr\xEAs cabe\xE7alhos e mantenha os dois SAL\xC1RIO na ordem: base e folha." }] };
+  if (!candidates.length) return { rows, errors: [{ line: 1, column: "Cabe\xE7alho", problem: "N\xE3o encontrei FILIAL, SETOR e FUNCION\xC1RIO na mesma linha.", correction: "Inclua os tr\xEAs cabe\xE7alhos. Use Sal\xE1rio Base e Sal\xE1rio, ou dois SAL\xC1RIO na ordem base e folha." }] };
   const { line: headerLine, head } = candidates[0];
   if (head.length > 100) problem(headerLine + 1, "Cabe\xE7alho", "A base excede 100 colunas.");
-  const columns = /* @__PURE__ */ new Map();
-  let salary = 0;
+  const columns = /* @__PURE__ */ new Map(), unnamedSalaries = [];
   head.forEach((header, index) => {
-    let key = HEADERS[header];
     if (header === "SALARIO") {
-      salary++;
-      key = salary === 1 ? "salary_base_cents" : salary === 2 ? "payroll_salary_cents" : null;
-      if (salary > 2) problem(headerLine + 1, "Sal\xE1rio", "H\xE1 mais de duas colunas SAL\xC1RIO.");
+      unnamedSalaries.push(index);
+      return;
     }
+    const key = HEADERS[header];
     if (key && columns.has(key)) problem(headerLine + 1, LABELS[key], "Coluna duplicada ou amb\xEDgua.");
     else if (key) columns.set(key, index);
   });
+  const remainingSalaries = ["salary_base_cents", "payroll_salary_cents"].filter((key) => !columns.has(key));
+  if (unnamedSalaries.length > remainingSalaries.length) problem(headerLine + 1, "Sal\xE1rio", "H\xE1 mais de duas colunas de sal\xE1rio ou a identifica\xE7\xE3o est\xE1 amb\xEDgua.");
+  else unnamedSalaries.forEach((column, index) => columns.set(remainingSalaries[index], column));
   if (errors.length) return { rows, errors };
   let count = 0;
   const total = Object.fromEntries(MONEY.map((key) => [key, 0n]));
@@ -373,7 +376,7 @@ function validateHrRows(matrix, { excel1904 = false } = {}) {
     } catch (error) {
       problem(index + 1, `Coluna ${column + 1}`, error.message);
     }
-    const row = { source_row: index + 1, branch: "", employee: "", sector: "", admitted_on: null, birthday_on: null, salary_base_cents: null, payroll_salary_cents: null, transport_cents: null, advance_cents: null, total_cents: null, count_label: null };
+    const row = { source_row: index + 1, branch: "", employee: "", sector: "", admitted_on: null, birthday_on: null, salary_base_cents: null, payroll_salary_cents: null, transport_cents: null, advance_cents: null, cost_allowance_cents: null, total_cents: null, count_label: null };
     for (const [key, column] of columns) {
       try {
         const value = scalar2(source[column]);
@@ -567,12 +570,12 @@ function createBusinessGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
       const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
       const referenceArgument = commercial ? { p_month: reference } : { p_reference_date: reference };
       if (body.action === "preview") {
-        const preview = await call(`/rest/v1/rpc/${commercial ? "preview_commercial_import" : "preview_hr_import"}`, { data: { p_rows: parsed.rows, ...referenceArgument } });
+        const preview = await call(`/rest/v1/rpc/${commercial ? "preview_commercial_import" : "preview_hr_report_import"}`, { data: { p_rows: parsed.rows, ...referenceArgument } });
         if (!preview.ok) return fail(preview);
         if (preview.payload?.row_count !== parsed.rows.length || !(preview.payload.previous_import_id === null || UUID.test(preview.payload.previous_import_id ?? ""))) throw Error("preview");
         return respond(200, { rows: parsed.rows, preview: preview.payload, file_sha256: hash });
       }
-      const committed = await call(`/rest/v1/rpc/${commercial ? "commit_commercial_import_from_gateway" : "commit_hr_import_from_gateway"}`, { service: true, data: { p_user_id: auth.payload.id, p_session_id: verifiedSession, p_file_name: body.file_name, p_file_sha256: hash, p_file_base64: body.file_base64, p_rows: parsed.rows, ...referenceArgument, p_previous_import_id: body.previous_import_id } });
+      const committed = await call(`/rest/v1/rpc/${commercial ? "commit_commercial_import_from_gateway" : "commit_hr_report_import_from_gateway"}`, { service: true, data: { p_user_id: auth.payload.id, p_session_id: verifiedSession, p_file_name: body.file_name, p_file_sha256: hash, p_file_base64: body.file_base64, p_rows: parsed.rows, ...referenceArgument, p_previous_import_id: body.previous_import_id } });
       if (!committed.ok) return fail(committed);
       if (!UUID.test(committed.payload?.import_id ?? "") || committed.payload.row_count !== parsed.rows.length) throw Error("commit");
       return respond(200, committed.payload);

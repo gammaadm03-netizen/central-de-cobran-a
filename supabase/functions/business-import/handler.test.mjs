@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import ExcelJS from 'exceljs';
 import {createBusinessGateway} from './handler.mjs';
 const uid='91000000-0000-4000-8000-000000000001',session='91000000-0000-4000-8000-000000000002',importId='91000000-0000-4000-8000-000000000003';
 const token=`e30.${Buffer.from(JSON.stringify({sub:uid,session_id:session})).toString('base64url')}.signature`,origin='https://central.example';
@@ -47,9 +48,25 @@ test('business maps stale previews and missing migration safely without forwardi
 });
 test('HR uses its canonical parser, reference date and separate guarded RPC',async()=>{
  const source='FILIAL;ADMISSÃO;ANIVERSÁRIO;SALÁRIO;SETOR;FUNCIONÁRIO;VT TOTAL;SALÁRIO;ADIANTAMENTO;TOTAL\r\nA;01/01/2020;01/01/2000;2.000,00;OPERAÇÃO;Pessoa sintética;100,00;1.500,00;300,00;2.100,00';
- const f=fixture(),data={action:'preview',mode:'hr',reference_date:'2026-10-19',file_name:'hr.csv',file_base64:Buffer.from(source).toString('base64')};const response=await f.gateway(request(data));assert.equal(response.status,200);const result=await response.json();assert.equal(result.rows[0].salary_base_cents,200000);assert.equal(result.rows[0].payroll_salary_cents,150000);assert(f.calls.at(-1).url.endsWith('/preview_hr_import'));assert.equal(f.calls.at(-1).data.p_reference_date,'2026-10-19');
+ const f=fixture(),data={action:'preview',mode:'hr',reference_date:'2026-10-19',file_name:'hr.csv',file_base64:Buffer.from(source).toString('base64')};const response=await f.gateway(request(data));assert.equal(response.status,200);const result=await response.json();assert.equal(result.rows[0].salary_base_cents,200000);assert.equal(result.rows[0].payroll_salary_cents,150000);assert(f.calls.at(-1).url.endsWith('/preview_hr_report_import'));assert.equal(f.calls.at(-1).data.p_reference_date,'2026-10-19');
  const noWrite=fixture({grants:permissions.filter(p=>p.resource!=='rh_dp'||p.action!=='write')});assert.equal((await noWrite.gateway(request(data))).status,403);
 });
 test('business rejects oversized JSON and noncanonical base64 with no persistence',async()=>{
  for(const changes of [{file_base64:'eA='},{file_base64:'eA==\n'},{file_base64:'A'.repeat(2796208)}]){const f=fixture();assert.equal((await f.gateway(request(body(changes)))).status,400);assert.equal(f.calls.length,2);}
+});
+test('actual RH headers and accounting cells survive XLSX preview and canonical commit without losing either salary or allowance',async()=>{
+ const book=new ExcelJS.Workbook(),sheet=book.addWorksheet('Posição sintética');
+ sheet.addRows([['FILIAL','ADMISSAO','ANIVERSARIO','Salário Base','VT TOTAL','Salário','Adiantamento','Ajuda de Custo','SETOR','Funcionário'],
+  ['Unidade sintética',new Date('2020-03-01T00:00:00Z'),new Date('1990-05-20T00:00:00Z'),2500,0,1850.75,null,480.25,'Área sintética','Pessoa sintética']]);
+ for(const column of [2,3])sheet.getRow(2).getCell(column).numFmt='dd/mm/yyyy';
+ for(const column of [4,5,6,7,8])sheet.getRow(2).getCell(column).numFmt='"R$" #,##0.00;[Red]-"R$" #,##0.00;"R$" -';
+ const bytes=Buffer.from(await book.xlsx.writeBuffer());
+ const f=fixture({loadWorkbook:async buffer=>{const loaded=new ExcelJS.Workbook();await loaded.xlsx.load(buffer);return{matrix:loaded.worksheets[0].getSheetValues().slice(1).map(row=>row.slice(1)),excel1904:false};}});
+ const data={action:'preview',mode:'hr',reference_date:'2026-10-19',file_name:'rh-sintetico.xlsx',file_base64:bytes.toString('base64')};
+ const response=await f.gateway(request(data));assert.equal(response.status,200);const result=await response.json();
+ const parsed=result.rows[0];assert.equal(parsed.salary_base_cents,250000);assert.equal(parsed.payroll_salary_cents,185075);assert.equal(parsed.cost_allowance_cents,48025);
+ assert.equal(parsed.transport_cents,0);assert.equal(parsed.advance_cents,0);assert.equal(parsed.total_cents,null);assert.equal(parsed.admitted_on,'2020-03-01');
+ assert(f.calls.at(-1).url.endsWith('/preview_hr_report_import'));assert.equal(result.file_sha256,createHash('sha256').update(bytes).digest('hex'));
+ assert.equal((await f.gateway(request({...data,action:'commit',complete:true,previous_import_id:null}))).status,200);
+ const commit=f.calls.at(-1);assert(commit.url.endsWith('/commit_hr_report_import_from_gateway'));assert.deepEqual(commit.data.p_rows,result.rows);assert.equal(commit.data.p_file_base64,data.file_base64);assert.equal(commit.data.p_user_id,uid);assert.equal(f.loaded(),2);
 });

@@ -9,7 +9,7 @@ export function commercialError(error:unknown,fallback:string) {
   if(code==='42501')return 'Seu perfil não tem permissão para esta operação.';
   if(['PGRST301','PGRST303'].includes(code))return 'Sua sessão expirou. Entre novamente.';
   if(code==='40001')return 'A base mudou desde a análise. Analise o relatório novamente antes de concluir.';
-  if(['PGRST202','42P01','42883','P0032'].includes(code))return 'Ative a atualização das abas comerciais e RH/DP no banco e na função de importação.';
+  if(['PGRST202','PGRST205','42P01','42883','P0032'].includes(code))return 'A atualização do banco de RH/DP e Faturamento ainda não está disponível. Execute o SQL de ativação e tente novamente.';
   if(['22023','22007','23514'].includes(code))return 'Confira o mês de referência, os cabeçalhos e os valores do relatório.';
   return fallback;
 }

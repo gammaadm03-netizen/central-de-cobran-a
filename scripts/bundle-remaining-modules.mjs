@@ -8,6 +8,7 @@ export const MODULE_MIGRATIONS = [
   '032_commercial.sql',
   '033_hr.sql',
   '034_commissions.sql',
+  '035_hr_report_model.sql',
 ];
 
 function tag(prefix, body) {
@@ -49,6 +50,7 @@ END;`;
 -- Arquivo SQL: executar inteiro no SQL Editor do projeto existente.
 -- Uma transação, repetível por versão; não apaga nem importa bases históricas.
 -- Inclui a restrição de consulta da Diretoria (031), caso ainda não instalada.
+-- 035 reconhece o modelo de RH com Salário Base, Salário e Ajuda de Custo.
 -- A função business-import é publicada separadamente; não colar TypeScript aqui.
 BEGIN;
 DO $cf_module_base$
@@ -64,6 +66,7 @@ $cf_module_base$;
 
 ${parts.join('\n\n')}
 
+NOTIFY pgrst, 'reload schema';
 COMMIT;
 `;
 }

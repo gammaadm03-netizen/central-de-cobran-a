@@ -1,10 +1,12 @@
 # Comissões, Faturamento, Margens e RH / DP — 0.13.0
 
+**Atualização 0.13.1:** o combinado atual inclui **031..035**. Para o modelo com **Salário Base**, **Salário** e **Ajuda de Custo**, seguir [corrigir-importacao-rh.md](corrigir-importacao-rh.md). Essa correção substitui a orientação anterior de deixar benefícios vazios como desconhecidos: em colunas presentes, VT, adiantamento e ajuda vazios valem zero, conforme confirmado pelo usuário.
+
 As quatro abas foram recuperadas do código original V75 e adaptadas à base central. O HTML antigo e seus registros embutidos permanecem privados. Esta atualização não substitui usuários, saldos, títulos, recebimentos ou atendimentos já cadastrados.
 
 ## Ativar no projeto existente
 
-1. No Supabase, abra **SQL Editor → New query**. Cole todo o conteúdo de [ativar-demais-abas.sql](../supabase/dashboard/ativar-demais-abas.sql) e clique em **Run**. Este arquivo é SQL e instala somente versões ainda não registradas, de 031 a 034, em uma transação. `Success. No rows returned` é o resultado normal. Não repetir a instalação inicial.
+1. No Supabase, abra **SQL Editor → New query**. Cole todo o conteúdo de [ativar-demais-abas.sql](../supabase/dashboard/ativar-demais-abas.sql) e clique em **Run**. Este arquivo é SQL e instala somente versões ainda não registradas, de 031 a 035, em uma transação. `Success. No rows returned` é o resultado normal. Não repetir a instalação inicial.
 2. Abra **Edge Functions → Deploy a new function → Via Editor**. Substitua todo o conteúdo de **index.ts** pelo arquivo [business-import.ts](../supabase/dashboard/business-import.ts). Em **Function name**, no rodapé ao lado de **Deploy function**, escreva exatamente **business-import** e publique. Se esse nome já existir, atualize **Code → index.ts** na função existente.
 3. Em **business-import → Settings**, desligue **Verify JWT with legacy secret** e salve. A função verifica o token pelo Supabase Auth, a sessão aprovada e as permissões antes de processar o arquivo. O secret existente **ALLOWED_ORIGINS** deve conter `https://central-de-cobran-a.pages.dev`, sem barra final. As outras funções permanecem em uso.
 4. Na Cloudflare, confira o deploy da branch **main**. Na Central, atualize a página e confira **Versão 0.13.0** no rodapé. Entre novamente para carregar suas permissões.

@@ -2,6 +2,12 @@
 
 Os arquivos neste diretório são código e schema, sem usuários reais, senhas, UUIDs administrativos ou bases financeiras.
 
+## Modelo real de RH / DP — 0.13.1
+
+O combinado **dashboard/ativar-demais-abas.sql** agora inclui **035_hr_report_model**, preservando 031..034 já registradas. Acrescenta ajuda de custo e somas separadas de salário da folha, mantendo as posições anteriores imutáveis. A mesma origem pode ser reprocessada pela nova versão de leitura sem duplicar a posição atual. RPCs novos: `preview_hr_report_import` e `commit_hr_report_import_from_gateway`; as permissões e o gateway com original canônico permanecem obrigatórios.
+
+Atualizar a função existente **business-import** com o arquivo único atual. Benefícios vazios em colunas presentes são zero, conforme confirmação do usuário; ausências históricas permanecem desconhecidas. Nenhum dado pessoal foi embutido na atualização. [Guia do modelo e ativação](../docs/corrigir-importacao-rh.md).
+
 ## Comissões, Faturamento, Margens e RH/DP — 0.13.0
 
 Aplicar **dashboard/ativar-demais-abas.sql**, combinado transacional repetível de **031..034**. A 032 mantém fechamentos mensais versionados, itens e originais privados; a 033 mantém posições privadas de RH e a política da V75; a 034 mantém regras de comissão por vigência e apurações imutáveis sobre fontes efetivas. Nenhuma base histórica ou pessoa real é inserida pela ativação. Usuários, saldos e títulos existentes são preservados.

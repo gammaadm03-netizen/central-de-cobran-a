@@ -14,18 +14,22 @@ const uuid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 const hashPattern = /^[a-f\d]{64}$/;
 const safeCount = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
 const money = (value: unknown) => value === null || Number.isSafeInteger(value);
-const qualityKeys = ['missing_admission', 'missing_birthday', 'missing_branch', 'missing_sector', 'missing_salary_base', 'missing_payroll_salary', 'missing_transport', 'missing_advance', 'missing_total'] as const;
+const optionalMoney = (value: unknown) => value === undefined || money(value);
+const displayMoney = (value: number | null | undefined) => value == null ? 'Não informado' : formatCents(value);
+const displayDate = (value: string | null) => value === null ? 'Não informado' : value.split('-').reverse().join('/');
+const qualityKeys = ['missing_admission', 'missing_birthday', 'missing_branch', 'missing_sector', 'missing_salary_base', 'missing_payroll_salary', 'missing_transport', 'missing_advance', 'missing_cost_allowance', 'missing_total'] as const;
 function assertAnalysis(value: unknown, hash: string): asserts value is HrAnalysis {
   const result = value as HrAnalysis, preview = result?.preview, summary = preview?.summary;
   if (!result || result.file_sha256 !== hash || !hashPattern.test(result.file_sha256) || !preview || !safeCount(preview.row_count) || !preview.row_count || preview.row_count > 5000
     || preview.previous_import_id !== null && !uuid.test(preview.previous_import_id) || !Array.isArray(result.rows) || result.rows.length !== preview.row_count
     || result.rows.some(row => !row || !safeCount(row.source_row) || typeof row.employee !== 'string' || !row.employee.trim() || typeof row.branch !== 'string' || typeof row.sector !== 'string'
-      || !['salary_base_cents', 'payroll_salary_cents', 'transport_cents', 'advance_cents', 'total_cents'].every(key => money(row[key as keyof HrImportRow])))
+      || !['salary_base_cents', 'payroll_salary_cents', 'transport_cents', 'advance_cents', 'total_cents'].every(key => money(row[key as keyof HrImportRow])) || !optionalMoney(row.cost_allowance_cents))
     || !summary || !['employees', 'partners', 'admissions', 'birthdays', 'basket_eligible', 'basket_excluded', 'basket_unit_cents', 'basket_monthly_cents', 'basket_annual_cents'].every(key => safeCount(summary[key as keyof HrSummary]))
     || !['salary_base_cents', 'transport_cents', 'advance_cents', 'total_cents'].every(key => money(summary[key as keyof HrSummary]))
+    || !optionalMoney(summary.payroll_salary_cents) || !optionalMoney(summary.cost_allowance_cents)
     || summary.employees + summary.partners !== preview.row_count || summary.basket_eligible + summary.basket_excluded !== preview.row_count || summary.basket_unit_cents !== 11280
     || summary.basket_monthly_cents !== summary.basket_eligible * 11280 || summary.basket_annual_cents !== summary.basket_monthly_cents * 12
-    || !preview.quality || !qualityKeys.every(key => safeCount(preview.quality[key]))) throw new Error('invalid_preview');
+    || !preview.quality || !qualityKeys.every(key => key === 'missing_cost_allowance' && preview.quality[key] === undefined || safeCount(preview.quality[key]))) throw new Error('invalid_preview');
 }
 function importProblems(failure: unknown): HrProblem[] {
   const problems = failure && typeof failure === 'object' && 'errors' in failure ? failure.errors : null;
@@ -79,10 +83,11 @@ export default function HumanResourcesImport({ canImport, onImported }: { canImp
   }
   if (!canImport) return <p className="notice">Seu perfil não permite importar bases de RH / DP.</p>;
   const summary = prepared?.analysis.preview.summary, quality = prepared?.analysis.preview.quality;
-  const missing = quality ? qualityKeys.reduce((sum, key) => sum + quality[key], 0) : 0;
+  const missing = quality ? qualityKeys.reduce((sum, key) => sum + (quality[key] ?? 0), 0) : 0;
   return <section className="panel human-resources-import" aria-labelledby="hr-import-title">
     <div className="panel-header"><div><h2 id="hr-import-title">Importar base de RH / DP</h2><p className="muted">Envie a base completa de pessoas e valores para atualizar o quadro, os benefícios e o calendário.</p></div></div>
-    <p className="help-text">Cabeçalhos: FILIAL, FUNCIONÁRIO e SETOR. Datas: ADMISSÃO e ANIVERSÁRIO. Valores: primeiro SALÁRIO (base), segundo SALÁRIO (folha), VT TOTAL, ADIANTAMENTO e TOTAL. Campos opcionais em branco permanecem como “Não informado”.</p>
+    <p className="help-text">Cabeçalhos: FILIAL, ADMISSAO, ANIVERSARIO, Salário Base, VT TOTAL, Salário, Adiantamento, Ajuda de Custo, SETOR e Funcionário. Salário Base e Salário da folha são importados separadamente. O formato antigo com dois cabeçalhos SALÁRIO também é aceito.</p>
+    <p className="help-text">VT TOTAL, Adiantamento e Ajuda de Custo em branco ou com traço valem zero. Colunas ausentes permanecem como “Não informado”. A coluna TOTAL é opcional e seu valor não é calculado pela Central.</p>
     <p className="notice">Cada importação é uma posição completa de RH / DP. A posição com a data mais recente alimenta a aba; os arquivos e as posições anteriores permanecem preservados.</p>
     {error && <p className="notice error" role="alert">{error}</p>}{success && <p className="notice success" role="status">{success}</p>}
     {uncertain && <p className="notice" role="status">Conferência do envio pendente. O arquivo e a data ficam preservados até a confirmação do mesmo envio.</p>}
@@ -92,9 +97,9 @@ export default function HumanResourcesImport({ canImport, onImported }: { canImp
     </form>
     {problems.length > 0 && <div className="table-wrap"><table><caption>Campos a corrigir no arquivo de RH / DP</caption><thead><tr><th>Linha</th><th>Coluna</th><th>Problema</th><th>Como corrigir</th></tr></thead><tbody>{problems.map((problem, index) => <tr key={index}><td>{problem.line || 'Arquivo'}</td><td>{problem.column}</td><td>{problem.problem}</td><td>{problem.correction}</td></tr>)}</tbody></table></div>}
     {prepared && summary && <section className="stack" aria-labelledby="hr-preview-title"><h3 id="hr-preview-title">Conferência da posição de RH / DP</h3><p>{prepared.source.name} · {prepared.analysis.preview.row_count} registro(s) · posição de {prepared.reference.split('-').reverse().join('/')}</p>
-      <div className="hr-import-preview"><article>Colaboradores / sócios<strong>{summary.employees} / {summary.partners}</strong></article><article>Salário base dos colaboradores<strong>{summary.salary_base_cents === null ? 'Não informado' : formatCents(summary.salary_base_cents)}</strong></article><article>Cesta básica mensal<strong>{formatCents(summary.basket_monthly_cents)}</strong></article></div>
-      {missing > 0 && <p className="notice">A base contém {missing} campo(s) opcional(is) em branco. Eles serão preservados como “Não informado” para conferência na aba RH / DP.</p>}
-      <div className="table-wrap"><table><caption>Amostra da base de RH / DP — até dez pessoas</caption><thead><tr><th>Linha</th><th>Funcionário</th><th>Filial</th><th>Setor</th><th>Salário base</th><th>Salário folha</th></tr></thead><tbody>{prepared.analysis.rows.slice(0, 10).map(row => <tr key={row.source_row}><td>{row.source_row}</td><td>{row.employee}</td><td>{row.branch || 'Não informado'}</td><td>{row.sector || 'Não informado'}</td><td>{row.salary_base_cents === null ? 'Não informado' : formatCents(row.salary_base_cents)}</td><td>{row.payroll_salary_cents === null ? 'Não informado' : formatCents(row.payroll_salary_cents)}</td></tr>)}</tbody></table></div>
+      <div className="hr-import-preview"><article>Colaboradores / sócios<strong>{summary.employees} / {summary.partners}</strong></article><article>Salário base dos colaboradores<strong>{displayMoney(summary.salary_base_cents)}</strong></article><article>Salário da folha<strong>{displayMoney(summary.payroll_salary_cents)}</strong></article><article>Vale-transporte<strong>{displayMoney(summary.transport_cents)}</strong></article><article>Adiantamentos<strong>{displayMoney(summary.advance_cents)}</strong></article><article>Ajuda de Custo<strong>{displayMoney(summary.cost_allowance_cents)}</strong></article><article>Cesta básica mensal<strong>{formatCents(summary.basket_monthly_cents)}</strong></article><article>Total informado na base<strong>{displayMoney(summary.total_cents)}</strong></article></div>
+      {missing > 0 && <p className="notice">A base contém {missing} campo(s) sem informação. Confira a amostra abaixo. Colunas ausentes permanecem como “Não informado”; os benefícios em branco nas colunas presentes são importados como zero.</p>}
+      <div className="table-wrap"><table><caption>Amostra da base de RH / DP — até dez pessoas</caption><thead><tr><th>Linha</th><th>Funcionário</th><th>Filial</th><th>Setor</th><th>Admissão</th><th>Aniversário</th><th>Salário base</th><th>Salário folha</th><th>VT TOTAL</th><th>Adiantamento</th><th>Ajuda de Custo</th><th>Total</th></tr></thead><tbody>{prepared.analysis.rows.slice(0, 10).map(row => <tr key={row.source_row}><td>{row.source_row}</td><td>{row.employee}</td><td>{row.branch || 'Não informado'}</td><td>{row.sector || 'Não informado'}</td><td>{displayDate(row.admitted_on)}</td><td>{displayDate(row.birthday_on)}</td><td>{displayMoney(row.salary_base_cents)}</td><td>{displayMoney(row.payroll_salary_cents)}</td><td>{displayMoney(row.transport_cents)}</td><td>{displayMoney(row.advance_cents)}</td><td>{displayMoney(row.cost_allowance_cents)}</td><td>{displayMoney(row.total_cents)}</td></tr>)}</tbody></table></div>
       <label className="checkbox-field"><input type="checkbox" checked={acknowledged} disabled={busy !== null} onChange={event => setAcknowledged(event.target.checked)} /> Confirmo que esta é a base completa de RH / DP da data informada e conferi os campos apresentados.</label>
       <button className="button" disabled={!acknowledged || busy !== null} onClick={() => void commit()}>{busy === 'commit' ? 'Atualizando RH / DP…' : 'Confirmar importação de RH / DP'}</button>
     </section>}
