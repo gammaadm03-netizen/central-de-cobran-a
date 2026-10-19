@@ -505,3 +505,23 @@ O efeito se restringe a telas com ponteiro preciso e suporte real a hover. A pre
 Verificação local em 19/10/2026: build TypeScript/Vite da 0.14.3 aprovado, com o aviso existente de tamanho dos chunks. Conferência direta no Chromium com CSS compilado e marcação sintética verificou os quatro cards financeiros e as seis outras famílias: elevação e retorno, altura e posição dos vizinhos estáveis, cores dos valores preservadas, foco de botão interno, ausência de deslocamento/transição sob movimento reduzido, impressão sem movimento/sombra e toque em 390 px sem hover persistente ou transbordamento horizontal. A imagem local dos quatro cards foi inspecionada. git diff --check aprovado. Não foram criados testes permanentes para esta alteração visual reversível.
 
 A atualização depende somente do site e não altera dados, cálculos, banco ou funções. O agente não confirmou o término do deploy Cloudflare. A investigação da importação de recebíveis permanece com os limites descritos na 0.14.2; este ajuste visual não a substitui nem comprova a importação remota.
+
+
+## Limite individual de Contas a Pagar — SQL 039
+
+O usuário pediu que uma conta já criada veja somente Painel Gerencial, Contas a Pagar e Importar Bases. Confirmou consulta, alterações e importação de CP, reforçando que as demais abas não podem aparecer. O perfil padrão CP também permite Caixa/Bancos; alterar sua matriz compartilhada afetaria outros usuários.
+
+A migration aditiva 039 cria um teto privado por pessoa, aplicado como interseção da matriz RBAC em has_permission e filtrado por current_access. A configuração padronizada permite painel, contas_pagar, importar_bases e o recurso interno mensagens_cp; este último é um quadro dentro de CP. A navegação e o hub existentes já usam essas permissões, sem exigir novo site ou função Edge. Importar Bases mostra apenas CP. O Painel continua usando agregados autorizados; as contas e os saldos detalhados de Caixa ficam bloqueados, mantendo somente o diretório de contas necessário ao pagamento de CP.
+
+O teto só é aceito para perfis CP nesta primeira versão. Uma troca de perfil com teto ativo exige removê-lo explicitamente. A tabela tem RLS e não concede leitura ou escrita a anon, authenticated ou service_role. O atalho privado restrict_payables_user(uuid) é SECURITY INVOKER, exclusivo do operador SQL proprietário; exige perfil CP vinculado e preserva seu status, a conta Auth e a matriz global. A aplicação é idempotente, auditada e não habilita uma conta bloqueada. Nenhum UID, login ou senha real foi salvo no código.
+
+A 039 exige a identidade com sessões aprovadas, base financeira e o registro 031. Migrations publicadas 001..038 permanecem inalteradas. O ativador isolado da Diretoria foi transformado em artefato gerado: quando identifica 039 instalada, preserva a autorização mais recente em vez de substituí-la pela definição 031. O ativador combinado das demais abas já ignora a 031 registrada. Isso conserva os limites ao repetir os ativadores oficiais.
+
+Verificação local em 19/10/2026:
+
+- **16 grupos SQL da 039 aprovados** em PostgreSQL descartável com identidade Supabase emulada. Cobrem exatamente três módulos efetivos, importação e pagamento de CP, agregados do Painel sem detalhamento de Caixa, outro CP preservado, ausência de concessões novas, tabelas e APIs bloqueadas, sessões, conta desabilitada, metadata forjada, auditoria, idempotência, listas, perfil e repetição do ativador da Diretoria depois da 039.
+- **14 grupos SQL da Diretoria aprovados**, incluindo execução do novo ativador guardado na primeira instalação, geração determinística do artefato, permissões e bloqueios existentes preservados.
+- **11 cenários de navegador aprovados**: dez de acesso existentes e um novo confirmando somente três botões no menu, Administração e Abrir Caixa ausentes, somente CP no hub e navegação até CP. A primeira execução do cenário novo falhou pela inclusão dos ícones decorativos na comparação de texto do teste; a verificação foi ajustada para conservar a ordem e os nomes, e o cenário repetido passou. Nenhuma regra da aplicação foi alterada para atender ao teste.
+- O artefato ativar-limites-usuarios.sql é idêntico à migration 039. git diff --check aprovado. Não foi repetido o build: não há alteração de frontend, dependências ou runtime; o navegador usou o build 0.14.3 já validado.
+
+A documentação traz ativação, vínculo do perfil, comando privado e conferência por login real. O agente não executou SQL nem restringiu o UID no Supabase remoto. A configuração dessa pessoa ainda depende da execução pelo operador e de sair/entrar para atualizar o menu da sessão existente. A investigação de recebíveis permanece pendente de confirmação real e não é substituída por esta configuração.

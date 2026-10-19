@@ -2,10 +2,11 @@ import { test, expect, type Page } from '@playwright/test';
 
 const project='https://sjimddcqgrsauzvffcol.supabase.co';
 const modules=['painel','caixa','contas_pagar','contas_receber','cobranca','comissoes','faturamento','margens','rh_dp','importar_bases'];
-function fixture(role='gerente_geral') {
+function fixture(role='gerente_geral',limitedPayables=false) {
   const id='10000000-0000-4000-8000-000000000001';
-  const visible=role==='cobradora_1'?['cobranca']:role==='rh_dp'?['faturamento','rh_dp','importar_bases']:role==='diretor'?modules.filter(resource=>resource!=='importar_bases'):modules;
+  const visible=limitedPayables?['painel','contas_pagar','importar_bases']:role==='cobradora_1'?['cobranca']:role==='rh_dp'?['faturamento','rh_dp','importar_bases']:role==='diretor'?modules.filter(resource=>resource!=='importar_bases'):modules;
   const permissions=visible.map(resource=>({resource,action:'read'}));
+  if(limitedPayables) permissions.push({resource:'contas_pagar',action:'write'},{resource:'contas_pagar',action:'import'},{resource:'contas_pagar',action:'export'},{resource:'painel',action:'export'},{resource:'mensagens_cp',action:'read'});
   if(role==='gerente_geral') permissions.push({resource:'usuarios',action:'admin'},{resource:'configuracoes',action:'admin'},{resource:'auditoria',action:'read'});
   if(['gerente_geral','diretor'].includes(role)) permissions.push({resource:'mensagens_cp',action:'read'});
   if(role==='gerente_geral') permissions.push({resource:'mensagens_cp',action:'write'});
@@ -16,8 +17,8 @@ function fixture(role='gerente_geral') {
   const user={id,aud:'authenticated',role:'authenticated',email:'synthetic@test.invalid',email_confirmed_at:new Date().toISOString(),created_at:new Date().toISOString(),app_metadata:{},user_metadata:{}};
   return {access,token,user};
 }
-async function setup(page:Page,role='gerente_geral',options:{invalid?:boolean,logoutFailure?:boolean,holdAccess?:()=>Promise<void>}={}){
- const data=fixture(role);let accessCalls=0;
+async function setup(page:Page,role='gerente_geral',options:{invalid?:boolean,logoutFailure?:boolean,holdAccess?:()=>Promise<void>,limitedPayables?:boolean}={}){
+ const data=fixture(role,options.limitedPayables);let accessCalls=0;
  const messages:any[]=[];
  await page.route(`${project}/**`,async route=>{
   const req=route.request();const url=new URL(req.url());const headers={'access-control-allow-origin':'http://127.0.0.1:4173','access-control-allow-headers':'apikey,content-type,authorization,x-client-info','access-control-allow-methods':'GET,POST,OPTIONS','access-control-expose-headers':'content-range','content-range':'0-0/1'};
@@ -114,4 +115,22 @@ test('delayed access response cannot reopen the interface after logout',async({p
  // Allow the delayed response to settle; the generation guard must preserve logout.
  await page.waitForResponse(r=>r.url().endsWith('/rest/v1/rpc/current_access')).catch(()=>{});
  await expect(page.getByRole('heading',{name:'Bem-vindo à Central'})).toBeVisible();
+});
+
+
+test('limite individual de CP mostra somente três módulos e uma única base de importação',async({page})=>{
+ await setup(page,'contas_pagar',{limitedPayables:true});await login(page);
+ const nav=page.getByRole('navigation',{name:'Módulos da Central'});
+ await expect(nav.getByRole('button')).toHaveCount(3);
+ await expect(nav.getByRole('button')).toHaveText([/Painel Gerencial$/,/Contas a Pagar$/,/Importar Bases$/]);
+ await expect(page.getByRole('button',{name:/Administração/})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Abrir Caixa →',exact:true})).toHaveCount(0);
+ await nav.getByRole('button',{name:'Importar Bases',exact:true}).click();
+ const tabs=page.getByRole('tablist',{name:'Bases para atualização'});
+ await expect(tabs.getByRole('tab')).toHaveCount(1);
+ await expect(tabs.getByRole('tab')).toHaveText(['Contas a Pagar']);
+ await expect(page.getByRole('heading',{name:'Importar Contas a Pagar',exact:true})).toBeVisible();
+ await nav.getByRole('button',{name:'Contas a Pagar',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Contas a Pagar',level:1,exact:true})).toBeVisible();
+ await expect(nav.getByRole('button')).toHaveCount(3);
 });

@@ -2,6 +2,10 @@
 
 Versão de desenvolvimento **0.14.3**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
 
+## Limite individual para Contas a Pagar — SQL 039
+
+A configuração opcional mantém uma pessoa somente em Painel Gerencial, Contas a Pagar e Importar Bases, com importação restrita a CP e sem alterar o perfil compartilhado dos demais usuários. O limite é conferido pelo banco e pela navegação existente. [Guia de configuração](docs/limitar-usuario-contas-pagar.md). A ativação não cria usuários nem aplica restrições a uma conta automaticamente.
+
 ## Destaque dos cards ao passar o mouse — 0.14.3
 
 Os indicadores do painel e os cards de resumo das demais abas ganham elevação discreta, sombra e destaque na borda ao passar o mouse. Botões dentro dos cards também recebem o destaque ao navegar pelo teclado. Valores e ações são preservados; em telas de toque não há efeito persistente, e a preferência por movimento reduzido elimina o deslocamento. Depende somente do site.

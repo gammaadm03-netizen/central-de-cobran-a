@@ -1,7 +1,23 @@
+-- Diretoria em consulta. Executar inteiro no SQL Editor.
+-- Preserva os limites individuais caso a atualização 039 já esteja instalada.
+BEGIN;
+SELECT pg_advisory_xact_lock(2045812301);
+DO $cf_director_activation$
+BEGIN
+ IF to_regclass('public.central_schema_migrations') IS NULL THEN
+  RAISE EXCEPTION 'Ative primeiro a base financeira da Central.' USING ERRCODE='22023';
+ END IF;
+ IF EXISTS(SELECT 1 FROM public.central_schema_migrations WHERE version='039_user_access_limits') THEN
+  IF NOT EXISTS(SELECT 1 FROM public.central_schema_migrations WHERE version='031_director_readonly') THEN
+   RAISE EXCEPTION 'Registro de versões inconsistente. Confira as atualizações 031 e 039.' USING ERRCODE='22023';
+  END IF;
+  RAISE NOTICE 'Diretoria já atualizada; limites individuais da 039 preservados.';
+ ELSE
+  EXECUTE $cf_director_source$
 -- Diretoria: consulta em todos os módulos, sem Importar Bases ou alterações.
 -- Não cria contas de autenticação, perfis, senhas ou dados financeiros.
 -- Repetível após a identidade com sessões aprovadas e a base financeira 007.
-BEGIN;
+
 DO $$ BEGIN
  IF to_regclass('public.central_schema_migrations') IS NULL
   OR to_regclass('public.profiles') IS NULL OR to_regclass('public.role_permissions') IS NULL
@@ -79,4 +95,9 @@ CREATE POLICY audit_director_read ON public.audit_events FOR SELECT TO authentic
 
 COMMENT ON FUNCTION cf_private.director_read_allowed(text) IS 'Leitura administrativa da própria Diretoria ativa com sessão aprovada; não concede escrita, validação, importação ou administração.';
 INSERT INTO public.central_schema_migrations(version) VALUES('031_director_readonly') ON CONFLICT(version) DO NOTHING;
+$cf_director_source$;
+ END IF;
+END;
+$cf_director_activation$;
+NOTIFY pgrst, 'reload schema';
 COMMIT;

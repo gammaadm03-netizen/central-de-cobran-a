@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile,readdir } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
+import { buildDirectorAccessSql } from './bundle-director-access.mjs';
 // PostgreSQL descartável. Contas e documentos exclusivamente sintéticos.
 const db=new PGlite(),roles=['gerente_geral','diretor','contas_receber','contas_pagar','rh_dp','cobradora_1','cobradora_2'];
 const id=n=>`99000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
@@ -56,7 +57,7 @@ try{
  await actor();assert.equal(await permits('mensagens_cp','write'),true);assert.equal(await permits('importar_bases'),true);
  await owner();await db.exec("INSERT INTO public.role_permissions(role_key,resource,action) VALUES('diretor','usuarios','admin'),('diretor','caixa','import'),('diretor','contas_receber','validate') ON CONFLICT DO NOTHING;");
  await test('activation changes only Director grants and adds permission audit without provisioning accounts or touching financial/auth/history data',async()=>{
-  const before=await allState();await db.exec(migration);const after=await allState();
+  const before=await allState();await db.exec(await buildDirectorAccessSql());const after=await allState();
   for(const[table,value]of Object.entries(before))if(!['public.role_permissions','public.audit_events','public.central_schema_migrations','cf_private.collection_context_state'].includes(table))assert.deepEqual(after[table],value,table);
   assert.deepEqual(after['public.role_permissions'].filter(p=>p.role_key!=='diretor'),before['public.role_permissions'].filter(p=>p.role_key!=='diretor'));
   const oldAudit=new Set(before['public.audit_events'].map(e=>e.id));assert(before['public.audit_events'].every(e=>after['public.audit_events'].some(a=>a.id===e.id&&JSON.stringify(a)===JSON.stringify(e))));
@@ -64,8 +65,8 @@ try{
   assert(after['cf_private.collection_context_state'][0].revision>before['cf_private.collection_context_state'][0].revision,'Authorization fence must change when permissions change');
   assert.equal(after['auth.users'].length,roles.length);assert.equal(after['public.profiles'].length,roles.length);
  });
- await test('standalone dashboard artifact is the exact migration, and activation is repeatable without audit or financial mutations',async()=>{
-  assert.equal(await readFile(new URL('../supabase/dashboard/ativar-acesso-diretoria.sql',import.meta.url),'utf8'),migration);
+ await test('standalone dashboard artifact matches its guarded generator, and activation is repeatable without audit or financial mutations',async()=>{
+  assert.equal(await readFile(new URL('../supabase/dashboard/ativar-acesso-diretoria.sql',import.meta.url),'utf8'),await buildDirectorAccessSql());
   const before=await allState();await db.exec(migration);assert.deepEqual(await allState(),before);
   assert.equal(await scalar("SELECT count(*)::int AS r FROM public.central_schema_migrations WHERE version='031_director_readonly'"),1);
  });

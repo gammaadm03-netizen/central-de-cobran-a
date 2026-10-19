@@ -6,6 +6,8 @@ O perfil **Diretor** consulta todas as abas, incluindo usuários, cobradoras e a
 
 No Supabase, abrir **SQL Editor → New query** e executar o conteúdo completo de [ativar-acesso-diretoria.sql](../supabase/dashboard/ativar-acesso-diretoria.sql).
 
+O ativador atual preserva os limites individuais caso a atualização 039 já esteja instalada; nesse caso não reaplica a definição anterior de permissões.
+
 Essa atualização é separada da ativação de recebíveis. Aplica somente a **031**, preservando as migrations e os dados anteriores. Ajusta as permissões do perfil Diretor, inclusive a antiga autorização para mensagens e a visualização de Importar Bases. Acrescenta consulta administrativa sem conceder funções de administração. O bloqueio de escrita é aplicado no banco e também no site.
 
 **“Success. No rows returned”** confirma a execução do SQL. O SQL não cria uma conta de autenticação, não define senha e não envia email. Não repetir a instalação inicial, nem apagar usuários ou tabelas. As funções Edge existentes continuam sendo utilizadas.
