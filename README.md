@@ -1,6 +1,12 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.13.5**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.14.0**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Identidade mensal e campanhas — 0.14.0
+
+A tela inicial apresenta marca maior, o slogan preservado e o crédito solicitado abaixo da versão. As cores e os símbolos seguem doze campanhas do calendário brasileiro, pelo mês oficial de São Paulo. Outubro Rosa utiliza o laço rosa na entrada e um card compacto com mensagem em todas as abas autorizadas, incluindo Administração. Os temas mudam automaticamente, com renovação ao retornar à página.
+
+Esta atualização depende somente do site. Não exige SQL, atualização de funções ou reimportação. Acesso, permissões e recuperação de senha seguem os fluxos atuais.
 
 ## Ativo Circulante com duas casas — 0.13.5
 

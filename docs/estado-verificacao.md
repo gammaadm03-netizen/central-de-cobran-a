@@ -440,3 +440,20 @@ O usuário pediu duas casas após a vírgula. O formatador compartilhado agora a
 Verificação local em 19/10/2026: quatro testes existentes de director-report aprovados, com expectativas de apresentação atualizadas; build TypeScript/Vite aprovado; 29 cenários existentes de treasury-dashboard aprovados, incluindo card, histórico, memória e valor original numérico no Excel. Nenhum teste falhou ou foi ignorado. O aviso de tamanho dos chunks permanece sem impedir o build.
 
 Esta alteração depende somente do site 0.13.5. Não exige SQL, atualização de Edge Function ou reimportação. O agente não confirmou o término do deploy Cloudflare.
+
+## Tela inicial e campanhas mensais — 0.14.0
+
+O usuário pediu uma apresentação mais bonita por mês, ampliando logo e nome da Central, mantendo o slogan, retirando a descrição e incluindo o crédito abaixo da versão. Confirmou campanhas do calendário brasileiro e pediu explicitamente o símbolo de Outubro Rosa na entrada e uma mensagem pequena dentro de cada aba.
+
+A tela inicial mantém a identidade verde da Ecoplast, com marca ampliada, título mais destacado, elementos decorativos próprios de cada mês e o crédito solicitado. Outubro usa laço rosa em SVG local. Doze campanhas definem nomes, cores, símbolos e mensagens, pelo calendário oficial de São Paulo; a página verifica a mudança periodicamente e ao voltar à visibilidade. O mesmo card compacto aparece no contêiner compartilhado de todos os módulos autorizados e da Administração, incluindo as abas internas. Não acrescenta consultas ou ações ao card e não altera permissões.
+
+O formulário e a recuperação de senha conservam seus fluxos, nomes dos campos e controles. O CSS novo fica isolado para a apresentação de entrada e o card mensal; a marca do menu protegido mantém seu tamanho. No celular o slogan, o símbolo, a versão e o crédito permanecem visíveis, com quebra de linhas e sem transbordamento horizontal. Não há dependências ou imagens remotas novas, nem mudanças no banco, gateways ou dados financeiros.
+
+Verificação local em 19/10/2026:
+
+- Build TypeScript/Vite aprovado. O aviso existente de tamanho dos chunks permanece sem impedir a geração.
+- Dois testes do calendário mensal aprovados, cobrindo os doze meses e as viradas de novembro/janeiro pelo horário de São Paulo.
+- 25 cenários de navegador aprovados: quatro da identidade mensal, dez de acesso e onze de recuperação. O card foi conferido nos dez módulos e Administração. Login, permissões, logout, recuperação e bloqueios existentes foram preservados.
+- O cenário de celular foi repetido após acrescentar a largura de 320 px, além de 390 px, e passou. Telas de entrada desktop/celular e card no painel com dados sintéticos foram inspecionados visualmente. Não foram observadas sobreposições ou rolagem horizontal.
+
+A atualização depende somente do site 0.14.0; não exige SQL, funções ou reimportação. O agente não confirmou o término do deploy Cloudflare.

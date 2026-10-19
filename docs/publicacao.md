@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.13.5
+# Publicação e ativação — 0.14.0
+
+A atualização **0.14.0** renova a apresentação da tela inicial, amplia logo e nome da Central e mostra o crédito solicitado abaixo da versão. Usa campanhas mensais do calendário brasileiro, incluindo o laço de Outubro Rosa e uma mensagem compacta em todas as abas autorizadas. Basta o deploy do site e atualizar a página. Não há alterações de banco, funções ou importações.
 
 A atualização **0.13.5** exibe o Ativo Circulante com duas casas decimais no painel, histórico e Excel, mantendo o cálculo exato. Basta o deploy do site e atualizar a página; não exige mudança de banco, função ou importação.
 
