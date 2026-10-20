@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.17.0**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.17.1**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Acesso individual às importações — 0.17.1
+
+Uma concessão privada e auditada permite habilitar as nove áreas de Importar Bases para uma conta de Contas a Receber, com as permissões operacionais necessárias, sem alterar a role nem a matriz de outros usuários. Diretoria, limites individuais de CP e administração permanecem protegidos. [Instalação, configuração por login e revogação](docs/acesso-importacoes-usuario.md). Nenhuma conta real é habilitada pelo código publicado.
 
 ## Custos por item e recálculo do fechamento — 0.17.0
 
@@ -208,6 +212,8 @@ npm run test:product-costs-sql
 npm run test:product-cost-recalculation-sql
 npm run bundle:product-costs
 npm run bundle:business-gateway
+npm run test:user-import-access-sql
+npm run bundle:user-import-access
 npm run build
 npm run test:browser
 ```

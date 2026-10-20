@@ -2,27 +2,47 @@ import { test, expect, type Page } from '@playwright/test';
 
 const project='https://sjimddcqgrsauzvffcol.supabase.co';
 const modules=['painel','caixa','contas_pagar','contas_receber','cobranca','comissoes','faturamento','margens','rh_dp','importar_bases'];
-function fixture(role='gerente_geral',limitedPayables=false) {
+interface PermissionFixtureOptions {
+  limitedPayables?: boolean;
+  fullImportAccess?: boolean;
+  operationalImportGrants?: boolean;
+  forgedAdminGrants?: boolean;
+}
+const operationalImportPermissions = [
+  ['importar_bases','read'],
+  ['contas_pagar','read'],['contas_pagar','write'],['contas_pagar','import'],
+  ['contas_receber','read'],['contas_receber','write'],['contas_receber','import'],
+  ['caixa','read'],['caixa','write'],['caixa','import'],
+  ['resumo_diretoria','read'],['resumo_diretoria','write'],
+  ['fechamento','import'],['faturamento','read'],['margens','read'],
+  ['rh_dp','read'],['rh_dp','write'],['rh_dp','import'],['custos','import'],
+].map(([resource,action])=>({resource,action}));
+function fixture(role='gerente_geral',options:PermissionFixtureOptions={}) {
   const id='10000000-0000-4000-8000-000000000001';
-  const visible=limitedPayables?['painel','contas_pagar','importar_bases']:role==='cobradora_1'?['cobranca']:role==='rh_dp'?['faturamento','rh_dp','importar_bases']:role==='diretor'?modules.filter(resource=>resource!=='importar_bases'):modules;
+  const visible=options.limitedPayables?['painel','contas_pagar','importar_bases']:role==='cobradora_1'?['cobranca']:role==='rh_dp'?['faturamento','rh_dp','importar_bases']:role==='contas_receber'?['painel','caixa','contas_receber','cobranca','importar_bases']:role==='diretor'?modules.filter(resource=>resource!=='importar_bases'):modules;
   const permissions=visible.map(resource=>({resource,action:'read'}));
-  if(limitedPayables) permissions.push({resource:'contas_pagar',action:'write'},{resource:'contas_pagar',action:'import'},{resource:'contas_pagar',action:'export'},{resource:'painel',action:'export'},{resource:'mensagens_cp',action:'read'});
+  if(options.limitedPayables) permissions.push({resource:'contas_pagar',action:'write'},{resource:'contas_pagar',action:'import'},{resource:'contas_pagar',action:'export'},{resource:'painel',action:'export'},{resource:'mensagens_cp',action:'read'});
+  if(role==='contas_receber') permissions.push({resource:'contas_receber',action:'write'},{resource:'contas_receber',action:'validate'},{resource:'contas_receber',action:'import'},{resource:'cobranca',action:'write'});
+  if(options.operationalImportGrants) permissions.push(...operationalImportPermissions);
+  if(options.forgedAdminGrants) permissions.push({resource:'usuarios',action:'admin'},{resource:'configuracoes',action:'admin'});
   if(role==='gerente_geral') permissions.push({resource:'usuarios',action:'admin'},{resource:'configuracoes',action:'admin'},{resource:'auditoria',action:'read'});
   if(['gerente_geral','diretor'].includes(role)) permissions.push({resource:'mensagens_cp',action:'read'});
   if(role==='gerente_geral') permissions.push({resource:'mensagens_cp',action:'write'});
   if(role==='diretor') permissions.push({resource:'usuarios',action:'read'},{resource:'configuracoes',action:'read'},{resource:'auditoria',action:'read'});
-  const access={profile:{id,username:'UsuarioTeste',display_name:'Pessoa Teste',role_key:role,enabled:true},permissions,collector_id:null};
+  const access={profile:{id,username:'UsuarioTeste',display_name:'Pessoa Teste',role_key:role,enabled:true},permissions,collector_id:null,...(options.fullImportAccess===undefined?{}:{full_import_access:options.fullImportAccess})};
   const claims={sub:id,session_id:'20000000-0000-4000-8000-000000000001',exp:Math.floor(Date.now()/1000)+3600,iat:Math.floor(Date.now()/1000),role:'authenticated'};
   const token=[Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url'),Buffer.from(JSON.stringify(claims)).toString('base64url'),'synthetic-test-only'].join('.');
   const user={id,aud:'authenticated',role:'authenticated',email:'synthetic@test.invalid',email_confirmed_at:new Date().toISOString(),created_at:new Date().toISOString(),app_metadata:{},user_metadata:{}};
   return {access,token,user};
 }
-async function setup(page:Page,role='gerente_geral',options:{invalid?:boolean,logoutFailure?:boolean,holdAccess?:()=>Promise<void>,limitedPayables?:boolean}={}){
- const data=fixture(role,options.limitedPayables);let accessCalls=0;
+async function setup(page:Page,role='gerente_geral',options:PermissionFixtureOptions&{invalid?:boolean,logoutFailure?:boolean,holdAccess?:()=>Promise<void>}={}){
+ const data=fixture(role,options);let accessCalls=0;
  const messages:any[]=[];
+ const financialWrites:string[]=[];
  await page.route(`${project}/**`,async route=>{
-  const req=route.request();const url=new URL(req.url());const headers={'access-control-allow-origin':'http://127.0.0.1:4173','access-control-allow-headers':'apikey,content-type,authorization,x-client-info','access-control-allow-methods':'GET,POST,OPTIONS','access-control-expose-headers':'content-range','content-range':'0-0/1'};
+  const req=route.request();const url=new URL(req.url());const headers={'access-control-allow-origin':'http://127.0.0.1:4173','access-control-allow-headers':'apikey,content-type,authorization,x-client-info,prefer,range,range-unit','access-control-allow-methods':'GET,POST,OPTIONS','access-control-expose-headers':'content-range','content-range':'0-0/1'};
   if(req.method()==='OPTIONS')return route.fulfill({status:204,headers});
+  if(req.method()==='POST'&&['/rest/v1/rpc/save_manual_stock','/rest/v1/rpc/save_director_inputs','/functions/v1/payables-import','/functions/v1/receivables-import'].includes(url.pathname))financialWrites.push(url.pathname);
   const body=req.postDataJSON();
   const reply=(json:any,status=200)=>route.fulfill({status,headers,json});
   if(url.pathname==='/functions/v1/auth-gateway'){
@@ -37,10 +57,12 @@ async function setup(page:Page,role='gerente_geral',options:{invalid?:boolean,lo
   if(['/rest/v1/rpc/get_payable_payment_accounts','/rest/v1/rpc/payable_payment_summary','/rest/v1/rpc/list_payable_payments','/rest/v1/rpc/get_payables_revision','/rest/v1/rpc/get_payable_month_status','/rest/v1/rpc/payables_month_status','/rest/v1/rpc/list_payable_month_closures'].includes(url.pathname))return reply({code:'PGRST202'},404);
   if(url.pathname==='/rest/v1/rpc/cash_position')return reply({accounts:[],total_cents:null,reported_accounts:0,expected_accounts:11,latest_position_date:null});
   if(url.pathname==='/rest/v1/rpc/current_stock')return reply({value_cents:null,reference_date:null,source:null});
+  if(url.pathname==='/rest/v1/rpc/read_director_inputs')return reply(null);
+  if(url.pathname==='/rest/v1/rpc/director_report')return reply({code:'PGRST202'},404);
   if(url.pathname==='/rest/v1/rpc/payables_forecast')return reply({code:'PGRST202'},404);
   if(url.pathname==='/rest/v1/rpc/payables_summary')return reply({open_cents:0,overdue_cents:0,period_cents:0,active_count:0,latest_import_at:null});
   if(url.pathname==='/rest/v1/rpc/receivables_summary')return reply({open_cents:0,overdue_cents:0,period_cents:0,active_count:0,pending_count:0,unassigned_count:0,received_period_cents:0,latest_import_at:null,overdue_bps:null,overdue_comlurb_cents:null});
-  if(['/rest/v1/payable_titles','/rest/v1/payable_macros','/rest/v1/payable_plan_mappings','/rest/v1/payable_imports','/rest/v1/director_positions'].includes(url.pathname))return route.fulfill({status:200,headers:{...headers,'content-range':'*/0'},json:[]});
+  if(['/rest/v1/payable_titles','/rest/v1/payable_macros','/rest/v1/payable_plan_mappings','/rest/v1/payable_imports','/rest/v1/receivable_imports','/rest/v1/director_positions','/rest/v1/stock_positions'].includes(url.pathname))return route.fulfill({status:200,headers:{...headers,'content-range':'*/0'},json:[]});
   if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
   if(url.pathname==='/rest/v1/rpc/current_access'){
    accessCalls++;if(accessCalls>1&&options.holdAccess)await options.holdAccess();return reply(data.access);
@@ -59,7 +81,7 @@ async function setup(page:Page,role='gerente_geral',options:{invalid?:boolean,lo
   if(url.pathname==='/rest/v1/audit_events'||url.pathname==='/rest/v1/collection_agents'||url.pathname==='/rest/v1/collector_bindings')return route.fulfill({status:200,headers:{...headers,'content-range':'*/0'},json:[]});
   throw new Error(`Unexpected request in offline test: ${req.method()} ${url.pathname}`);
  });
- return data;
+ return {...data,financialWrites};
 }
 async function login(page:Page){
  await page.goto('/');await page.getByLabel('Usuário',{exact:true}).fill('UsuarioTeste');await page.getByLabel('Senha',{exact:true}).fill('synthetic-password');await page.getByRole('button',{name:'Entrar na Central'}).click();
@@ -100,6 +122,59 @@ test('collector sees only collection navigation and no automatic wallet binding'
 test('RH does not receive financial navigation',async({page})=>{
  await setup(page,'rh_dp');await login(page);const nav=page.getByRole('navigation');await expect(nav).not.toContainText('Caixa / Bancos');await expect(nav).not.toContainText('Contas a Pagar');await expect(nav).toContainText('RH / DP');
 });
+
+test('CR com liberação individual acessa as nove bases e os formulários operacionais sem virar gerente',async({page})=>{
+ const data=await setup(page,'contas_receber',{fullImportAccess:true,operationalImportGrants:true});
+ await login(page);
+ await expect(page.locator('.user-menu small')).toHaveText('Contas a Receber');
+ await expect(page.getByRole('button',{name:/Administração/})).toHaveCount(0);
+ const nav=page.getByRole('navigation',{name:'Módulos da Central'});
+ await expect(nav.getByRole('button',{name:'Comissões',exact:true})).toHaveCount(0);
+ await nav.getByRole('button',{name:'Importar Bases',exact:true}).click();
+ const tabs=page.getByRole('tablist',{name:'Bases para atualização'});
+ await expect(tabs.getByRole('tab')).toHaveText([
+  'Contas a Pagar','Contas a Receber','Contatos e descrições','Caixa / Bancos','Estoque',
+  'Resumo da Diretoria','Fechamento / Faturamento','RH / DP','Custos',
+ ]);
+ await expect(page.getByRole('heading',{name:'Importar Contas a Pagar',exact:true})).toBeVisible();
+ await tabs.getByRole('tab',{name:'Estoque',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Registrar posição de estoque',exact:true})).toBeVisible();
+ await expect(page.getByLabel('Valor total do estoque (R$)',{exact:true})).toBeEnabled();
+ await expect(page.getByRole('button',{name:'Salvar posição de estoque',exact:true})).toBeEnabled();
+ await tabs.getByRole('tab',{name:'Resumo da Diretoria',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Informar indicadores da posição',exact:true})).toBeVisible();
+ await expect(page.getByLabel('Faturamento mês (exceto COMLURB) (R$)',{exact:true})).toBeEnabled();
+ await expect(page.getByRole('button',{name:'Salvar indicadores da Diretoria',exact:true})).toBeEnabled();
+ expect(data.financialWrites).toEqual([]);
+});
+
+for(const fullImportAccess of [undefined,true]){
+ test(fullImportAccess===undefined?'CR comum mantém somente suas duas bases de importação':'Flag sem permissões operacionais não concede outras bases ao CR',async({page})=>{
+  await setup(page,'contas_receber',{fullImportAccess});await login(page);
+  await page.getByRole('navigation',{name:'Módulos da Central'}).getByRole('button',{name:'Importar Bases',exact:true}).click();
+  const tabs=page.getByRole('tablist',{name:'Bases para atualização'});
+  await expect(tabs.getByRole('tab')).toHaveText(['Contas a Receber','Contatos e descrições']);
+  await expect(page.getByRole('heading',{name:'Importar Contas a Receber',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:/Administração/})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Salvar posição de estoque',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Salvar indicadores da Diretoria',exact:true})).toHaveCount(0);
+ });
+}
+
+test('flag e grants de importação forjados não permitem ao diretor importar nem administrar usuários',async({page})=>{
+ const data=await setup(page,'diretor',{fullImportAccess:true,operationalImportGrants:true,forgedAdminGrants:true});
+ await login(page);
+ await expect(page.getByRole('navigation',{name:'Módulos da Central'}).getByRole('button',{name:'Importar Bases',exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:/Administração/}).click();
+ await expect(page.getByRole('heading',{name:'Usuários e permissões',exact:true})).toBeVisible();
+ await expect(page.getByText('Acesso somente para consulta. Usuários, cobradoras e auditoria estão disponíveis para leitura.',{exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Vincular conta existente',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Editar',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Salvar posição de estoque',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Salvar indicadores da Diretoria',exact:true})).toHaveCount(0);
+ expect(data.financialWrites).toEqual([]);
+});
+
 test('logout clears memory and a reload cannot restore a protected screen',async({page})=>{
  await setup(page);await login(page);await page.getByRole('button',{name:'Sair',exact:false}).click();await expect(page.getByRole('heading',{name:'Bem-vindo à Central'})).toBeVisible();
  expect(await page.evaluate(()=>({local:Object.keys(localStorage),session:Object.keys(sessionStorage)}))).toEqual({local:[],session:[]});
@@ -119,7 +194,7 @@ test('delayed access response cannot reopen the interface after logout',async({p
 
 
 test('limite individual de CP mostra somente três módulos e uma única base de importação',async({page})=>{
- await setup(page,'contas_pagar',{limitedPayables:true});await login(page);
+ await setup(page,'contas_pagar',{limitedPayables:true,fullImportAccess:true});await login(page);
  const nav=page.getByRole('navigation',{name:'Módulos da Central'});
  await expect(nav.getByRole('button')).toHaveCount(3);
  await expect(nav.getByRole('button')).toHaveText([/Painel Gerencial$/,/Contas a Pagar$/,/Importar Bases$/]);

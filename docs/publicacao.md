@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.17.0
+# Publicação e ativação — 0.17.1
+
+A **0.17.1** acrescenta acesso individual às nove áreas de Importar Bases para uma conta do perfil Contas a Receber. Execute [ativar-acesso-importacoes-usuario.sql](../supabase/dashboard/ativar-acesso-importacoes-usuario.sql), configure o login pelo comando privado descrito no [guia](acesso-importacoes-usuario.md), confira a versão e saia/entre na conta beneficiada. Não há atualização de Edge Function. A concessão inclui as permissões operacionais necessárias, preserva o perfil e não concede administração. O SQL de instalação não habilita usuários por padrão.
 
 A atualização **0.17.0** implementa **Importar Bases → Custos** e a aplicação dos custos ao CMV e às margens de um mês escolhido. Instale [ativar-custos-fechamento.sql](../supabase/dashboard/ativar-custos-fechamento.sql), com **044/045** sobre a base comercial **032**; atualize a função **business-import existente → Code → index.ts** com o [TypeScript completo](../supabase/dashboard/business-import.ts) e clique em **Deploy updates**; confira o site **0.17.0**. O [guia de Custos e fechamento](custos-fechamento.md) explica a escolha dos custos divergentes, precisão, histórico, impacto e aplicação em nova versão. Publicar pelo Git não executa a atualização no Supabase nem recalcula um fechamento real.
 

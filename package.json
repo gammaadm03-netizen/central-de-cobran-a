@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.17.0",
+  "version": "0.17.1",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -75,7 +75,9 @@
     "test:payable-paid-reconciliation-sql": "node scripts/test-payable-paid-reconciliation-sql.mjs",
     "test:product-costs-sql": "node scripts/test-product-costs-sql.mjs",
     "test:product-cost-recalculation-sql": "node scripts/test-product-cost-recalculation-sql.mjs",
-    "bundle:product-costs": "node scripts/bundle-product-costs.mjs"
+    "bundle:product-costs": "node scripts/bundle-product-costs.mjs",
+    "test:user-import-access-sql": "node scripts/test-user-import-access-sql.mjs",
+    "bundle:user-import-access": "node scripts/bundle-user-import-access.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

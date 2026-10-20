@@ -10,6 +10,7 @@ export interface Access {
   profile: Profile;
   permissions: { resource: string; action: string }[];
   collector_id: string | null;
+  full_import_access?: boolean;
 }
 export const roleNames: Record<RoleKey, string> = {
   diretor: 'Diretor', gerente_geral: 'Gerente Geral', contas_receber: 'Contas a Receber', contas_pagar: 'Contas a Pagar', rh_dp: 'RH / DP', cobradora_1: 'Cobrança 01', cobradora_2: 'Cobrança 02',
@@ -22,4 +23,7 @@ export function isAccess(value: unknown): value is Access {
 export function permits(access: Access, resource: string, action = 'read') {
   if (access.profile.role_key === 'diretor' && (resource === 'importar_bases' || !['read', 'export'].includes(action))) return false;
   return access.permissions.some(permission => permission.resource === resource && permission.action === action);
+}
+export function hasFullImportAccess(access: Access) {
+  return access.profile.role_key === 'contas_receber' && access.full_import_access === true && permits(access, 'importar_bases');
 }

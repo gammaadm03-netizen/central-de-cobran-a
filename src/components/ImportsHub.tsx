@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { permits, type Access } from '../lib/access';
+import { hasFullImportAccess, permits, type Access } from '../lib/access';
 import PayablesImport from './PayablesImport';
 import ReceivablesImport from './ReceivablesImport';
 import BankImport from './BankImport';
@@ -23,8 +23,9 @@ const areas = [
 ];
 
 export default function ImportsHub({ access, initialArea = 'contas_pagar', onDashboard }: { access: Access; initialArea?: string; onDashboard?: () => void }) {
-  const canWriteStock = access.profile.role_key === 'gerente_geral' && permits(access, 'caixa', 'write');
-  const canWriteDirector = access.profile.role_key === 'gerente_geral' && permits(access, 'resumo_diretoria', 'write');
+  const isImportOperator = access.profile.role_key === 'gerente_geral' || hasFullImportAccess(access);
+  const canWriteStock = isImportOperator && permits(access, 'caixa', 'write');
+  const canWriteDirector = isImportOperator && permits(access, 'resumo_diretoria', 'write');
   const canImportReferences = ['gerente_geral', 'contas_receber'].includes(access.profile.role_key)
     && permits(access, 'importar_bases', 'read') && ['read', 'write', 'import'].every(action => permits(access, 'contas_receber', action));
   const canImportClosing = permits(access, 'fechamento', 'import') && permits(access, 'faturamento');

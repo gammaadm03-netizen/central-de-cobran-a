@@ -1,7 +1,23 @@
+-- Limites individuais. Executar inteiro no SQL Editor.
+-- Preserva concessões individuais de importação instaladas pela atualização046.
+BEGIN;
+SELECT pg_advisory_xact_lock(2045812301);
+DO $cf_limits_activation$
+BEGIN
+ IF to_regclass('public.central_schema_migrations') IS NULL THEN
+  RAISE EXCEPTION 'Ative primeiro a base financeira da Central.' USING ERRCODE='22023';
+ END IF;
+ IF EXISTS(SELECT 1 FROM public.central_schema_migrations WHERE version='046_user_import_access') THEN
+  IF NOT EXISTS(SELECT 1 FROM public.central_schema_migrations WHERE version='039_user_access_limits') THEN
+   RAISE EXCEPTION 'Registro de versões inconsistente. Confira039 e046.' USING ERRCODE='22023';
+  END IF;
+  RAISE NOTICE 'Limites039 já instalados; concessões individuais046 preservadas.';
+ ELSE
+  EXECUTE $cf_limits_source$
 -- Teto individual de recursos para acessos de Contas a Pagar.
 -- Repetível e sem usuários/configurações reais. Nunca concede permissão nova.
 -- Requer identidade 001, gateway 003, base 007 e acesso da Diretoria 031.
-BEGIN;
+
 DO $$ BEGIN
  IF to_regclass('public.central_schema_migrations') IS NULL
   OR to_regclass('public.profiles') IS NULL OR to_regclass('public.role_permissions') IS NULL
@@ -128,4 +144,9 @@ END $$;
 REVOKE ALL ON FUNCTION cf_private.restrict_payables_user(uuid) FROM PUBLIC,anon,authenticated,service_role;
 COMMENT ON FUNCTION cf_private.restrict_payables_user(uuid) IS 'Somente operador SQL proprietário. Teto padronizado de CP sem modificar a role, sem conceder acesso e sem auditoria duplicada ao repetir a mesma configuração.';
 INSERT INTO public.central_schema_migrations(version) VALUES('039_user_access_limits') ON CONFLICT(version) DO NOTHING;
+$cf_limits_source$;
+ END IF;
+END;
+$cf_limits_activation$;
+NOTIFY pgrst, 'reload schema';
 COMMIT;
