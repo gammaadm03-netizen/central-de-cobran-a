@@ -5,11 +5,24 @@
 -- Mantém a comparação exata de identidade e utiliza o índice existente da 023.
 -- O deploy do site e da função receivables-import é uma etapa separada.
 
+BEGIN;
+SELECT pg_advisory_xact_lock(2045812301);
+DO $cf_import_performance_guard$ BEGIN
+ IF to_regclass('public.central_schema_migrations') IS NULL THEN
+  RAISE EXCEPTION 'Ative primeiro a base financeira da Central.' USING ERRCODE='22023';
+ END IF;
+ IF EXISTS(SELECT 1 FROM public.central_schema_migrations WHERE version='047_receivables_complete_report') THEN
+  IF NOT EXISTS(SELECT 1 FROM public.central_schema_migrations WHERE version='041_receivable_import_performance') THEN
+   RAISE EXCEPTION 'Registro de versões inconsistente. Confira041 e047.' USING ERRCODE='22023';
+  END IF;
+  RAISE NOTICE 'Otimização041 já instalada; sincronização047 preservada.';
+ ELSE
+  EXECUTE $cf_import_performance_source$
 -- Importação de recebíveis: usa o índice existente para localizar parcelas.
 -- Acrescenta somente pré-filtros indexáveis; a identidade JSON exata é mantida.
 -- Não altera dados, vínculos, valores, permissões, limites ou regras de quitação.
 -- Independente de contatos/e-mail e das atualizações 025 a 040.
-BEGIN;
+
 DO $$ BEGIN
  IF to_regclass('public.central_schema_migrations') IS NULL
   OR to_regclass('public.receivable_sync_identity_lookup') IS NULL
@@ -111,4 +124,8 @@ END $$;
 
 INSERT INTO public.central_schema_migrations(version) VALUES('041_receivable_import_performance') ON CONFLICT(version) DO NOTHING;
 NOTIFY pgrst,'reload schema';
+$cf_import_performance_source$;
+ END IF;
+END $cf_import_performance_guard$;
+NOTIFY pgrst, 'reload schema';
 COMMIT;

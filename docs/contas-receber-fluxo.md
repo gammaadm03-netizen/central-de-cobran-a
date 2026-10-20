@@ -2,6 +2,8 @@
 
 A apuração de Comissões foi recuperada na **0.13.0**: [ativação das quatro abas](ativacao-demais-abas.md). As referências abaixo à ausência de taxas descrevem a entrega 0.9.0; os recebimentos e sua base efetiva permanecem preservados.
 
+A **0.18.0** atualiza a regra dos ausentes: relatório completo retira da carteira ativa e encaminha trabalhados à fila pendente de Comissões; recebimento e comissão continuam dependendo de Quitados. Arquivo parcial conserva ausentes. Esta regra substitui as referências históricas abaixo à preservação na carteira ativa. [Guia e ativação](recebiveis-relatorio-completo.md).
+
 As regras de importação e recebimento desta página permanecem vigentes. A atualização **0.12.0** permite escolher responsáveis na importação dos abertos, acrescenta retornos prioritários e encaminha pagamentos informados à validação fora da fila ativa. Consultar o [guia atual de atendimento e retornos](cobranca-atendimento-retornos.md). As referências à interface anterior abaixo são históricas.
 
 A operação utiliza os dois modelos Excel enviados pelo usuário, sem renomear colunas. A equipe registra no sistema de origem e importa na Central; o arquivo de quitados confirma os recebimentos, sem exigir que a cobradora informe manualmente o mesmo pagamento.

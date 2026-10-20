@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { createReceivablesGateway, RECEIVABLES_GATEWAY_SCHEMA } from './handler.mjs';
-import { isReceivableIdentifierHeader, readReceivableIdentifierCell } from '../../../src/lib/receivables-parser.mjs';
+import { isReceivableIdentifierHeader, readReceivableIdentifierCellResult } from '../../../src/lib/receivables-parser.mjs';
 import { receivableCustomerKey } from '../../../src/lib/receivables-parser.mjs';
 
 const USER = '10000000-0000-4000-8000-000000000001';
@@ -39,15 +39,19 @@ function setup(options = {}) {
     if (populated.length !== 1) throw new Error('A cópia para importação deve conter uma única aba com dados.');
     const sheet = populated[0];
     if (sheet.rowCount > 5001 || sheet.columnCount > 100) throw new Error('Planilha excede 5.000 linhas ou 100 colunas.');
-    const matrix = [];
+    const matrix = [], errors = [];
     const identifiers = [];
     sheet.getRow(1).eachCell((cell, column) => { if (isReceivableIdentifierHeader(cell.value)) identifiers.push(column); });
     for (let i = 1; i <= sheet.rowCount; i++) {
       const row = sheet.getRow(i), values = row.values.slice(1);
-      if (i > 1) for (const column of identifiers) { const cell = row.getCell(column); values[column - 1] = readReceivableIdentifierCell(cell.value, cell.numFmt); }
+      if (i > 1) for (const column of identifiers) {
+        const cell = row.getCell(column), result = readReceivableIdentifierCellResult(cell.value, cell.numFmt, i, column);
+        values[column - 1] = result.value;
+        if (result.error && errors.length < 100) errors.push(result.error);
+      }
       matrix.push(values);
     }
-    return { matrix, excel1904: Boolean(workbook.properties.date1904) };
+    return { matrix, excel1904: Boolean(workbook.properties.date1904), errors };
   });
   const fetcher = async (url, init) => {
     const path = new URL(url).pathname;
@@ -72,27 +76,29 @@ function setup(options = {}) {
     if (path === '/rest/v1/rpc/receivables_import_capabilities') {
       assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
       if (options.capabilityError) return json(options.capabilityError, options.capabilityStatus ?? 404);
-      return json(options.capabilities ?? { open_sync:true, received_import:true });
+      return json(options.capabilities ?? { open_sync:true, received_import:true,open_report_sync:true,open_report_version:'047' });
     }
-    if (['/rest/v1/rpc/preview_receivables_import','/rest/v1/rpc/preview_receivables_open_import','/rest/v1/rpc/preview_receivables_received_import','/rest/v1/rpc/preview_receivables_open_import_with_collectors'].includes(path)) {
+    if (['/rest/v1/rpc/preview_receivables_import','/rest/v1/rpc/preview_receivables_open_import','/rest/v1/rpc/preview_receivables_received_import','/rest/v1/rpc/preview_receivables_open_import_with_collectors','/rest/v1/rpc/preview_receivables_open_report'].includes(path)) {
       assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
       if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
       if (options.previewPayload) return json(options.previewPayload);
       if (!path.endsWith('/preview_receivables_import')) {
-        const withCollectors = path.endsWith('/preview_receivables_open_import_with_collectors');
+        const report = path.endsWith('/preview_receivables_open_report');
+        const withCollectors = report || path.endsWith('/preview_receivables_open_import_with_collectors');
         const mode = path.endsWith('/preview_receivables_open_import') || withCollectors ? 'open' : 'received';
         const groups = new Map(); for (const row of data.p_rows) { const key = receivableCustomerKey(row), group = groups.get(key) ?? []; group.push(row); groups.set(key, group); }
         const assignments = [...groups].map(([customer_key, rows]) => ({ customer_key, client_name: rows[0].client_name, client_document: rows[0].client_document, collector_id: data.p_collector_mappings?.[customer_key] ?? null, collector_name: data.p_collector_mappings?.[customer_key] ? 'Responsável sintética' : null, row_count: rows.length, requires_selection: true, locked: false }));
         const missing = assignments.filter(row => row.collector_id === null).length;
-        return json({ mode,previous_import_id:null,financial_revision:'17',row_count:data.p_rows.length,new_count:data.p_rows.length,open_count:0,changed_count:0,pending_count:0,validated_in_source_count:0,received_count:data.p_rows.length,matched_count:0,correction_count:0,historical_count:0,conflict_count:0,can_commit:!withCollectors || missing === 0,errors:[],rows:data.p_rows.map((row,index) => ({ ...row,line:index+1,title_id:null,outcome:mode==='open'?'NEW':'NEW_RECEIPT',candidates:[], ...(withCollectors ? { customer_key: receivableCustomerKey(row) } : {}) })), ...(withCollectors ? { collector_assignment_version: '030', customer_collector_assignments: assignments, missing_collector_count: missing } : {}) });
+        return json({ mode,previous_import_id:null,financial_revision:'17',row_count:data.p_rows.length,new_count:data.p_rows.length,open_count:0,changed_count:0,pending_count:0,validated_in_source_count:0,received_count:data.p_rows.length,matched_count:0,correction_count:0,historical_count:0,conflict_count:0,can_commit:!withCollectors || missing === 0,errors:[],rows:data.p_rows.map((row,index) => ({ ...row,line:index+1,title_id:null,outcome:mode==='open'?'NEW':'NEW_RECEIPT',candidates:[], ...(withCollectors ? { customer_key: receivableCustomerKey(row) } : {}) })), ...(withCollectors ? { collector_assignment_version: '030', customer_collector_assignments: assignments, missing_collector_count: missing } : {}), ...(report ? reportFields(data,options.retirementItems) : {}) });
       }
       return json({ previous_import_id: null, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, pending_count: 0, validated_in_source_count: 0 });
     }
-    if (['/rest/v1/rpc/commit_receivables_import_from_gateway','/rest/v1/rpc/commit_receivables_open_import_from_gateway','/rest/v1/rpc/commit_receivables_received_import_from_gateway','/rest/v1/rpc/commit_receivables_open_import_with_collectors_from_gateway'].includes(path)) {
+    if (['/rest/v1/rpc/commit_receivables_import_from_gateway','/rest/v1/rpc/commit_receivables_open_import_from_gateway','/rest/v1/rpc/commit_receivables_received_import_from_gateway','/rest/v1/rpc/commit_receivables_open_import_with_collectors_from_gateway','/rest/v1/rpc/commit_receivables_open_report_from_gateway'].includes(path)) {
       assert.equal(init.headers.apikey, SERVICE); assert.equal(init.headers.Authorization, `Bearer ${SERVICE}`);
       if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
-      const withCollectors = path.endsWith('/commit_receivables_open_import_with_collectors_from_gateway');
-      return json(options.commitPayload ?? { import_id: IMPORT, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, pending_count: 0, validated_in_source_count: 0, ...(path.endsWith('/commit_receivables_open_import_from_gateway') || withCollectors ? { mode:'open' } : path.endsWith('/commit_receivables_received_import_from_gateway') ? { mode:'received' } : {}), ...(withCollectors ? { collector_assignment_version: '030', assigned_title_count: data.p_rows.length, assigned_customer_count: Object.keys(data.p_collector_mappings).length } : {}) });
+      const report = path.endsWith('/commit_receivables_open_report_from_gateway');
+      const withCollectors = report || path.endsWith('/commit_receivables_open_import_with_collectors_from_gateway');
+      return json(options.commitPayload ?? { import_id: IMPORT, row_count: data.p_rows.length, new_count: data.p_rows.length, open_count: 0, pending_count: 0, validated_in_source_count: 0, ...(path.endsWith('/commit_receivables_open_import_from_gateway') || withCollectors ? { mode:'open' } : path.endsWith('/commit_receivables_received_import_from_gateway') ? { mode:'received' } : {}), ...(withCollectors ? { collector_assignment_version: '030', assigned_title_count: data.p_rows.length, assigned_customer_count: Object.keys(data.p_collector_mappings).length } : {}), ...(report ? { ...reportFields(data,options.retirementItems),request_id:data.p_request_id,idempotent:false } : {}) });
     }
     throw new Error('Unexpected upstream path');
   };
@@ -104,6 +110,71 @@ function setup(options = {}) {
   }));
   return { calls, logs, handle, send, workbookCalls: () => workbookCalls };
 }
+
+const REPORT_REQUEST = '50000000-0000-4000-8000-000000000001';
+const REPORT_COLLECTOR = '60000000-0000-4000-8000-000000000001';
+const reportPermissions = [...['import','read','write'].map(action => ({ resource:'contas_receber',action })), { resource:'importar_bases',action:'read' }];
+const reportRetirements = [
+  { title_id:'70000000-0000-4000-8000-000000000001',client_name:'Cliente sintético trabalhado',document:'000099',branch:'FILIAL TESTE',due_date:'2026-09-10',amount_cents:15000,collector_id:REPORT_COLLECTOR,worked:true },
+  { title_id:'70000000-0000-4000-8000-000000000002',client_name:'Cliente sintético sem atendimento',document:'000100',branch:'FILIAL TESTE',due_date:'2026-09-11',amount_cents:20000,collector_id:null,worked:false },
+];
+function reportFields(data, items = []) {
+  const retirement_items=data.p_full_report?items:[],worked=retirement_items.filter(item=>item.worked).length;
+  return { format_version:'receivables-open-report-v1',full_report:data.p_full_report,reference_date:data.p_reference_date,retirement_items,
+    retired_count:retirement_items.length,retired_worked_count:worked,retired_unworked_count:retirement_items.length-worked,reappeared_count:0 };
+}
+const openReportBody=(action='preview',extra={})=>body(action,{mode:'open',file_base64:encode(OPEN_CSV),full_report:true,reference_date:'2026-10-20',
+  collector_mappings:{[receivableCustomerKey({client_name:ERP_ROW[0],client_document:null})]:REPORT_COLLECTOR},...(action==='commit'?{request_id:REPORT_REQUEST}:{}),...extra});
+
+test('047 full-report preview uses the dedicated RPC and exposes retired worked versus unworked titles without implying receipts',async()=>{
+  const app=setup({permissions:reportPermissions,retirementItems:reportRetirements}),response=await app.send(openReportBody());assert.equal(response.status,200);const data=await response.json();
+  assert.equal(data.preview.format_version,'receivables-open-report-v1');assert.equal(data.preview.full_report,true);assert.equal(data.preview.reference_date,'2026-10-20');assert.equal(data.preview.retired_count,2);assert.equal(data.preview.retired_worked_count,1);assert.equal(data.preview.retired_unworked_count,1);assert.deepEqual(data.preview.retirement_items,reportRetirements);assert.equal(data.preview.can_commit,true);
+  const call=app.calls.at(-1);assert.equal(call.path,'/rest/v1/rpc/preview_receivables_open_report');assert.equal(call.data.p_full_report,true);assert.equal(call.data.p_reference_date,'2026-10-20');assert.equal(call.data.p_rows[0].document,'000123');assert(!Object.hasOwn(call.data.p_rows[0],'received_on'));assert.equal(call.init.headers.Authorization,`Bearer ${TOKEN}`);
+});
+
+test('047 incremental report preserves absent titles and forwards the explicit false value instead of treating it as missing',async()=>{
+  const app=setup({permissions:reportPermissions,retirementItems:reportRetirements}),response=await app.send(openReportBody('preview',{full_report:false}));assert.equal(response.status,200);const data=await response.json();assert.equal(data.preview.retired_count,0);assert.deepEqual(data.preview.retirement_items,[]);assert.equal(app.calls.at(-1).data.p_full_report,false);
+});
+
+test('047 commit reparses original bytes and sends only frozen report settings, exact protocol and verified actor to its service writer',async()=>{
+  const app=setup({permissions:reportPermissions,retirementItems:reportRetirements}),request=openReportBody('commit'),response=await app.send(request);assert.equal(response.status,200);const result=await response.json();assert.equal(result.request_id,REPORT_REQUEST);assert.equal(result.retired_count,2);assert.equal(result.idempotent,false);
+  const call=app.calls.at(-1);assert.equal(call.path,'/rest/v1/rpc/commit_receivables_open_report_from_gateway');assert.equal(call.init.headers.Authorization,`Bearer ${SERVICE}`);assert.equal(call.data.p_user_id,USER);assert.equal(call.data.p_session_id,SESSION);assert.equal(call.data.p_file_base64,request.file_base64);assert.equal(call.data.p_file_sha256,createHash('sha256').update(OPEN_CSV).digest('hex'));assert.equal(call.data.p_request_id,REPORT_REQUEST);assert.equal(call.data.p_previous_financial_revision,'17');assert.equal(call.data.p_full_report,true);assert.equal(call.data.p_reference_date,'2026-10-20');assert.deepEqual(call.data.p_title_mappings,{});assert.deepEqual(call.data.p_collector_mappings,request.collector_mappings);assert(!Object.hasOwn(call.data,'p_received_amount_cents'));
+});
+
+test('047 protocol rejects incomplete or cross-mode settings and untrusted titles before parsing or upstream financial calls',async()=>{
+  for(const update of [{full_report:'true'},{full_report:undefined},{reference_date:'2026-02-31'},{reference_date:undefined},{request_id:'invalid'},{mode:'received'},{mode:undefined},{rows:[]},{p_full_report:true},{actor_id:USER}]){
+    const app=setup({permissions:reportPermissions}),response=await app.send(openReportBody('preview',update));assert.equal(response.status,400,JSON.stringify(update));assert.equal(app.calls.length,2);assert.equal(app.workbookCalls(),0);
+  }
+  const app=setup({permissions:reportPermissions}),response=await app.send(openReportBody('commit',{request_id:undefined}));assert.equal(response.status,400);assert.equal(app.calls.length,2);
+});
+
+test('047 requires current import-hub and complete CR module permissions before financial parsing',async()=>{
+  for(const permissions of [reportPermissions.filter(item=>item.resource!=='importar_bases'),reportPermissions.filter(item=>item.action!=='write'),reportPermissions.filter(item=>item.resource!=='contas_receber'||item.action!=='read')]){
+    const app=setup({permissions}),response=await app.send(openReportBody('preview',{file_name:'source.xlsx',file_base64:'INVALID'}));assert.equal(response.status,403);assert.equal(app.workbookCalls(),0);assert.equal(app.calls.length,2);
+  }
+});
+
+test('047 fails closed on old capabilities or missing RPC while keeping ordinary financial conflicts distinct from activation',async()=>{
+  for(const options of [{capabilities:{open_sync:true,received_import:true}},{capabilities:{open_report_sync:true,open_report_version:'046'}},{capabilityError:{code:'PGRST202'}},{rpcError:{code:'42883',message:'private function signature'}}]){
+    const app=setup({permissions:reportPermissions,...options}),response=await app.send(openReportBody());assert.equal(response.status,409);const result=await response.json();assert.equal(result.code,'P0047');assert.equal(result.activation_required,true);assert(!JSON.stringify(result).includes('private'));assert(!app.calls.some(call=>call.path==='/rest/v1/rpc/preview_receivables_open_import_with_collectors'));
+  }
+  const app=setup({permissions:reportPermissions,rpcError:{code:'P0047',message:'private financial details'}}),response=await app.send(openReportBody());assert.equal(response.status,409);const result=await response.json();assert.equal(result.code,'P0047');assert.equal(result.activation_required,undefined);assert(!JSON.stringify(result).includes('private'));
+  const limit=setup({permissions:reportPermissions,rpcError:{code:'54000',message:'private report contents'}}),limited=await limit.send(openReportBody());assert.equal(limited.status,400);const blocked=await limited.json();assert.equal(blocked.code,'P0047');assert.match(blocked.error,/5.000 títulos ausentes/);assert(!JSON.stringify(blocked).includes('private'));
+});
+
+test('047 preview rejects altered report settings, inconsistent retirements and incremental disappearance instead of approving a different operation',async()=>{
+  const original=setup({permissions:reportPermissions,retirementItems:reportRetirements}),valid=await (await original.send(openReportBody())).json();
+  const updates=[{format_version:'old'},{full_report:false},{reference_date:'2026-10-19'},{retired_count:1},{retired_worked_count:0},{reappeared_count:2},{retirement_items:[reportRetirements[0],reportRetirements[0]]},{retirement_items:[{...reportRetirements[0],amount_cents:'15000'},reportRetirements[1]]},{retirement_items:[{...reportRetirements[0],worked:'true'},reportRetirements[1]]},{previous_import_id:'invalid'}];
+  for(const update of updates){const app=setup({permissions:reportPermissions,previewPayload:{...valid.preview,...update}}),response=await app.send(openReportBody());assert.equal(response.status,502,JSON.stringify(update));assert.equal((await response.json()).code,'CR_INVALID_PREVIEW');}
+  const app=setup({permissions:reportPermissions,previewPayload:{...valid.preview,full_report:false}}),response=await app.send(openReportBody('preview',{full_report:false}));assert.equal(response.status,502);
+});
+
+test('047 commit requires an exact receipt of the frozen protocol and safe outcome counters before claiming success',async()=>{
+  const app=setup({permissions:reportPermissions,retirementItems:reportRetirements}),good=await (await app.send(openReportBody('commit'))).json();
+  for(const update of [{request_id:undefined},{request_id:USER},{format_version:'old'},{full_report:false},{reference_date:'2026-10-19'},{retired_count:0},{retired_worked_count:3},{idempotent:undefined}]){
+    const invalid=setup({permissions:reportPermissions,commitPayload:{...good,...update}}),response=await invalid.send(openReportBody('commit'));assert.equal(response.status,502,JSON.stringify(update));assert.equal((await response.json()).code,'CR_INVALID_RESPONSE');
+  }
+});
 
 async function xlsx() {
   const workbook = new ExcelJS.Workbook(); const sheet = workbook.addWorksheet('CP');
@@ -357,6 +428,21 @@ test('native XLSX received imports preserve document display zeros and independe
   const bytes = await workbook.xlsx.writeBuffer(), app = setup(); const response = await app.send(body('commit', { mode:'received',file_name:'recebimentos.xlsx',file_base64:encode(bytes) })); assert.equal(response.status, 200);
   const data = app.calls.at(-1).data; assert.equal(data.p_rows[0].document, '000123'); assert.equal(data.p_rows[0].amount_cents, 12590); assert.equal(data.p_rows[0].received_amount_cents, 13000); assert.equal(data.p_rows[0].received_on, '2026-10-17'); assert.equal(data.p_rows[0].due_date, '2026-10-20'); assert.equal(data.p_file_sha256, createHash('sha256').update(bytes).digest('hex'));
   sheet.getCell('B2').numFmt = '0.00'; const invalid = setup(); const bad = await invalid.send(body('preview', { mode:'received',file_name:'documento.xlsx',file_base64:encode(await workbook.xlsx.writeBuffer()) })); assert.equal(bad.status, 422); assert.match((await bad.json()).errors[0].problem, /Formato do identificador não suportado/); assert.equal(invalid.calls.length, 2);
+});
+
+test('XLSX identifier failures expose physical cell coordinates and incomplete rows without reaching capabilities or writes', async () => {
+  const workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet('Relatório sintético');
+  sheet.addRow(ERP_HEADER); sheet.addRow(ERP_ROW);
+  sheet.addRow(['Cliente sintético em linha incompleta']);
+  sheet.addRow(['Linha sintética deslocada', 49.95, new Date('2026-10-01T00:00:00Z'), new Date('2026-10-20T00:00:00Z'), 2]);
+  const app = setup(), response = await app.send(body('preview', { mode:'open',file_name:'linhas-desalinhadas.xlsm',file_base64:encode(await workbook.xlsx.writeBuffer()) }));
+  assert.equal(response.status, 422); const payload = await response.json();
+  const identifier = payload.errors.filter(error => error.line === 4 && error.column.startsWith('Documento / NF'));
+  assert.equal(identifier.length, 1); assert.equal(identifier[0].column, 'Documento / NF (B4)');
+  assert.match(identifier[0].problem, /Identificador de documento inválido/); assert.match(identifier[0].correction, /célula B4/);
+  assert(payload.errors.some(error => error.line === 3 && error.column === 'Documento / NF'));
+  assert(!payload.errors.some(error => error.line === 0)); assert.equal(app.calls.length, 2);
+  assert(!JSON.stringify(payload).includes('Cliente sintético')); assert(!JSON.stringify(payload).includes('49.95'));
 });
 
 test('new mode SQL conflicts and capability denial expose safe guidance without raw database details', async () => {

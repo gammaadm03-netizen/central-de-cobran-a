@@ -11,14 +11,24 @@ export async function buildCollectionEmailSql() {
     throw new Error(`${source}: expected exactly one outer BEGIN/COMMIT transaction.`);
   }
   if (!sql.includes("'040_collection_email_draft'")) throw new Error(`${source}: missing its schema migration registry version.`);
+  const completeReport = await readFile(new URL('../supabase/migrations/047_receivables_complete_report.sql', import.meta.url), 'utf8');
+  const definition = completeReport.match(/CREATE OR REPLACE FUNCTION public\.prepare_collection_customer_email\([\s\S]*?END \$\$;/)?.[0];
+  if (!definition || definition.includes('$cf_email_report_source$')) throw new Error('Missing safe complete-report email definition.');
+  const preserve = `DO $cf_email_report_guard$ BEGIN
+ IF EXISTS(SELECT 1 FROM public.central_schema_migrations WHERE version='047_receivables_complete_report') THEN
+  EXECUTE $cf_email_report_source$\n${definition}\n$cf_email_report_source$;
+ END IF;
+END $cf_email_report_guard$;`;
   return `-- CENTRAL FINANCEIRA — rascunho de e-mail de Cobrança (040).
 -- Copie o arquivo inteiro no SQL Editor do projeto existente.
 -- Requer a base de Cobrança com 024, contatos 027 e atendimento 029.
 -- Não depende dos limites individuais 039; não modifica contas nem permissões de perfis.
 -- Repetível; não altera títulos, recebimentos, contatos, atendimentos ou tempos registrados.
 -- Não envia e-mails, não marca mensagens como enviadas e não publica Edge Functions.
+-- Preserva a exclusão de títulos retirados pela047, inclusive ao ativar e-mail depois dela.
 -- SOURCE: ${source}
-${sql.slice(0, commit[0].index)}NOTIFY pgrst, 'reload schema';
+${sql.slice(0, commit[0].index)}${preserve}
+NOTIFY pgrst, 'reload schema';
 COMMIT;
 `;
 }

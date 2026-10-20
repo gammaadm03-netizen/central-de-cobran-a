@@ -51,7 +51,7 @@ async function setup(page:Page,role='gerente_geral',options:PermissionFixtureOpt
    return reply({session:{access_token:data.token,refresh_token:'synthetic-refresh-token',expires_in:3600,token_type:'bearer'},access:data.access});
   }
   if(url.pathname==='/auth/v1/user')return reply(data.user);
-  if(['/rest/v1/rpc/list_commercial_items','/rest/v1/rpc/hr_report','/rest/v1/rpc/commissions_report'].includes(url.pathname))return reply({code:'PGRST202'},404);
+  if(['/rest/v1/rpc/list_commercial_items','/rest/v1/rpc/hr_report','/rest/v1/rpc/commissions_report','/rest/v1/rpc/pending_collection_commissions'].includes(url.pathname))return reply({code:'PGRST202'},404);
   if(url.pathname==='/rest/v1/rpc/payables_management_summary')return reply({code:'PGRST202'},404);
   if(['/rest/v1/payable_review_titles','/rest/v1/payable_financial_titles'].includes(url.pathname))return reply({code:'PGRST205'},404);
   if(['/rest/v1/rpc/get_payable_payment_accounts','/rest/v1/rpc/payable_payment_summary','/rest/v1/rpc/list_payable_payments','/rest/v1/rpc/get_payables_revision','/rest/v1/rpc/get_payable_month_status','/rest/v1/rpc/payables_month_status','/rest/v1/rpc/list_payable_month_closures'].includes(url.pathname))return reply({code:'PGRST202'},404);

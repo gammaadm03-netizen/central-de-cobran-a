@@ -69,6 +69,27 @@ export function readReceivableIdentifierCell(value, numFmt) {
   if (format.length > 150) throw new Error('Limite de 150 caracteres excedido.');
   return text.padStart(format.length, '0');
 }
+/** Keep the original invalid cell in the matrix and report its exact position. */
+export function readReceivableIdentifierCellResult(value, numFmt, line, column) {
+  try { return { value: readReceivableIdentifierCell(value, numFmt), error: null }; }
+  catch (error) {
+    let letters = '', index = column;
+    while (index > 0) { index--; letters = String.fromCharCode(65 + index % 26) + letters; index = Math.floor(index / 26); }
+    const address = `${letters}${line}`;
+    return { value, error: { line, column: `${COLUMN_LABELS.document} (${address})`,
+      problem: error instanceof Error ? error.message : INVALID_IDENTIFIER,
+      correction: `Confira a célula ${address} e o alinhamento da linha no arquivo original. Mantenha a nota, o valor e as datas nas respectivas colunas.` } };
+  }
+}
+/** An adapter format error takes precedence over the parser's same-cell error. */
+export function mergeReceivableImportProblems(parserErrors, cellErrors = []) {
+  const seen = new Set(), errors = [];
+  for (const error of [...cellErrors, ...parserErrors]) {
+    const column = error.column.replace(/ \([A-Z]+\d+\)$/, ''), key = JSON.stringify([error.line, column]);
+    if (!seen.has(key)) { seen.add(key); errors.push(error); }
+  }
+  return errors.sort((first, second) => first.line - second.line || first.column.localeCompare(second.column, 'pt-BR')).slice(0, 100);
+}
 export function receivableCustomerKey(row) {
   return row.client_document ? `cnpj:${row.client_document}` : `name:${row.client_name.trim().replace(/\s+/g, ' ').toUpperCase()}`;
 }

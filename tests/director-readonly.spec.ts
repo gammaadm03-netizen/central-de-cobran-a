@@ -10,7 +10,7 @@ const workflow = { version: '029', normal_pause: true, finish_requires_started: 
 const priority = { collector_id: null, due_count: 0, total_cents: 0, next_title_id: null, next_due_date: null };
 
 /** Every response is synthetic. No fixture request reaches the production project. */
-async function setup(page: Page, stalePermissions = true) {
+async function setup(page: Page, stalePermissions = true, retiredStatus?: 'OPEN' | 'VALIDATED') {
   await page.clock.setFixedTime(new Date(now));
   const permissions = resources.flatMap(resource => [{ resource, action: 'read' }, { resource, action: 'export' }]);
   if (stalePermissions) {
@@ -23,13 +23,13 @@ async function setup(page: Page, stalePermissions = true) {
   const bank = { id: uuid(4), company: 'EMPRESA SINTÉTICA', bank: 'BANCO SINTÉTICO', display_name: 'Conta de teste', account_label: 'Conta sintética', account_type: 'BANK', balance_date: day, amount_cents: 123456, updated_at: now };
   const payable = { id: uuid(5), scope: 'grupo-consolidado', source_key: 'synthetic-payable', entry_number: 'CP-SINTETICO', description: 'Fornecedor de teste', branch: '3', due_date: '2026-10-08', amount_cents: 20000, source_status: 'ABERTO', plan: 'ENERGIA', bank_account: bank.display_name, issued_on: '2026-10-01', macro: 'FIXO', status: 'SETTLED_IMPORT', settled_at: now, last_import_id: uuid(6), payment_revision: uuid(7), cheque_number: null, paid_cents: 20000, outstanding_cents: 0, payment_remaining_cents: 0, overpaid_cents: 0, last_payment_date: '2026-10-18', last_payment_bank: bank.display_name, financial_status: 'PAID' };
   const payment = { id: uuid(7), request_id: uuid(8), title_id: payable.id, event_revision: 1, entry_number: payable.entry_number, cheque_number: null, description: payable.description, branch: payable.branch, macro_snapshot: payable.macro, plan_snapshot: payable.plan, due_date: payable.due_date, title_amount_cents: payable.amount_cents, amount_cents: payable.amount_cents, paid_on: '2026-10-18', bank_account_id: bank.id, bank_label: bank.display_name, observation: 'Comprovante sintético', created_at: now, created_by: uuid(9), created_by_name: 'Financeiro sintético', created_by_username: 'FinanceiroSintetico', cancelled_at: null, cancelled_by_name: null, cancellation_observation: null, status: 'ACTIVE' };
-  const receivable = { id: uuid(10), scope: 'grupo-consolidado', document: 'NF-LEITURA', client_name: 'Órgão sintético', client_document: null, customer_key: 'name:orgao-sintetico', branch: '3', issued_on: '2026-10-01', due_date: '2026-10-08', amount_cents: 50000, collector_id: agent.id, status: 'OPEN', validation_status: 'NONE', payment_source: null, payment_reported_date: null, payment_date: null, reported_in_collection: false, collector_locked: true, in_latest_report: true, revision: 1, updated_at: now, last_action: null, next_action: null, next_action_date: null };
-  const pending = { ...receivable, id: uuid(11), document: 'NF-VALIDACAO', status: 'PENDING_VALIDATION', validation_status: 'PENDING', payment_source: 'COBRANCA', payment_reported_date: '2026-10-18', reported_in_collection: true, last_action: 'PAID' };
+  const receivable = { id: uuid(10), scope: 'grupo-consolidado', document: 'NF-LEITURA', client_name: 'Órgão sintético', client_document: null, customer_key: 'name:orgao-sintetico', branch: '3', issued_on: '2026-10-01', due_date: '2026-10-08', amount_cents: 50000, collector_id: agent.id, status: retiredStatus ?? 'OPEN', validation_status: retiredStatus === 'VALIDATED' ? 'VALIDATED' : 'NONE', payment_source: retiredStatus === 'VALIDATED' ? 'IMPORTACAO_DIARIA' : null, payment_reported_date: null, payment_date: retiredStatus === 'VALIDATED' ? '2026-10-18' : null, reported_in_collection: !!retiredStatus, collector_locked: true, in_latest_report: !retiredStatus, retired_from_report: !!retiredStatus, revision: 1, updated_at: now, last_action: null, next_action: null, next_action_date: null };
+  const pending = { ...receivable, id: uuid(11), document: 'NF-VALIDACAO', status: 'PENDING_VALIDATION', validation_status: 'PENDING', payment_source: 'COBRANCA', payment_reported_date: '2026-10-18', payment_date: null, reported_in_collection: true, in_latest_report: true, retired_from_report: false, last_action: 'PAID' };
   const row = { ...receivable, collector_name: agent.display_name, operational_status: 'NOVO TÍTULO - COBRAR', case_revision: 0, observation: 'Observação somente para consulta', next_action_text: null, next_date: null, delay_days: 11, total_work_seconds: 120, current_timer: { session_id: null, started_at: null, running: false, elapsed_seconds: 0 }, return_due: false, return_due_date: null, can_start: false, start_block_reason: 'READ_ONLY' };
   const timer = { title_id: row.id, running: false, session_id: null, started_at: null, elapsed_seconds: 0, total_seconds: 120, actor_total_seconds: 0, server_now: now, recovery_allowed: false };
   const message = { id: uuid(12), author_name: 'Gerência sintética', author_role: 'gerente_geral', priority: 'normal', reference: payable.entry_number, message: 'Mensagem de teste disponível para consulta', status: 'pendente', created_at: now, completed_at: null, reopened_at: null };
   const audit = { id: uuid(13), occurred_at: now, username: 'FinanceiroSintetico', role_key: 'contas_receber', module: 'contas_receber', entity: 'receivable_titles', record_id: pending.id, action: 'PAYMENT_REPORTED' };
-  const calls: { name: string; body: any; method: string }[] = [], mutations: string[] = [], unhandled: string[] = [];
+  const calls: { name: string; body: any; method: string; query: Record<string, string> }[] = [], mutations: string[] = [], unhandled: string[] = [];
   const tables: Record<string, any[]> = {
     profiles: [profile, { id: uuid(14), username: 'CobradoraSintetica', display_name: 'Operadora de teste', role_key: 'cobradora_1', enabled: true, updated_at: now }],
     collection_agents: [agent], collector_bindings: [{ user_id: uuid(14), agent_id: agent.id }], audit_events: [audit], management_messages: [message],
@@ -42,7 +42,7 @@ async function setup(page: Page, stalePermissions = true) {
     const headers = { 'access-control-allow-origin': 'http://127.0.0.1:4173', 'access-control-allow-headers': 'apikey,content-type,authorization,x-client-info,prefer,range,range-unit', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-expose-headers': 'content-range' };
     const reply = (json: any, status = 200, count?: number) => route.fulfill({ status, headers: { ...headers, ...(count !== undefined ? { 'content-range': count ? `0-${count - 1}/${count}` : '*/0' } : {}) }, json });
     if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers });
-    const body = request.postDataJSON(); calls.push({ name, body, method: request.method() });
+    const body = request.postDataJSON(); calls.push({ name, body, method: request.method(), query: Object.fromEntries(url.searchParams) });
     if (name === 'auth-gateway') {
       if (body.action === 'sign_out') return reply({ signed_out: true });
       return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh-token', expires_in: 3600, token_type: 'bearer' }, access });
@@ -65,20 +65,23 @@ async function setup(page: Page, stalePermissions = true) {
       let rows = [receivable, pending];
       const status = url.searchParams.get('status');
       if (status?.startsWith('eq.')) rows = rows.filter(title => title.status === status.slice(3));
+      if (status?.startsWith('neq.')) rows = rows.filter(title => title.status !== status.slice(4));
+      const retired = url.searchParams.get('retired_from_report');
+      if (retired === 'eq.false' || retired === 'eq.true') rows = rows.filter(title => title.retired_from_report === (retired === 'eq.true'));
       if (url.searchParams.get('id')) rows = rows.filter(title => title.id === url.searchParams.get('id')!.slice(3));
       return reply(rows, 200, rows.length);
     }
     if (name === 'collection_workbench') {
-      const rows = body.p_queue === 'returns' || body.p_queue === 'history' ? [] : [row];
+      const rows = retiredStatus ? body.p_queue === 'history' && (!body.p_financial_status || body.p_financial_status === 'RETIRED_FROM_REPORT' || body.p_financial_status === retiredStatus) ? [row] : [] : body.p_queue === 'returns' || body.p_queue === 'history' ? [] : [row];
       return reply({ as_of_date: day, server_now: now, count: rows.length, total_cents: rows.reduce((sum, title) => sum + title.amount_cents, 0), snapshot_revision: 'director-readonly-1', rows, active_timer: null, workflow, priority });
     }
-    if (name === 'collection_case_detail') return reply({ title: row, case: { status: row.operational_status, observation: row.observation, next_action: null, next_date: null, payment_date: null, revision: 0, updated_at: now, updated_by: uuid(14), finalized_at: null }, timer, history: [], case_history: [], work_sessions: [], workflow: { ...workflow, started: false, can_finish: false, recovery_allowed: false }, priority });
+    if (name === 'collection_case_detail') return reply({ title: row, case: { status: row.operational_status, observation: row.observation, next_action: null, next_date: null, payment_date: null, revision: 0, updated_at: now, updated_by: uuid(14), finalized_at: null }, timer, history: [], report_history: retiredStatus ? [{ id: uuid(18), action: 'RETIRED_WORKED', worked: true, reference_date: day, created_at: now }] : [], case_history: [], work_sessions: [], workflow: { ...workflow, started: false, can_finish: false, recovery_allowed: false }, priority });
     if (name === 'collection_customer_context') return reply({ title_id: row.id, customer_key: row.customer_key, client_name: row.client_name, client_document: null, can_edit: false, can_review: false,
       contact: { emails: ['contato@synthetic.test'], phones: ['(11) 3333-4444'], notes: 'Contato conferido em teste', revision: 'synthetic-contact-revision', record_revision: 1, manually_edited: true, reviewed_at: now, reviewed_by: uuid(14), reviewed_by_name: 'Operadora de teste', updated_at: now, updated_by: uuid(14), updated_by_name: 'Operadora de teste' },
       descriptions: { state: 'AVAILABLE', count: 1, variants: [{ id: uuid(16), description: 'Descrição sintética do contrato', contract: 'CONTRATO-SINTETICO', source_import_id: uuid(17), imported_at: now }] }, as_of_date: day, server_now: now });
     if (name === 'collection_work_summary') return reply({ start: body.p_start ?? '2026-10-01', end: body.p_end ?? '2026-10-31', as_of_date: day, server_now: now, total_seconds: 120, session_count: 1, running_count: 0, title_count: 1, by_collector: [{ collector_id: agent.id, display_name: agent.display_name, total_seconds: 120, session_count: 1, running_count: 0, title_count: 1 }], by_day: [{ date: day, total_seconds: 120, session_count: 1, title_count: 1 }], rows: [], truncated: false });
     if (name === 'receivable_commission_base') return reply({ rows: [], count: 0, total_received_cents: 0, eligible_base_cents: 0, unassigned_count: 0, rule_status: 'AGUARDANDO_REGRAS', collectors: [{ id: agent.id, display_name: agent.display_name }] });
-    if (['commissions_report', 'list_commercial_items', 'hr_report'].includes(name)) return reply({ code: 'PGRST202' }, 404);
+    if (['commissions_report', 'pending_collection_commissions', 'list_commercial_items', 'hr_report'].includes(name)) return reply({ code: 'PGRST202' }, 404);
     if (request.method() === 'GET' && Object.hasOwn(tables, name)) return reply(tables[name], 200, tables[name].length);
     if (url.pathname.startsWith('/rest/v1/rpc/') || request.method() !== 'GET') { mutations.push(name); return reply({ code: '42501', message: 'Synthetic fixture rejects all writes' }, 403); }
     unhandled.push(`${request.method()} ${name}`); return reply({ code: 'PGRST205' }, 404);
@@ -198,5 +201,54 @@ test('Director collection desk, customer contacts and all secondary panels remai
   await expect(page.getByRole('region', { name: 'Tempo de trabalho', exact: true }).getByText('00:02:00', { exact: true }).first()).toBeVisible(); await noFinancialWrites(page);
   await page.getByRole('tab', { name: 'Contatos', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Relatório de contatos', exact: true })).toBeVisible(); await noFinancialWrites(page);
+  expect(seen.mutations).toEqual([]); expect(seen.unhandled).toEqual([]);
+});
+
+test('Director reads a worked title retired from the complete report in collection history without restoring write access', async ({ page }) => {
+  const seen = await setup(page, true, 'OPEN');
+  await navigate(page, 'Contas a Receber');
+  await expect.poll(() => seen.calls.some(call => call.name === 'receivable_titles' && call.query.status === 'neq.VALIDATED' && call.query.retired_from_report === 'eq.false')).toBe(true);
+  await expect(page.getByRole('button', { name: 'Detalhar título NF-LEITURA de Órgão sintético', exact: true })).toHaveCount(0);
+  await navigate(page, 'Cobrança');
+  await page.getByRole('tab', { name: 'Títulos', exact: true }).click();
+  await page.getByText('Vencimentos e situação financeira', { exact: true }).click();
+  await page.getByRole('combobox', { name: 'Situação financeira', exact: true }).selectOption('RETIRED_FROM_REPORT');
+  await page.getByRole('button', { name: 'Abrir título NF-LEITURA', exact: true }).click();
+  const sidebar = page.getByRole('region', { name: 'Atendimento do título', exact: true });
+  await expect(sidebar).toContainText('Título retirado da carteira ativa por ausência no relatório completo.');
+  await expect(sidebar.getByRole('timer', { name: 'Tempo do atendimento' })).toHaveText('00:02:00');
+  await expect(sidebar.getByRole('combobox', { name: 'Status do atendimento', exact: true })).toBeDisabled();
+  await expect(sidebar.getByRole('textbox', { name: 'Observações', exact: true })).toBeDisabled();
+  await sidebar.getByText('Movimentações por relatório completo', { exact: true }).click();
+  await expect(sidebar).toContainText('Pendente em Comissões, aguardando o relatório de quitados.');
+  await noFinancialWrites(page);
+  expect(seen.calls.some(call => call.name === 'collection_workbench' && call.body.p_queue === 'history' && call.body.p_financial_status === 'RETIRED_FROM_REPORT')).toBe(true);
+  expect(seen.mutations).toEqual([]); expect(seen.unhandled).toEqual([]);
+});
+
+test('Director sees a formerly retired title confirmed in Quitados as validated without pending commission notices', async ({ page }) => {
+  const seen = await setup(page, true, 'VALIDATED');
+  await navigate(page, 'Contas a Receber');
+  await page.getByRole('combobox', { name: 'Situação do título', exact: true }).selectOption('VALIDATED');
+  await expect(page.getByRole('button', { name: 'Detalhar título NF-LEITURA de Órgão sintético', exact: true })).toBeVisible();
+  await expect.poll(() => seen.calls.some(call => call.name === 'receivable_titles' && call.query.status === 'eq.VALIDATED' && !Object.hasOwn(call.query, 'retired_from_report'))).toBe(true);
+  const table = page.getByRole('table', { name: 'Contas a Receber com filtros e paginação' });
+  await expect(table).toContainText('Quitado — validado');
+  await expect(table).not.toContainText('Retirado da carteira ativa');
+  await page.getByRole('button', { name: 'Detalhar título NF-LEITURA de Órgão sintético', exact: true }).click();
+  await expect(page.getByText('Título retirado anteriormente por ausência no relatório completo. O recebimento foi confirmado; o histórico permanece disponível.', { exact: true })).toBeVisible();
+  await navigate(page, 'Cobrança');
+  await page.getByRole('tab', { name: 'Títulos', exact: true }).click();
+  await page.getByText('Vencimentos e situação financeira', { exact: true }).click();
+  await page.getByRole('combobox', { name: 'Situação financeira', exact: true }).selectOption('VALIDATED');
+  await page.getByRole('button', { name: 'Abrir título NF-LEITURA', exact: true }).click();
+  const sidebar = page.getByRole('region', { name: 'Atendimento do título', exact: true });
+  await expect(sidebar).toContainText('O recebimento foi confirmado; o histórico e o tempo de atendimento foram preservados.');
+  await expect(sidebar).toContainText('Recebimento validado. Este registro está disponível somente para consulta do histórico.');
+  await sidebar.getByText('Movimentações por relatório completo', { exact: true }).click();
+  await expect(sidebar).not.toContainText('Pendente em Comissões, aguardando o relatório de quitados.');
+  await expect(sidebar).not.toContainText('a confirmação financeira depende do relatório de quitados.');
+  await expect(sidebar.getByRole('textbox', { name: 'Observações', exact: true })).toBeDisabled();
+  await noFinancialWrites(page);
   expect(seen.mutations).toEqual([]); expect(seen.unhandled).toEqual([]);
 });

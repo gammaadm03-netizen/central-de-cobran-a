@@ -15,12 +15,12 @@ const owner = (page: Page, client = 'Cliente sintético') => page.getByRole('com
 const bulk = (page: Page) => page.getByRole('combobox', { name: /^Cobradora para clientes sem responsável/ });
 const analyzeButton = (page: Page) => page.getByRole('button', { name: 'Analisar arquivo', exact: true });
 const commitButton = (page: Page) => page.getByRole('button', { name: 'Concluir importação de abertos e vencidos', exact: true });
+const pendingButton = (page: Page) => page.getByRole('button', { name: 'Conferir confirmação pendente', exact: true });
 async function reanalyze(page: Page) {
   const response = page.waitForResponse(reply => reply.request().method() === 'POST' && new URL(reply.url()).pathname === '/functions/v1/receivables-import' && reply.request().postDataJSON()?.action === 'preview');
   await analyzeButton(page).click(); await response;
-  // An existing preview remains visible during reanalysis, including the
-  // read-only recovery request after a stale collector selection. Wait for
-  // the complete analysis, not merely its previous heading.
+  // An existing preview remains visible while validating new choices.
+  // Wait for the complete analysis, not merely its previous heading.
   await expect(analyzeButton(page)).toBeEnabled();
   await expect(page.getByRole('heading', { name: 'Conferência de Contas a Receber', exact: true })).toBeVisible();
 }
@@ -64,11 +64,13 @@ test('reimportar os mesmos bytes preserva responsável e não duplica lote nem a
   expect(seen.commits).toHaveLength(2); expect(seen.commits[1].file_base64).toBe(seen.commits[0].file_base64); expect(seen.commits[1].collector_mappings).toEqual({}); expect(seen.imports.size).toBe(1); expect(seen.assignmentApplications).toHaveLength(1); expect(seen.owners.get(defaultKey)).toBe(collectorA); expect(seen.financialWrites).toEqual([]);
 });
 
-test('resposta incerta congela escolhas e reanalisa o mesmo arquivo sem aplicar atribuição duas vezes', async ({ page }) => {
+test('resposta incerta congela escolhas e repete o mesmo protocolo sem reanalisar nem atribuir duas vezes', async ({ page }) => {
   const seen = await setup(page, { unassignedCustomers: 'all', uncertainCommit: true }); await analyze(page); await owner(page).selectOption(collectorB); await reanalyze(page); page.once('dialog', dialog => dialog.accept()); await commitButton(page).click();
   await expect(page.getByText('A confirmação está pendente.', { exact: false })).toBeVisible(); await expect(owner(page)).toBeDisabled(); await expect(page.getByLabel('Relatório de abertos e vencidos de Contas a Receber', { exact: true })).toBeDisabled(); await expect(page.getByRole('button', { name: 'Títulos quitados', exact: true })).toBeDisabled();
-  await reanalyze(page); expect(seen.previews.at(-1).collector_mappings).toEqual({ [defaultKey]: collectorB }); await expect(commitButton(page)).toBeEnabled(); await commit(page);
-  expect(seen.commits).toHaveLength(2); expect(seen.commits[1].collector_mappings).toEqual(seen.commits[0].collector_mappings); expect(seen.commits[1].file_base64).toBe(seen.commits[0].file_base64); expect(seen.imports.size).toBe(1); expect(seen.assignmentApplications).toHaveLength(1); expect(seen.owners.get(defaultKey)).toBe(collectorB);
+  await expect(page.getByLabel('Abrangência do relatório', { exact: true })).toBeDisabled(); await expect(page.getByLabel('Data da posição do relatório', { exact: true })).toBeDisabled(); await expect(page.getByRole('checkbox')).toBeDisabled(); await expect(analyzeButton(page)).toBeDisabled(); await expect(commitButton(page)).toBeDisabled();
+  const previewsBefore=seen.previews.length;
+  await pendingButton(page).click(); await expect(page.getByRole('status').filter({ hasText: 'Importação concluída' })).toBeVisible();
+  expect(seen.commits).toHaveLength(2); expect(seen.commits[1]).toEqual(seen.commits[0]); expect(seen.commits[0].request_id).toMatch(/^[a-f\d-]{36}$/i); expect(seen.previews).toHaveLength(previewsBefore); expect(seen.imports.size).toBe(1); expect(seen.assignmentApplications).toHaveLength(1); expect(seen.owners.get(defaultKey)).toBe(collectorB); expect(seen.financialWrites).toEqual([]);
 });
 
 test('sem responsáveis ativas orienta cadastro e mantém a confirmação bloqueada', async ({ page }) => {
@@ -85,18 +87,24 @@ test('mudar arquivo limpa escolhas anteriores e quitados nunca enviam collector_
   page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Confirmar importação de títulos quitados', exact: true }).click(); await expect(page.getByRole('status').filter({ hasText: 'Importação concluída' })).toBeVisible(); expect(seen.previews.filter(body => body.mode === 'received').every(body => !Object.hasOwn(body, 'collector_mappings'))).toBe(true); expect(Object.hasOwn(seen.commits[0], 'collector_mappings')).toBe(false);
 });
 
-test('confirmação incerta seguida de quitação recupera a análise sem trocar arquivo ou atribuir novamente', async ({ page }) => {
+test('quitação externa durante confirmação incerta permanece intacta no replay do protocolo original', async ({ page }) => {
   const seen = await setup(page, { unassignedCustomers: 'all', paidAfterUncertainCommit: true, ambiguous: 1 }); await analyze(page); await page.getByLabel('Vínculo da linha 2', { exact: true }).selectOption('NEW'); await owner(page).selectOption(collectorA); await reanalyze(page); page.once('dialog', dialog => dialog.accept()); await commitButton(page).click();
   await expect(page.getByText('A confirmação está pendente.', { exact: false })).toBeVisible(); expect(seen.imports.size).toBe(1); expect(seen.assignmentApplications).toHaveLength(1); expect(seen.receipts.size).toBe(1); const receiptsBefore = [...seen.receipts.entries()].map(([key, value]) => [key, { ...value }]);
-  await reanalyze(page); await expect(page.getByRole('alert').filter({ hasText: 'A carteira mudou durante a confirmação pendente' })).toBeVisible(); await expect(commitButton(page)).toBeDisabled(); await expect(owner(page)).toHaveCount(0); expect(seen.rejectedCollectorPreviews).toBe(1);
-  expect(seen.previews.slice(-2).map(body => body.collector_mappings)).toEqual([{ [defaultKey]: collectorA }, {}]); expect(seen.previews.slice(-2).every(body => body.file_base64 === Buffer.from(openCsv).toString('base64') && body.mode === 'open' && body.title_mappings['1'] === 'NEW')).toBe(true);
   await expect(page.getByLabel('Relatório de abertos e vencidos de Contas a Receber', { exact: true })).toBeDisabled(); await expect(page.getByRole('button', { name: 'Títulos quitados', exact: true })).toBeDisabled(); await expect(page.getByRole('checkbox')).toBeDisabled(); await expect(page.getByLabel('Vínculo da linha 2', { exact: true })).toBeDisabled();
-  await reanalyze(page); await expect(commitButton(page)).toBeEnabled(); await commit(page); expect(seen.commits).toHaveLength(2); expect(seen.commits[1].collector_mappings).toEqual({}); expect(seen.commits[1].title_mappings).toEqual({ '1': 'NEW' }); expect(seen.commits[1].file_base64).toBe(seen.commits[0].file_base64); expect(seen.imports.size).toBe(1); expect(seen.assignmentApplications).toHaveLength(1); expect([...seen.receipts.entries()]).toEqual(receiptsBefore); expect(seen.financialWrites).toEqual([]);
+  await expect(analyzeButton(page)).toBeDisabled(); const previewsBefore=seen.previews.length;
+  await pendingButton(page).click(); await expect(page.getByRole('status').filter({ hasText: 'Importação concluída' })).toBeVisible();
+  expect(seen.commits).toHaveLength(2); expect(seen.commits[1]).toEqual(seen.commits[0]); expect(seen.commits[1].collector_mappings).toEqual({ [defaultKey]: collectorA }); expect(seen.commits[1].title_mappings).toEqual({ '1': 'NEW' }); expect(seen.previews).toHaveLength(previewsBefore); expect(seen.rejectedCollectorPreviews).toBe(0); expect(seen.imports.size).toBe(1); expect(seen.assignmentApplications).toHaveLength(1); expect([...seen.receipts.entries()]).toEqual(receiptsBefore); expect(seen.financialWrites).toEqual([]);
 });
 
-test('responsável inativada durante envio incerto pode ser substituída somente após consulta e nova análise', async ({ page }) => {
+test('responsável inativada só pode ser substituída depois de resposta conhecida ao protocolo pendente', async ({ page }) => {
   const seen = await setup(page, { unassignedCustomers: 'all', inactiveAfterUncertainCommit: true }); await analyze(page); await owner(page).selectOption(collectorA); await reanalyze(page); page.once('dialog', dialog => dialog.accept()); await commitButton(page).click(); await expect(page.getByText('A confirmação está pendente.', { exact: false })).toBeVisible(); expect(seen.imports.size).toBe(0); expect(seen.assignmentApplications).toHaveLength(0);
-  await reanalyze(page); await expect(page.getByRole('alert').filter({ hasText: 'A carteira mudou durante a confirmação pendente' })).toBeVisible(); await expect(owner(page)).toBeEnabled(); await expect(owner(page)).toHaveValue(''); await expect(owner(page).locator(`option[value="${collectorA}"]`)).toHaveCount(0); await expect(commitButton(page)).toBeDisabled();
-  await expect(page.getByLabel('Relatório de abertos e vencidos de Contas a Receber', { exact: true })).toBeDisabled(); await expect(page.getByRole('button', { name: 'Títulos quitados', exact: true })).toBeDisabled(); await owner(page).selectOption(collectorB); await expect(commitButton(page)).toBeDisabled(); await reanalyze(page); await expect(commitButton(page)).toBeEnabled(); await commit(page);
-  expect(seen.rejectedCollectorPreviews).toBe(1); expect(seen.commits[1].collector_mappings).toEqual({ [defaultKey]: collectorB }); expect(seen.commits[1].file_base64).toBe(seen.commits[0].file_base64); expect(seen.imports.size).toBe(1); expect(seen.assignmentApplications).toEqual([{ customer_key: defaultKey, collector_id: collectorB, row_count: 1 }]); expect(seen.receipts.size).toBe(0); expect(seen.financialWrites).toEqual([]);
+  await expect(owner(page)).toBeDisabled(); await expect(analyzeButton(page)).toBeDisabled(); const previewsBefore=seen.previews.length;
+  await pendingButton(page).click(); await expect(page.getByRole('alert').filter({ hasText: 'Confira a responsável de cada cliente sem carteira' })).toBeVisible();
+  expect(seen.commits).toHaveLength(2); expect(seen.commits[1]).toEqual(seen.commits[0]); expect(seen.previews).toHaveLength(previewsBefore); expect(seen.imports.size).toBe(0); expect(seen.assignmentApplications).toEqual([]);
+  await expect(page.getByRole('heading', { name: 'Conferência de Contas a Receber', exact: true })).toHaveCount(0); await expect(pendingButton(page)).toHaveCount(0); await expect(page.getByLabel('Relatório de abertos e vencidos de Contas a Receber', { exact: true })).toBeEnabled();
+  // A known rejection ends the frozen request. The operator deliberately
+  // selects the same original again and checks the replacement assignment.
+  await analyze(page); await expect(owner(page)).toBeEnabled(); await expect(owner(page)).toHaveValue(''); await expect(owner(page).locator(`option[value="${collectorA}"]`)).toHaveCount(0);
+  await owner(page).selectOption(collectorB); await expect(commitButton(page)).toBeDisabled(); await reanalyze(page); await expect(commitButton(page)).toBeEnabled(); await commit(page);
+  expect(seen.commits).toHaveLength(3); expect(seen.commits[2].request_id).not.toBe(seen.commits[0].request_id); expect(seen.commits[2].collector_mappings).toEqual({ [defaultKey]: collectorB }); expect(seen.commits[2].file_base64).toBe(seen.commits[0].file_base64); expect(seen.imports.size).toBe(1); expect(seen.assignmentApplications).toEqual([{ customer_key: defaultKey, collector_id: collectorB, row_count: 1 }]); expect(seen.receipts.size).toBe(0); expect(seen.financialWrites).toEqual([]);
 });

@@ -9,3 +9,5 @@ export function validateReceivableRows(matrix: unknown[][], options?: { excel190
 export function validateReceivablePaidRows(matrix: unknown[][], options?: { excel1904?: boolean }): { rows: ReceivablePaidRow[]; errors: ImportProblem[] };
 export function isReceivableIdentifierHeader(value: unknown): boolean;
 export function readReceivableIdentifierCell(value: unknown, numFmt?: string): string;
+export function readReceivableIdentifierCellResult(value: unknown, numFmt: string | undefined, line: number, column: number): { value: unknown; error: ImportProblem | null };
+export function mergeReceivableImportProblems(parserErrors: ImportProblem[], cellErrors?: ImportProblem[]): ImportProblem[];

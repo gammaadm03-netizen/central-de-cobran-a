@@ -25,11 +25,11 @@ function response(body: any, options: { unsafe?: boolean; pages?: boolean; pendi
     rule_versions: pending ? [] : [{ id: ruleId, kind: body.p_kind, subject: seller ? base.subject : '', effective_from: '2026-10-01', created_at: '2026-10-15T12:00:00Z', reason: 'Regra sintética confirmada', config: seller ? { policy: 'COMMERCIAL', minimum_margin_bps: 1000 } : { eligible_collector_ids: [collectorId], bands } }], collector_bands: bands,
     revision: 'a'.repeat(32), assessments: [{ id: savedId, kind: body.p_kind, period_start: body.p_start, period_end: body.p_end, subject: null, band: null, revision: 'b'.repeat(32), created_at: '2026-10-17T12:00:00Z' }] };
 }
-async function setup(page: Page, options: { missing?: boolean; unsafe?: boolean; pages?: boolean; failureOnRefresh?: boolean; manager?: boolean; export?: boolean; pending?: boolean } = {}) {
+async function setup(page: Page, options: { missing?: boolean; unsafe?: boolean; pages?: boolean; failureOnRefresh?: boolean; manager?: boolean; export?: boolean; pending?: boolean; pendingQueue?: boolean; pendingQueuePages?: boolean; pendingQueueMissing?: boolean; pendingQueueUnsafe?: boolean; pendingQueueFailureOnRefresh?: boolean } = {}) {
   const access = { profile: { id: userId, username: 'PessoaSintetica', display_name: 'Pessoa sintética', role_key: options.manager ? 'gerente_geral' : 'diretor', enabled: true }, permissions: [{ resource: 'comissoes', action: 'read' }, ...(options.manager ? [{ resource: 'comissoes', action: 'write' }, { resource: 'usuarios', action: 'admin' }] : []), ...(options.export ? [{ resource: 'comissoes', action: 'export' }] : [])], collector_id: null };
   const claims = { sub: userId, session_id: '20000000-0000-4000-8000-000000000001', exp: Math.floor(Date.now() / 1000) + 3600, iat: Math.floor(Date.now() / 1000), role: 'authenticated' };
   const token = [Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'), Buffer.from(JSON.stringify(claims)).toString('base64url'), 'synthetic-only'].join('.');
-  const seen: any[] = [], writes: any[] = []; let latest: any;
+  const seen: any[] = [], writes: any[] = [], pendingSeen: any[] = []; let latest: any;
   await page.route(`${project}/**`, async route => {
     const req = route.request(), url = new URL(req.url());
     const headers = { 'access-control-allow-origin': 'http://127.0.0.1:4173', 'access-control-allow-headers': 'apikey,content-type,authorization,x-client-info,prefer', 'access-control-allow-methods': 'GET,POST,OPTIONS' };
@@ -44,6 +44,14 @@ async function setup(page: Page, options: { missing?: boolean; unsafe?: boolean;
       if (options.failureOnRefresh && seen.length > 1) return reply({ message: 'private SQL error' }, 503);
       latest = response(body, options); return reply(latest);
     }
+    if (url.pathname === '/rest/v1/rpc/pending_collection_commissions') {
+      const body = req.postDataJSON(); pendingSeen.push(body);
+      if (options.pendingQueueMissing) return reply({ code: 'PGRST202', message: 'private pending SQL error' }, 404);
+      if (options.pendingQueueFailureOnRefresh && pendingSeen.length > 1) return reply({ message: 'private pending SQL error' }, 503);
+      const count = options.pendingQueuePages ? 26 : options.pendingQueue ? 1 : 0;
+      return reply({ format_version: 'pending-collection-commissions-v1', count, revision: '15', options: { collectors: [{ id: collectorId, display_name: 'Responsável sintética' }] },
+        rows: Array.from({ length: Math.min(25, Math.max(0, count - body.p_offset)) }, (_, i) => ({ event_id: `80000000-0000-4000-8000-${String(body.p_offset + i + 1).padStart(12, '0')}`, title_id: `90000000-0000-4000-8000-${String(body.p_offset + i + 1).padStart(12, '0')}`, document: `PEND-${body.p_offset + i + 1}`, client_name: 'Cliente pendente sintético', branch: 'FILIAL TESTE', due_date: '2026-08-01', nominal_reference_cents: options.pendingQueueUnsafe ? Number.MAX_SAFE_INTEGER + 1 : 999999, collector_id: collectorId, collector_name: 'Responsável sintética', retired_at: '2026-10-20T15:00:00+00:00', reference_date: '2026-10-20', source_import_id: savedId, status: 'AWAITING_RECEIVED_REPORT', payment_date: null, commission_cents: null })) });
+    }
     if (url.pathname === '/rest/v1/rpc/configure_commission_rule' || url.pathname === '/rest/v1/rpc/save_commission_assessment') { writes.push({ rpc: url.pathname.split('/').at(-1), body: req.postDataJSON() }); return reply(ruleId); }
     if (url.pathname === '/rest/v1/rpc/restore_seller_commission_policy') { writes.push({ rpc: 'restore_seller_commission_policy', body: req.postDataJSON() }); return reply({ rule_ids: [ruleId], created_count: 1 }); }
     if (url.pathname === '/rest/v1/rpc/commission_assessment') return reply({ id: savedId, created_at: '2026-10-17T12:00:00Z', report: { ...latest, commission_cents: 3, revision: 'b'.repeat(32), rows: [{ ...latest.rows[0], commission_cents: 3 }], assessments: undefined } });
@@ -52,7 +60,7 @@ async function setup(page: Page, options: { missing?: boolean; unsafe?: boolean;
   });
   await page.goto('/'); await page.getByLabel('Usuário', { exact: true }).fill('PessoaSintetica'); await page.getByLabel('Senha', { exact: true }).fill('synthetic-password'); await page.getByRole('button', { name: 'Entrar na Central' }).click();
   await expect(page.getByRole('heading', { name: 'Apuração de comissões das cobradoras' })).toBeVisible();
-  return { seen, writes };
+  return { seen, writes, pendingSeen };
 }
 test('collector commission uses the actual amount, preserves nominal value in details, and Director stays read only', async ({ page }) => {
   await setup(page); const table = page.getByRole('table', { name: 'Recebimentos confirmados para comissões' });
@@ -108,4 +116,57 @@ test('saved assessments open their immutable figures and return to the current b
 test('Excel export retrieves every page of the same revision and honors export permission', async ({ page }) => {
   const { seen } = await setup(page, { export: true, pages: true }); const downloading = page.waitForEvent('download'); await page.getByRole('button', { name: 'Baixar Excel das comissões' }).click(); const download = await downloading;
   expect(download.suggestedFilename()).toMatch(/^Comissoes_Cobradoras_.*\.xlsx$/); expect(seen.some(body => body.p_limit === 1000)).toBe(true);
+});
+test('worked missing titles wait separately without increasing received totals or inventing a commission', async ({ page }) => {
+  const { writes } = await setup(page, { pendingQueue: true });
+  const queue = page.getByRole('region', { name: 'Aguardando confirmação de recebimento' });
+  const table = queue.getByRole('table', { name: 'Títulos trabalhados aguardando relatório de quitados' });
+  await expect(table.getByRole('cell', { name: 'R$ 9.999,99', exact: true })).toBeVisible();
+  await expect(page.locator('.commission-base-cards')).toContainText('R$ 90,00');
+  await expect(page.locator('.commission-base-cards')).toContainText('R$ 0,05');
+  await expect(page.locator('.commission-base-cards')).not.toContainText('9.999,99');
+  await queue.getByRole('button', { name: 'Abrir pendência PEND-1' }).click();
+  await expect(queue.getByRole('heading', { name: 'Pendência PEND-1' })).toBeVisible();
+  await expect(queue.getByText('A confirmar pelo relatório de quitados', { exact: true })).toBeVisible();
+  await expect(queue.getByText('Aguardando confirmação do recebimento', { exact: true })).toBeVisible();
+  await expect(queue.getByRole('button', { name: /Confirmar|Pagar|Validar/ })).toHaveCount(0);
+  expect(writes).toHaveLength(0);
+});
+test('pending queue filters and pages independently from the month of actual receipts', async ({ page }) => {
+  const { pendingSeen } = await setup(page, { pendingQueuePages: true });
+  const queue = page.getByRole('region', { name: 'Aguardando confirmação de recebimento' });
+  await expect(queue.getByText('26 pendência(s) · página 1 de 2')).toBeVisible();
+  await queue.getByRole('button', { name: 'Próximas pendências' }).click();
+  await expect(queue.getByRole('button', { name: 'Abrir pendência PEND-26' })).toBeVisible();
+  expect(pendingSeen.at(-1).p_offset).toBe(25);
+  await queue.getByLabel('Buscar título pendente', { exact: true }).fill('Cliente pendente');
+  await page.getByRole('combobox', { name: 'Cobradora das pendências', exact: true }).selectOption(collectorId);
+  await page.getByRole('button', { name: 'Consultar pendências', exact: true }).click();
+  await expect.poll(() => pendingSeen.at(-1)).toEqual({ p_search: 'Cliente pendente', p_collector_id: collectorId, p_offset: 0, p_limit: 25 });
+  await expect(page.getByRole('table', { name: 'Recebimentos confirmados para comissões' })).toBeVisible();
+});
+test('missing pending activation and malformed references leave confirmed commissions available', async ({ page }) => {
+  await setup(page, { pendingQueueMissing: true });
+  const queue = page.getByRole('region', { name: 'Aguardando confirmação de recebimento' });
+  await expect(queue.getByRole('alert')).toContainText('atualização 047');
+  await expect(queue.getByText('private pending SQL error')).toHaveCount(0);
+  await expect(page.getByRole('table', { name: 'Recebimentos confirmados para comissões' })).toBeVisible();
+  await expect(page.locator('.commission-base-cards')).toContainText('R$ 0,05');
+});
+test('unsafe pending references fail closed and do not change the confirmed receipt totals', async ({ page }) => {
+  await setup(page, { pendingQueue: true, pendingQueueUnsafe: true });
+  const queue = page.getByRole('region', { name: 'Aguardando confirmação de recebimento' });
+  await expect(queue.getByRole('alert')).toContainText('Não foi possível consultar');
+  await expect(queue.getByRole('table')).toHaveCount(0);
+  await expect(page.locator('.commission-base-cards')).toContainText('R$ 90,00');
+});
+test('failed pending refresh clears its previous title details and does not clear the financial assessment', async ({ page }) => {
+  await setup(page, { pendingQueue: true, pendingQueueFailureOnRefresh: true });
+  const queue = page.getByRole('region', { name: 'Aguardando confirmação de recebimento' });
+  await queue.getByRole('button', { name: 'Abrir pendência PEND-1' }).click();
+  await queue.getByRole('button', { name: 'Atualizar pendências' }).click();
+  await expect(queue.getByRole('alert')).toContainText('Não foi possível consultar');
+  await expect(queue.getByRole('heading', { name: 'Pendência PEND-1' })).toHaveCount(0);
+  await expect(queue.getByRole('table')).toHaveCount(0);
+  await expect(page.getByRole('table', { name: 'Recebimentos confirmados para comissões' })).toBeVisible();
 });

@@ -29,9 +29,9 @@ function parseCivilDate(value, excel1904 = false) {
     const date = new Date(epoch + (value - (!excel1904 && value > 60 ? 1 : 0)) * 864e5);
     return civil(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
   }
-  const text = String(value ?? "").trim();
-  const br = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text);
-  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  const text2 = String(value ?? "").trim();
+  const br = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text2);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text2);
   if (!br && !iso) throw new Error("Use dd/mm/aaaa ou aaaa-mm-dd; datas abreviadas s\xE3o amb\xEDguas.");
   return br ? civil(+br[3], +br[2], +br[1]) : civil(+iso[1], +iso[2], +iso[3]);
 }
@@ -51,20 +51,20 @@ function parseMoneyCents(value) {
     if (cents2 > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Valor excede o limite seguro.");
     return Number(cents2);
   }
-  let text = String(value ?? "").trim().replace(/^R\$\s*/, "");
-  if (!text) throw new Error("Valor obrigat\xF3rio.");
-  if (!/^(?:\d+|\d{1,3}(?:\.\d{3})+)(?:,\d{1,2})?$/.test(text)) throw new Error("Use valor brasileiro, por exemplo 1.234,56, com at\xE9 duas casas decimais.");
-  text = text.replaceAll(".", "");
-  const [integer, decimal = ""] = text.split(",");
+  let text2 = String(value ?? "").trim().replace(/^R\$\s*/, "");
+  if (!text2) throw new Error("Valor obrigat\xF3rio.");
+  if (!/^(?:\d+|\d{1,3}(?:\.\d{3})+)(?:,\d{1,2})?$/.test(text2)) throw new Error("Use valor brasileiro, por exemplo 1.234,56, com at\xE9 duas casas decimais.");
+  text2 = text2.replaceAll(".", "");
+  const [integer, decimal = ""] = text2.split(",");
   const cents = BigInt(integer) * 100n + BigInt(decimal.padEnd(2, "0"));
   if (cents > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Valor excede o limite seguro.");
   return Number(cents);
 }
-function parseCsv(text, { maxRows = MAX_ROWS + 1 } = {}) {
+function parseCsv(text2, { maxRows = MAX_ROWS + 1 } = {}) {
   if (!Number.isSafeInteger(maxRows) || maxRows < 1 || maxRows > MAX_ROWS + 21) throw new Error("Limite de linhas do CSV inv\xE1lido.");
-  text = text.replace(/^\uFEFF/, "");
-  if (text.includes("\0")) throw new Error("CSV cont\xE9m bytes inv\xE1lidos. Salve uma c\xF3pia em UTF-8.");
-  const sample = text.split(/\r?\n/, 1)[0];
+  text2 = text2.replace(/^\uFEFF/, "");
+  if (text2.includes("\0")) throw new Error("CSV cont\xE9m bytes inv\xE1lidos. Salve uma c\xF3pia em UTF-8.");
+  const sample = text2.split(/\r?\n/, 1)[0];
   let quoted = false, commas = 0, semicolons = 0;
   for (let index = 0; index < sample.length; index++) {
     if (sample[index] === '"') {
@@ -87,11 +87,11 @@ function parseCsv(text, { maxRows = MAX_ROWS + 1 } = {}) {
     row = [];
     if (rows.length > maxRows) throw new Error(maxRows === MAX_ROWS + 1 ? "A base excede o limite de 5.000 linhas." : "O arquivo CSV excede o limite de linhas permitido.");
   }
-  for (let index = 0; index < text.length; index++) {
-    const character = text[index];
+  for (let index = 0; index < text2.length; index++) {
+    const character = text2[index];
     if (inQuote) {
       if (character === '"') {
-        if (text[index + 1] === '"') {
+        if (text2[index + 1] === '"') {
           field += '"';
           index++;
         } else {
@@ -104,7 +104,7 @@ function parseCsv(text, { maxRows = MAX_ROWS + 1 } = {}) {
       inQuote = true;
     } else if (character === delimiter) finishField();
     else if (character === "\r" || character === "\n") {
-      if (character === "\r" && text[index + 1] === "\n") index++;
+      if (character === "\r" && text2[index + 1] === "\n") index++;
       finishRow();
     } else {
       if (closedQuote) throw new Error("Texto ap\xF3s aspas de fechamento no CSV.");
@@ -228,23 +228,53 @@ function parseIdentifier(value) {
     return String(primitive);
   }
   if (typeof primitive !== "string") throw new Error(INVALID_IDENTIFIER);
-  const text = primitive.trim().replace(/\s+/g, " ");
-  if (text.length > 150) throw new Error("Limite de 150 caracteres excedido.");
-  if (/^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)[eE][+-]?\d+$/.test(text) || /^-\d+(?:[.,]\d+)?$/.test(text) || /[\u0000-\u001f\u007f]/.test(text)) throw new Error(INVALID_IDENTIFIER);
-  return text;
+  const text2 = primitive.trim().replace(/\s+/g, " ");
+  if (text2.length > 150) throw new Error("Limite de 150 caracteres excedido.");
+  if (/^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)[eE][+-]?\d+$/.test(text2) || /^-\d+(?:[.,]\d+)?$/.test(text2) || /[\u0000-\u001f\u007f]/.test(text2)) throw new Error(INVALID_IDENTIFIER);
+  return text2;
 }
 function isReceivableIdentifierHeader(value) {
   return headerMap2.get(normalize(scalar(value))) === "document";
 }
 function readReceivableIdentifierCell(value, numFmt) {
   if (value instanceof Date) throw new Error(UNSUPPORTED_IDENTIFIER_FORMAT);
-  const text = parseIdentifier(value);
-  if (typeof value !== "number") return text;
+  const text2 = parseIdentifier(value);
+  if (typeof value !== "number") return text2;
   const format = String(numFmt ?? "").trim();
-  if (!format || format.toUpperCase() === "GENERAL" || format === "@") return text;
+  if (!format || format.toUpperCase() === "GENERAL" || format === "@") return text2;
   if (!/^0+$/.test(format)) throw new Error(UNSUPPORTED_IDENTIFIER_FORMAT);
   if (format.length > 150) throw new Error("Limite de 150 caracteres excedido.");
-  return text.padStart(format.length, "0");
+  return text2.padStart(format.length, "0");
+}
+function readReceivableIdentifierCellResult(value, numFmt, line, column) {
+  try {
+    return { value: readReceivableIdentifierCell(value, numFmt), error: null };
+  } catch (error) {
+    let letters = "", index = column;
+    while (index > 0) {
+      index--;
+      letters = String.fromCharCode(65 + index % 26) + letters;
+      index = Math.floor(index / 26);
+    }
+    const address = `${letters}${line}`;
+    return { value, error: {
+      line,
+      column: `${COLUMN_LABELS.document} (${address})`,
+      problem: error instanceof Error ? error.message : INVALID_IDENTIFIER,
+      correction: `Confira a c\xE9lula ${address} e o alinhamento da linha no arquivo original. Mantenha a nota, o valor e as datas nas respectivas colunas.`
+    } };
+  }
+}
+function mergeReceivableImportProblems(parserErrors, cellErrors = []) {
+  const seen = /* @__PURE__ */ new Set(), errors = [];
+  for (const error of [...cellErrors, ...parserErrors]) {
+    const column = error.column.replace(/ \([A-Z]+\d+\)$/, ""), key = JSON.stringify([error.line, column]);
+    if (!seen.has(key)) {
+      seen.add(key);
+      errors.push(error);
+    }
+  }
+  return errors.sort((first, second) => first.line - second.line || first.column.localeCompare(second.column, "pt-BR")).slice(0, 100);
 }
 function receivableCustomerKey(row) {
   return row.client_document ? `cnpj:${row.client_document}` : `name:${row.client_name.trim().replace(/\s+/g, " ").toUpperCase()}`;
@@ -346,10 +376,40 @@ function validateReceivablePaidRows(matrix, options = {}) {
   return validateReceivableMatrix(matrix, options, true);
 }
 
+// supabase/functions/receivables-import/open-report-contract.mjs
+var UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+var uuid = (value) => typeof value === "string" && UUID.test(value);
+var count = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 5e3;
+var text = (value, maximum) => typeof value === "string" && value.length > 0 && value.length <= maximum && !/[\u0000-\u001f\u007f]/.test(value);
+function validOpenReportReference(value) {
+  try {
+    return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && parseCivilDate(value) === value;
+  } catch {
+    return false;
+  }
+}
+function validCounters(value, fullReport) {
+  return ["retired_count", "retired_worked_count", "retired_unworked_count", "reappeared_count"].every((key) => count(value[key])) && value.retired_count === value.retired_worked_count + value.retired_unworked_count && (fullReport || value.retired_count === 0);
+}
+function validOpenReportPreview(preview, { fullReport, referenceDate, rowCount }) {
+  if (preview?.format_version !== "receivables-open-report-v1" || preview.full_report !== fullReport || preview.reference_date !== referenceDate || !validOpenReportReference(preview.reference_date) || !validCounters(preview, fullReport) || preview.reappeared_count > rowCount || !(preview.previous_import_id === null || uuid(preview.previous_import_id)) || !Array.isArray(preview.retirement_items) || preview.retirement_items.length !== preview.retired_count) return false;
+  const present = new Set(preview.rows.map((row) => row.title_id).filter(Boolean)), seen = /* @__PURE__ */ new Set();
+  let worked = 0;
+  for (const item of preview.retirement_items) {
+    if (!uuid(item?.title_id) || seen.has(item.title_id) || present.has(item.title_id) || !text(item.client_name, 1500) || !text(item.document, 150) || !text(item.branch, 150) || !validOpenReportReference(item.due_date) || !Number.isSafeInteger(item.amount_cents) || item.amount_cents < 0 || !(item.collector_id === null || uuid(item.collector_id)) || typeof item.worked !== "boolean") return false;
+    seen.add(item.title_id);
+    if (item.worked) worked++;
+  }
+  return worked === preview.retired_worked_count;
+}
+function validOpenReportCommit(result, { fullReport, referenceDate, requestId, rowCount }) {
+  return result?.format_version === "receivables-open-report-v1" && result.full_report === fullReport && result.reference_date === referenceDate && validOpenReportReference(result.reference_date) && result.row_count === rowCount && uuid(result.import_id) && uuid(result.request_id) && result.request_id.toLowerCase() === requestId.toLowerCase() && typeof result.idempotent === "boolean" && validCounters(result, fullReport) && result.reappeared_count <= rowCount;
+}
+
 // supabase/functions/receivables-import/handler.mjs
 var MAX_BODY_BYTES = 3 * 1024 * 1024;
 var MAX_BASE64_LENGTH = 4 * Math.ceil(MAX_FILE_BYTES / 3);
-var UUID = /^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/;
+var UUID2 = /^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/;
 var SERVICE_FAILURE = "N\xE3o foi poss\xEDvel confirmar a opera\xE7\xE3o. Atualize o hist\xF3rico antes de tentar novamente.";
 var RECEIVABLES_GATEWAY_SCHEMA = "receivables-import/2026-10-19.1";
 var DIAGNOSTIC_CODES = /* @__PURE__ */ new Set([
@@ -365,6 +425,7 @@ var DIAGNOSTIC_CODES = /* @__PURE__ */ new Set([
   "P0023",
   "P0024",
   "P0030",
+  "P0047",
   "PGRST202",
   "PGRST301",
   "PGRST303",
@@ -488,7 +549,7 @@ function verifiedSessionId(token, userId) {
   const part = token.split(".")[1];
   if (!part) throw new Error("invalid_session");
   const payload = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/")));
-  if (payload.sub !== userId || typeof payload.session_id !== "string" || !UUID.test(payload.session_id)) throw new Error("invalid_session");
+  if (payload.sub !== userId || typeof payload.session_id !== "string" || !UUID2.test(payload.session_id)) throw new Error("invalid_session");
   return payload.session_id;
 }
 function problemsFor(errors) {
@@ -512,7 +573,7 @@ var validRevision = (value) => typeof value === "string" && value.length > 0 && 
 var sourceFields = ["document", "due_date", "amount_cents"];
 var validCustomerKey = (value) => typeof value === "string" && value.length <= 1505 && !/[\u0000-\u001f\u007f-\u009f]/.test(value) && (/^cnpj:\d{14}$/.test(value) || value.startsWith("name:") && value.length > 5 && value.slice(5) === value.slice(5).trim());
 function validCollectorMappings(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length <= MAX_ROWS && Object.entries(value).every(([key, collector]) => validCustomerKey(key) && typeof collector === "string" && UUID.test(collector)) && new TextEncoder().encode(JSON.stringify(value)).byteLength <= 1024 * 1024;
+  return value !== null && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length <= MAX_ROWS && Object.entries(value).every(([key, collector]) => validCustomerKey(key) && typeof collector === "string" && UUID2.test(collector)) && new TextEncoder().encode(JSON.stringify(value)).byteLength <= 1024 * 1024;
 }
 function validCollectorPreview(preview, rows) {
   if (preview.collector_assignment_version !== "030" || !Array.isArray(preview.customer_collector_assignments) || preview.customer_collector_assignments.length > rows.length || !Number.isSafeInteger(preview.missing_collector_count) || preview.missing_collector_count < 0 || preview.missing_collector_count > preview.customer_collector_assignments.length) return false;
@@ -530,7 +591,7 @@ function validCollectorPreview(preview, rows) {
     if (!assignment || typeof assignment !== "object" || Array.isArray(assignment) || !validCustomerKey(assignment.customer_key) || seen.has(assignment.customer_key)) return false;
     const group = groups.get(assignment.customer_key);
     if (!group) return false;
-    if (typeof assignment.client_name !== "string" || !group.some((row) => row.client_name === assignment.client_name) || assignment.client_document !== group[0].client_document || assignment.row_count !== group.length || !(assignment.collector_id === null || typeof assignment.collector_id === "string" && UUID.test(assignment.collector_id)) || !(assignment.collector_name === null || typeof assignment.collector_name === "string" && !!assignment.collector_name.trim() && assignment.collector_name.length <= 1500 && !/[\u0000-\u001f\u007f-\u009f]/.test(assignment.collector_name)) || assignment.collector_id === null !== (assignment.collector_name === null) || typeof assignment.requires_selection !== "boolean" || typeof assignment.locked !== "boolean") return false;
+    if (typeof assignment.client_name !== "string" || !group.some((row) => row.client_name === assignment.client_name) || assignment.client_document !== group[0].client_document || assignment.row_count !== group.length || !(assignment.collector_id === null || typeof assignment.collector_id === "string" && UUID2.test(assignment.collector_id)) || !(assignment.collector_name === null || typeof assignment.collector_name === "string" && !!assignment.collector_name.trim() && assignment.collector_name.length <= 1500 && !/[\u0000-\u001f\u007f-\u009f]/.test(assignment.collector_name)) || assignment.collector_id === null !== (assignment.collector_name === null) || typeof assignment.requires_selection !== "boolean" || typeof assignment.locked !== "boolean") return false;
     seen.add(assignment.customer_key);
     if (assignment.requires_selection && assignment.collector_id === null) missing++;
   }
@@ -629,6 +690,8 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       if (code === "P0023") return respond(409, { code, error: "Confira os v\xEDnculos e as poss\xEDveis altera\xE7\xF5es de identifica\xE7\xE3o dos t\xEDtulos antes de confirmar. Nenhum dado foi alterado." });
       if (code === "P0024") return respond(409, { code, error: "H\xE1 recebimentos que precisam de revis\xE3o. Confira os v\xEDnculos, valores e hist\xF3rico antes de confirmar. Nenhum dado foi alterado." });
       if (code === "P0030") return respond(409, { code, error: "Confira os v\xEDnculos dos t\xEDtulos e selecione a respons\xE1vel de cada cliente sem carteira antes de concluir. Nenhum dado foi alterado." });
+      if (code === "P0047") return respond(409, { code, error: "Confira o tipo de relat\xF3rio e a confer\xEAncia das aus\xEAncias antes de concluir a atualiza\xE7\xE3o. Nenhum dado foi alterado." });
+      if (code === "54000") return respond(400, { code: "P0047", error: "A confer\xEAncia inclui mais de 5.000 t\xEDtulos ausentes. Confira o relat\xF3rio completo da origem antes de tentar novamente." });
       if (code === "23514" && result.payload?.message === IDENTITY_CHANGE) return respond(400, { code, error: IDENTITY_CHANGE });
       if (code === "22023" || code === "23514") return respond(400, { code, error: "A importa\xE7\xE3o foi recusada. Confira as linhas, a origem completa e os v\xEDnculos de cobradora dos clientes antes de concluir." });
       if (result.status === 401) return respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." });
@@ -640,7 +703,7 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       stage = "authenticate";
       const auth = await call("/auth/v1/user", { method: "GET" });
       if (!auth.ok) return auth.status === 401 || auth.status === 403 ? respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." }) : upstreamFailure(auth);
-      if (typeof auth.payload?.id !== "string" || !UUID.test(auth.payload.id)) throw new Error("invalid_identity");
+      if (typeof auth.payload?.id !== "string" || !UUID2.test(auth.payload.id)) throw new Error("invalid_identity");
       let sessionId;
       try {
         sessionId = verifiedSessionId(token, auth.payload.id);
@@ -660,14 +723,17 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       } catch {
         return respond(400, { error: INVALID_REQUEST });
       }
-      if (Object.keys(body).some((key) => !["action", "file_name", "file_base64", "complete", "previous_import_id", "mode", "title_mappings", "previous_financial_revision", "confirm_corrections", "collector_mappings"].includes(key)) || !["preview", "commit"].includes(body.action) || Object.hasOwn(body, "mode") && !["open", "received"].includes(body.mode) || !body.mode && (Object.hasOwn(body, "title_mappings") || Object.hasOwn(body, "previous_financial_revision") || Object.hasOwn(body, "confirm_corrections")) || body.mode !== "received" && Object.hasOwn(body, "confirm_corrections") || Object.hasOwn(body, "collector_mappings") && (body.mode !== "open" || !validCollectorMappings(body.collector_mappings)) || typeof body.file_name !== "string" || body.file_name.length < 1 || body.file_name.length > 250 || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name)) return respond(400, { error: INVALID_REQUEST });
-      if (Object.hasOwn(body, "title_mappings") && (!body.title_mappings || typeof body.title_mappings !== "object" || Array.isArray(body.title_mappings) || Object.keys(body.title_mappings).length > MAX_ROWS || Object.entries(body.title_mappings).some(([key, value]) => !/^[1-9]\d{0,3}$/.test(key) || Number(key) > MAX_ROWS || typeof value !== "string" || !(value === "NEW" || UUID.test(value)))) || Object.hasOwn(body, "previous_financial_revision") && !validRevision(body.previous_financial_revision) || Object.hasOwn(body, "confirm_corrections") && typeof body.confirm_corrections !== "boolean") return respond(400, { error: INVALID_REQUEST });
+      if (Object.keys(body).some((key) => !["action", "file_name", "file_base64", "complete", "previous_import_id", "mode", "title_mappings", "previous_financial_revision", "confirm_corrections", "collector_mappings", "full_report", "reference_date", "request_id"].includes(key)) || !["preview", "commit"].includes(body.action) || Object.hasOwn(body, "mode") && !["open", "received"].includes(body.mode) || !body.mode && (Object.hasOwn(body, "title_mappings") || Object.hasOwn(body, "previous_financial_revision") || Object.hasOwn(body, "confirm_corrections")) || body.mode !== "received" && Object.hasOwn(body, "confirm_corrections") || Object.hasOwn(body, "collector_mappings") && (body.mode !== "open" || !validCollectorMappings(body.collector_mappings)) || typeof body.file_name !== "string" || body.file_name.length < 1 || body.file_name.length > 250 || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name)) return respond(400, { error: INVALID_REQUEST });
+      const openReport = ["full_report", "reference_date", "request_id"].some((key) => Object.hasOwn(body, key));
+      if (openReport && (body.mode !== "open" || typeof body.full_report !== "boolean" || !validOpenReportReference(body.reference_date) || Object.hasOwn(body, "request_id") && (typeof body.request_id !== "string" || !UUID2.test(body.request_id)) || body.action === "commit" && (typeof body.request_id !== "string" || !UUID2.test(body.request_id)))) return respond(400, { error: INVALID_REQUEST });
+      if (openReport && !access.payload.permissions.some((permission) => permission?.resource === "importar_bases" && permission.action === "read")) return respond(403, { code: "42501", error: "Seu perfil n\xE3o tem permiss\xE3o para esta opera\xE7\xE3o." });
+      if (Object.hasOwn(body, "title_mappings") && (!body.title_mappings || typeof body.title_mappings !== "object" || Array.isArray(body.title_mappings) || Object.keys(body.title_mappings).length > MAX_ROWS || Object.entries(body.title_mappings).some(([key, value]) => !/^[1-9]\d{0,3}$/.test(key) || Number(key) > MAX_ROWS || typeof value !== "string" || !(value === "NEW" || UUID2.test(value)))) || Object.hasOwn(body, "previous_financial_revision") && !validRevision(body.previous_financial_revision) || Object.hasOwn(body, "confirm_corrections") && typeof body.confirm_corrections !== "boolean") return respond(400, { error: INVALID_REQUEST });
       if (body.mode && !["read", "write"].every((action) => access.payload.permissions.some((permission) => permission?.resource === "contas_receber" && permission.action === action))) {
         return respond(403, { code: "42501", error: "Seu perfil n\xE3o tem permiss\xE3o para esta opera\xE7\xE3o." });
       }
       if (/\.xls$/i.test(body.file_name)) return respond(400, { error: "O formato .xls antigo ainda n\xE3o \xE9 aceito. No Excel, salve uma c\xF3pia como .xlsx." });
       if (!/\.(xlsx|xlsm|csv)$/i.test(body.file_name)) return respond(400, { error: "Selecione um arquivo .xlsx, .xlsm ou .csv." });
-      if (body.action === "commit" && (body.complete !== true || body.mode && !validRevision(body.previous_financial_revision) || !(body.previous_import_id === null || typeof body.previous_import_id === "string" && UUID.test(body.previous_import_id)))) return respond(400, { error: INVALID_REQUEST });
+      if (body.action === "commit" && (body.complete !== true || body.mode && !validRevision(body.previous_financial_revision) || !(body.previous_import_id === null || typeof body.previous_import_id === "string" && UUID2.test(body.previous_import_id)))) return respond(400, { error: INVALID_REQUEST });
       let bytes;
       try {
         bytes = decodeFile(body.file_base64);
@@ -677,7 +743,7 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       stage = "parse";
       let parsed;
       try {
-        let matrix, excel1904 = false;
+        let matrix, excel1904 = false, cellErrors = [];
         if (/\.csv$/i.test(body.file_name)) matrix = parseCsv(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
         else {
           const buffer = bytes.buffer;
@@ -686,25 +752,28 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
           const loaded = await loadWorkbook(buffer);
           matrix = loaded.matrix;
           excel1904 = loaded.excel1904 === true;
+          if (Array.isArray(loaded.errors)) cellErrors = loaded.errors.slice(0, 100);
         }
         if (!Array.isArray(matrix) || matrix.length > MAX_ROWS + 1 || matrix.some((row) => !Array.isArray(row) || row.length > 100)) {
           throw new Error("Planilha excede 5.000 linhas ou 100 colunas.");
         }
         if (body.mode !== "received" && matrix[0]?.some(receiptColumn)) throw new Error("Este arquivo cont\xE9m colunas de quita\xE7\xE3o. Selecione o modo Recebimentos para importar datas e valores efetivamente recebidos.");
         parsed = body.mode === "received" ? validateReceivablePaidRows(matrix, { excel1904 }) : validateReceivableRows(matrix, { excel1904 });
+        const errors = mergeReceivableImportProblems(parsed.errors, cellErrors);
+        parsed = { rows: errors.length ? [] : parsed.rows, errors };
       } catch (error) {
         if (signal.aborted) throw error;
         return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: [{ line: 0, column: "Arquivo", problem: safeMessage(error instanceof Error ? error.message : ""), correction: CORRECTION }] });
       }
       if (parsed.errors.length) return respond(422, { error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: problemsFor(parsed.errors) });
-      const withCollectors = Object.hasOwn(body, "collector_mappings");
+      const withCollectors = openReport || Object.hasOwn(body, "collector_mappings");
       if (body.mode) {
         if (Object.keys(body.title_mappings ?? {}).some((key) => Number(key) > parsed.rows.length)) return respond(400, { error: INVALID_REQUEST });
         stage = "capabilities";
         const capabilities = await call("/rest/v1/rpc/receivables_import_capabilities", { data: {} });
-        const required = body.mode === "open" ? "open_sync" : "received_import";
-        if (!capabilities.ok && ["PGRST202", "42883"].includes(capabilities.payload?.code) || capabilities.ok && capabilities.payload?.[required] !== true) {
-          return respond(409, { code: body.mode === "open" ? "P0023" : "P0024", activation_required: true, error: `Ative a atualiza\xE7\xE3o de ${body.mode === "open" ? "t\xEDtulos em aberto" : "recebimentos"} no banco de dados antes de usar este modo. Nenhum dado foi alterado.` });
+        const required = openReport ? "open_report_sync" : body.mode === "open" ? "open_sync" : "received_import";
+        if (!capabilities.ok && ["PGRST202", "42883", "42P01"].includes(capabilities.payload?.code) || capabilities.ok && (capabilities.payload?.[required] !== true || openReport && capabilities.payload?.open_report_version !== "047")) {
+          return respond(409, { code: openReport ? "P0047" : body.mode === "open" ? "P0023" : "P0024", activation_required: true, error: `Ative a atualiza\xE7\xE3o de ${openReport ? "confer\xEAncia do relat\xF3rio completo" : body.mode === "open" ? "t\xEDtulos em aberto" : "recebimentos"} no banco de dados antes de usar este modo. Nenhum dado foi alterado.` });
         }
         if (!capabilities.ok) return upstreamFailure(capabilities);
       }
@@ -712,8 +781,9 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
       if (signal.aborted) throw new Error("request_timed_out");
       if (body.action === "preview") {
         stage = "preview";
-        const path2 = withCollectors ? "preview_receivables_open_import_with_collectors" : body.mode === "open" ? "preview_receivables_open_import" : body.mode === "received" ? "preview_receivables_received_import" : "preview_receivables_import";
-        const preview = await call(`/rest/v1/rpc/${path2}`, { data: { p_scope: "grupo-consolidado", p_rows: parsed.rows, ...body.mode ? { p_title_mappings: body.title_mappings ?? {} } : {}, ...withCollectors ? { p_collector_mappings: body.collector_mappings } : {} } });
+        const path2 = openReport ? "preview_receivables_open_report" : withCollectors ? "preview_receivables_open_import_with_collectors" : body.mode === "open" ? "preview_receivables_open_import" : body.mode === "received" ? "preview_receivables_received_import" : "preview_receivables_import";
+        const preview = await call(`/rest/v1/rpc/${path2}`, { data: { p_scope: "grupo-consolidado", p_rows: parsed.rows, ...body.mode ? { p_title_mappings: body.title_mappings ?? {} } : {}, ...withCollectors ? { p_collector_mappings: body.collector_mappings ?? {} } : {}, ...openReport ? { p_full_report: body.full_report, p_reference_date: body.reference_date } : {} } });
+        if (!preview.ok && openReport && ["PGRST202", "42883", "42P01"].includes(preview.payload?.code)) return respond(409, { code: "P0047", activation_required: true, error: "Ative a atualiza\xE7\xE3o da confer\xEAncia de relat\xF3rios completos antes de concluir. Nenhum dado foi alterado." });
         if (!preview.ok && withCollectors && ["PGRST202", "42883"].includes(preview.payload?.code)) return respond(409, { code: "P0030", activation_required: true, error: "Ative a atualiza\xE7\xE3o das respons\xE1veis na importa\xE7\xE3o de t\xEDtulos em aberto antes de concluir. Nenhum dado foi alterado." });
         if (!preview.ok) return upstreamFailure(preview);
         stage = "preview_validation";
@@ -722,12 +792,13 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
           const counters = body.mode === "open" ? ["new_count", "open_count", "changed_count", "pending_count", "validated_in_source_count", "conflict_count"] : ["new_count", "received_count", "matched_count", "correction_count", "historical_count", "conflict_count"];
           const outcomes = body.mode === "open" ? ["NEW", "UPDATE", "MATCHED", "AMBIGUOUS", "CONFLICT"] : ["NEW_RECEIPT", "MATCHED", "CORRECTION", "HISTORICAL", "AMBIGUOUS", "CONFLICT"];
           const checkedFields = body.mode === "received" ? [...sourceFields, "received_on", "received_amount_cents"] : sourceFields;
-          if (preview.payload.mode !== body.mode || !validRevision(preview.payload.financial_revision) || !counters.every((key) => Number.isSafeInteger(preview.payload[key]) && preview.payload[key] >= 0) || typeof preview.payload.can_commit !== "boolean" || !Array.isArray(preview.payload.errors) || !Array.isArray(preview.payload.rows) || preview.payload.rows.length !== parsed.rows.length || preview.payload.rows.some((row, index) => !row || typeof row !== "object" || Array.isArray(row) || row.line !== index + 1 || !outcomes.includes(row.outcome) || !(row.title_id === null || typeof row.title_id === "string" && UUID.test(row.title_id)) || checkedFields.some((key) => row[key] !== parsed.rows[index][key]))) throw new Error("invalid_preview");
+          if (preview.payload.mode !== body.mode || !validRevision(preview.payload.financial_revision) || !counters.every((key) => Number.isSafeInteger(preview.payload[key]) && preview.payload[key] >= 0) || typeof preview.payload.can_commit !== "boolean" || !Array.isArray(preview.payload.errors) || !Array.isArray(preview.payload.rows) || preview.payload.rows.length !== parsed.rows.length || preview.payload.rows.some((row, index) => !row || typeof row !== "object" || Array.isArray(row) || row.line !== index + 1 || !outcomes.includes(row.outcome) || !(row.title_id === null || typeof row.title_id === "string" && UUID2.test(row.title_id)) || checkedFields.some((key) => row[key] !== parsed.rows[index][key]))) throw new Error("invalid_preview");
         } else if (!Number.isSafeInteger(preview.payload.new_count) || !Number.isSafeInteger(preview.payload.open_count) || !Number.isSafeInteger(preview.payload.pending_count) || !Number.isSafeInteger(preview.payload.validated_in_source_count)) throw new Error("invalid_preview");
         if (withCollectors && !validCollectorPreview(preview.payload, parsed.rows)) throw new Error("invalid_collector_preview");
+        if (openReport && !validOpenReportPreview(preview.payload, { fullReport: body.full_report, referenceDate: body.reference_date, rowCount: parsed.rows.length })) throw new Error("invalid_open_report_preview");
         return respond(200, { rows: body.mode ? preview.payload.rows : parsed.rows, preview: preview.payload, file_sha256: hash });
       }
-      const path = withCollectors ? "commit_receivables_open_import_with_collectors_from_gateway" : body.mode === "open" ? "commit_receivables_open_import_from_gateway" : body.mode === "received" ? "commit_receivables_received_import_from_gateway" : "commit_receivables_import_from_gateway";
+      const path = openReport ? "commit_receivables_open_report_from_gateway" : withCollectors ? "commit_receivables_open_import_with_collectors_from_gateway" : body.mode === "open" ? "commit_receivables_open_import_from_gateway" : body.mode === "received" ? "commit_receivables_received_import_from_gateway" : "commit_receivables_import_from_gateway";
       stage = "commit";
       const committed = await call(`/rest/v1/rpc/${path}`, { service: true, data: {
         p_user_id: auth.payload.id,
@@ -740,13 +811,16 @@ function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetch, load
         p_previous_import_id: body.previous_import_id,
         ...body.mode ? { p_title_mappings: body.title_mappings ?? {}, p_previous_financial_revision: body.previous_financial_revision } : { p_complete: true },
         ...body.mode === "received" ? { p_confirm_corrections: body.confirm_corrections ?? false } : {},
-        ...withCollectors ? { p_collector_mappings: body.collector_mappings } : {}
+        ...withCollectors ? { p_collector_mappings: body.collector_mappings ?? {} } : {},
+        ...openReport ? { p_full_report: body.full_report, p_reference_date: body.reference_date, p_request_id: body.request_id } : {}
       } });
+      if (!committed.ok && openReport && ["PGRST202", "42883", "42P01"].includes(committed.payload?.code)) return respond(409, { code: "P0047", activation_required: true, error: "Ative a atualiza\xE7\xE3o da confer\xEAncia de relat\xF3rios completos antes de concluir. Nenhum dado foi alterado." });
       if (!committed.ok && withCollectors && ["PGRST202", "42883"].includes(committed.payload?.code)) return respond(409, { code: "P0030", activation_required: true, error: "Ative a atualiza\xE7\xE3o das respons\xE1veis na importa\xE7\xE3o de t\xEDtulos em aberto antes de concluir. Nenhum dado foi alterado." });
       if (!committed.ok) return upstreamFailure(committed);
       stage = "commit_validation";
-      if (!committed.payload || committed.payload.row_count !== parsed.rows.length || typeof committed.payload.import_id !== "string" || !UUID.test(committed.payload.import_id) || body.mode && committed.payload.mode !== body.mode) throw new Error("invalid_commit_response");
+      if (!committed.payload || committed.payload.row_count !== parsed.rows.length || typeof committed.payload.import_id !== "string" || !UUID2.test(committed.payload.import_id) || body.mode && committed.payload.mode !== body.mode) throw new Error("invalid_commit_response");
       if (withCollectors && (committed.payload.collector_assignment_version !== "030" || !["assigned_title_count", "assigned_customer_count"].every((key) => Number.isSafeInteger(committed.payload[key]) && committed.payload[key] >= 0) || committed.payload.assigned_customer_count > committed.payload.assigned_title_count)) throw new Error("invalid_collector_commit_response");
+      if (openReport && !validOpenReportCommit(committed.payload, { fullReport: body.full_report, referenceDate: body.reference_date, requestId: body.request_id, rowCount: parsed.rows.length })) throw new Error("invalid_open_report_commit_response");
       return respond(200, committed.payload);
     } catch (error) {
       if (signal.aborted || deadline.aborted) return respond(504, { code: "CR_REQUEST_TIMEOUT", error: "A opera\xE7\xE3o excedeu o tempo de resposta. Preserve o arquivo e confira o hist\xF3rico antes de tentar novamente." });
@@ -772,16 +846,17 @@ Deno.serve(createReceivablesGateway({
     sheet.getRow(1).eachCell((cell, column) => {
       if (isReceivableIdentifierHeader(cell.value)) identifierColumns.push(column);
     });
-    const matrix = [];
+    const matrix = [], errors = [];
     for (let index = 1; index <= sheet.rowCount; index++) {
       const source = sheet.getRow(index), values = source.values.slice(1);
       if (index > 1) for (const column of identifierColumns) {
-        const cell = source.getCell(column);
-        values[column - 1] = readReceivableIdentifierCell(cell.value, cell.numFmt);
+        const cell = source.getCell(column), result = readReceivableIdentifierCellResult(cell.value, cell.numFmt, index, column);
+        values[column - 1] = result.value;
+        if (result.error && errors.length < 100) errors.push(result.error);
       }
       matrix.push(values);
     }
-    return { matrix, excel1904: Boolean(workbook.properties.date1904) };
+    return { matrix, excel1904: Boolean(workbook.properties.date1904), errors };
   },
   log: (event) => console.warn(JSON.stringify(event))
 }));

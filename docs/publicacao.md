@@ -1,4 +1,6 @@
-# Publicação e ativação — 0.17.1
+# Publicação e ativação — 0.18.0
+
+A **0.18.0** acrescenta a sincronização do relatório completo de Contas a Receber e as pendências de Comissões, sem presumir recebimentos por ausência. Ative o SQL 047 e atualize a Edge Function `receivables-import`, seguindo o [guia](recebiveis-relatorio-completo.md). A publicação do site não executa essas etapas no Supabase.
 
 A **0.17.1** acrescenta acesso individual às nove áreas de Importar Bases para uma conta do perfil Contas a Receber. Execute [ativar-acesso-importacoes-usuario.sql](../supabase/dashboard/ativar-acesso-importacoes-usuario.sql), configure o login pelo comando privado descrito no [guia](acesso-importacoes-usuario.md), confira a versão e saia/entre na conta beneficiada. Não há atualização de Edge Function. A concessão inclui as permissões operacionais necessárias, preserva o perfil e não concede administração. O SQL de instalação não habilita usuários por padrão.
 

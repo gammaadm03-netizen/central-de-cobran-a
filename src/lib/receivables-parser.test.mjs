@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
-import { parseCsv, validateWorkbookExpandedSize, validateReceivableRows, validateReceivablePaidRows, receivableCustomerKey, isReceivableIdentifierHeader, readReceivableIdentifierCell } from './receivables-parser.mjs';
+import { parseCsv, validateWorkbookExpandedSize, validateReceivableRows, validateReceivablePaidRows, receivableCustomerKey, isReceivableIdentifierHeader, readReceivableIdentifierCell, readReceivableIdentifierCellResult, mergeReceivableImportProblems } from './receivables-parser.mjs';
 import { parseCivilDate } from './payables-parser.mjs';
 const header = ['NF','Órgão','Filial','Vencimento','Valor','Emissão','CNPJ'];
 const row = ['00014','Cliente sintético','3','16/10/2026','1.234,56','01/10/2026','12.345.678/0001-90'];
@@ -153,6 +153,32 @@ test('identificador de NF conserva zeros textuais e formatos numéricos simples,
   for (const value of [1.5, -1, Number.MAX_SAFE_INTEGER + 1, Infinity, '1e3', true]) assert.throws(() => readReceivableIdentifierCell(value));
   for (const format of ['0.00', '#,##0', '0E+00', 'dd/mm/yyyy', '000000;[Red]-000000']) assert.throws(() => readReceivableIdentifierCell(123, format), /Formato do identificador não suportado/);
   assert.throws(() => readReceivableIdentifierCell(new Date('2026-10-17T00:00:00Z'), 'dd/mm/yyyy'), /Formato do identificador não suportado/);
+});
+
+test('erros do adaptador preservam a célula original e apontam a posição física sem converter valor monetário em NF', () => {
+  const invalid = readReceivableIdentifierCellResult(123.45, 'General', 26, 2);
+  assert.equal(invalid.value, 123.45); assert.equal(invalid.error.line, 26);
+  assert.equal(invalid.error.column, 'Documento / NF (B26)');
+  assert.match(invalid.error.problem, /Identificador de documento inválido/);
+  assert.match(invalid.error.correction, /célula B26/);
+  const masked = readReceivableIdentifierCellResult(123, '000000', 2, 2);
+  assert.equal(masked.value, '000123'); assert.equal(masked.error, null);
+  const formatted = readReceivableIdentifierCellResult(123, '0.00', 61, 28);
+  assert.equal(formatted.value, 123); assert.equal(formatted.error.column, 'Documento / NF (AB61)');
+  assert.match(formatted.error.problem, /Formato do identificador não suportado/);
+});
+
+test('problemas de formato e de linha incompleta são reunidos sem duplicar o mesmo campo e sem omitir a linha órfã', () => {
+  const source = [...erpRow]; source[1] = 123.45;
+  const parsed = validateReceivableRows([erpHeader, [erpRow[0]], source]);
+  const adapter = readReceivableIdentifierCellResult(123.45, 'General', 3, 2);
+  const errors = mergeReceivableImportProblems(parsed.errors, [adapter.error]);
+  assert.equal(errors.filter(error => error.line === 3 && error.column.startsWith('Documento / NF')).length, 1);
+  assert.equal(errors.find(error => error.line === 3 && error.column.startsWith('Documento / NF')).column, 'Documento / NF (B3)');
+  assert(errors.some(error => error.line === 2 && error.column === 'Documento / NF'));
+  assert.equal(parsed.rows.length, 0); assert.equal(errors[0].line, 2);
+  const many = Array.from({ length: 110 }, (_, index) => ({ line: index + 2, column: 'Documento / NF', problem: 'Campo obrigatório vazio.', correction: 'Confira a linha.' }));
+  assert.equal(mergeReceivableImportProblems(many).length, 100);
 });
 
 test('XLSX real de recebimentos preserva NF formatada, datas com horas e valores nominal/recebido independentes', async () => {

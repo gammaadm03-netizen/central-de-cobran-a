@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
-import { MAX_FILE_BYTES, MAX_ROWS, parseCsv, validateWorkbookExpandedSize, validateReceivableRows, validateReceivablePaidRows, isReceivableIdentifierHeader, readReceivableIdentifierCell } from '../lib/receivables-parser.mjs';
+import { MAX_FILE_BYTES, MAX_ROWS, parseCsv, validateWorkbookExpandedSize, validateReceivableRows, validateReceivablePaidRows, isReceivableIdentifierHeader, readReceivableIdentifierCellResult, mergeReceivableImportProblems } from '../lib/receivables-parser.mjs';
+import type { ImportProblem } from '../lib/payables';
 
 self.onmessage = async (event: MessageEvent<{ buffer: ArrayBuffer; name: string; mode?: 'open' | 'received' }>) => {
   try {
@@ -9,6 +10,7 @@ self.onmessage = async (event: MessageEvent<{ buffer: ArrayBuffer; name: string;
     const extension = name.toLowerCase().split('.').pop();
     let matrix: unknown[][];
     let excel1904 = false;
+    const cellErrors: ImportProblem[] = [];
     if (extension === 'csv') {
       let text: string;
       try { text = new TextDecoder('utf-8', { fatal: true }).decode(buffer); }
@@ -28,14 +30,20 @@ self.onmessage = async (event: MessageEvent<{ buffer: ArrayBuffer; name: string;
       matrix = [];
       for (let index = 1; index <= sheet.rowCount; index++) {
         const source = sheet.getRow(index), values = (source.values as unknown[]).slice(1);
-        if (index > 1) for (const column of identifierColumns) { const cell = source.getCell(column); values[column - 1] = readReceivableIdentifierCell(cell.value, cell.numFmt); }
+        if (index > 1) for (const column of identifierColumns) {
+          const cell = source.getCell(column), result = readReceivableIdentifierCellResult(cell.value, cell.numFmt, index, column);
+          values[column - 1] = result.value;
+          if (result.error && cellErrors.length < 100) cellErrors.push(result.error);
+        }
         matrix.push(values);
       }
       excel1904 = Boolean(workbook.properties.date1904);
     } else if (extension === 'xls') {
       throw new Error('O formato .xls antigo ainda não é aceito. No Excel, salve uma cópia como .xlsx e selecione essa cópia.');
     } else throw new Error('Selecione um arquivo .xlsx, .xlsm ou .csv.');
-    self.postMessage(mode === 'received' ? validateReceivablePaidRows(matrix, { excel1904 }) : validateReceivableRows(matrix, { excel1904 }));
+    const parsed = mode === 'received' ? validateReceivablePaidRows(matrix, { excel1904 }) : validateReceivableRows(matrix, { excel1904 });
+    const errors = mergeReceivableImportProblems(parsed.errors, cellErrors);
+    self.postMessage({ rows: errors.length ? [] : parsed.rows, errors });
   } catch (error) {
     self.postMessage({ rows: [], errors: [{ line: 0, column: 'Arquivo', problem: error instanceof Error ? error.message : 'Não foi possível analisar o arquivo.', correction: 'Confira o formato, salve uma cópia com valores e tente novamente.' }] });
   }

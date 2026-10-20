@@ -1,6 +1,6 @@
 import ExcelJS from 'npm:exceljs@4.4.0';
 import { createReceivablesGateway } from './handler.mjs';
-import { isReceivableIdentifierHeader, readReceivableIdentifierCell } from '../../../src/lib/receivables-parser.mjs';
+import { isReceivableIdentifierHeader, readReceivableIdentifierCellResult } from '../../../src/lib/receivables-parser.mjs';
 
 Deno.serve(createReceivablesGateway({
   env: (name: string) => Deno.env.get(name),
@@ -14,13 +14,17 @@ Deno.serve(createReceivablesGateway({
     if (sheet.rowCount > 5001 || sheet.columnCount > 100) throw new Error('Planilha excede 5.000 linhas ou 100 colunas.');
     const identifierColumns: number[] = [];
     sheet.getRow(1).eachCell((cell, column) => { if (isReceivableIdentifierHeader(cell.value)) identifierColumns.push(column); });
-    const matrix: unknown[][] = [];
+    const matrix: unknown[][] = [], errors: { line: number; column: string; problem: string; correction: string }[] = [];
     for (let index = 1; index <= sheet.rowCount; index++) {
       const source = sheet.getRow(index), values = (source.values as unknown[]).slice(1);
-      if (index > 1) for (const column of identifierColumns) { const cell = source.getCell(column); values[column - 1] = readReceivableIdentifierCell(cell.value, cell.numFmt); }
+      if (index > 1) for (const column of identifierColumns) {
+        const cell = source.getCell(column), result = readReceivableIdentifierCellResult(cell.value, cell.numFmt, index, column);
+        values[column - 1] = result.value;
+        if (result.error && errors.length < 100) errors.push(result.error);
+      }
       matrix.push(values);
     }
-    return { matrix, excel1904: Boolean(workbook.properties.date1904) };
+    return { matrix, excel1904: Boolean(workbook.properties.date1904), errors };
   },
   log: (event: { event: string; stage: string; code: string; elapsed_ms: number; request_id: string }) => console.warn(JSON.stringify(event)),
 }));

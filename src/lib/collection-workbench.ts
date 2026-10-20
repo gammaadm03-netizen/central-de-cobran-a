@@ -5,18 +5,18 @@ export const COLLECTION_STATUSES = ['NOVO TÍTULO - COBRAR', 'SEM SUCESSO', 'AGU
 export type CollectionStatus = typeof COLLECTION_STATUSES[number];
 export const COLLECTION_BANDS = [['1_30', '1–30 dias'], ['31_60', '31–60 dias'], ['61_90', '61–90 dias'], ['91_180', '91–180 dias'], ['181_365', '181–365 dias'], ['ACIMA_365', 'Acima de 365 dias']] as const;
 export const COLLECTION_SORTS = [['delay_desc', 'Maior atraso'], ['amount_desc', 'Maior valor'], ['amount_asc', 'Menor valor'], ['delay_asc', 'Menor atraso'], ['client_asc', 'Cliente A–Z'], ['next_date_asc', 'Próximo retorno']] as const;
-export const FINANCIAL_STATUSES: Record<string, string> = { ACTIVE: 'Vencidos em aberto', NEW: 'Novos', OPEN: 'Em aberto', PENDING_VALIDATION: 'Pagamento aguardando validação', NOT_LOCATED: 'Pagamento não localizado', VALIDATED: 'Quitados — histórico' };
+export const FINANCIAL_STATUSES: Record<string, string> = { ACTIVE: 'Vencidos em aberto', NEW: 'Novos', OPEN: 'Em aberto', PENDING_VALIDATION: 'Pagamento aguardando validação', NOT_LOCATED: 'Pagamento não localizado', VALIDATED: 'Quitados — histórico', RETIRED_FROM_REPORT: 'Ausentes do relatório — histórico' };
 export interface CollectionFilters { search: string; collector: string; band: string; sort: string; status: string; financialStatus: string; dueStart: string; dueEnd: string; nextAction: string; queue: 'active' | 'returns' | 'history' | 'all' }
 export const INITIAL_COLLECTION_FILTERS: CollectionFilters = { search: '', collector: '', band: '', sort: 'delay_desc', status: '', financialStatus: 'ACTIVE', dueStart: '', dueEnd: '', nextAction: '', queue: 'active' };
 export interface CollectionWorkflow { version: '029'; normal_pause: true; finish_requires_started: true; pending_read_only: true; returns_priority: true; started?: boolean; can_finish?: boolean; recovery_allowed?: boolean }
 export interface CollectionPriority { collector_id: string | null; due_count: number; total_cents: number; next_title_id: string | null; next_due_date: string | null }
-export type CollectionStartBlock = 'RETURN_PRIORITY' | 'ALREADY_RUNNING' | 'UNASSIGNED' | 'PENDING_VALIDATION' | 'SETTLED' | 'READ_ONLY';
+export type CollectionStartBlock = 'RETURN_PRIORITY' | 'ALREADY_RUNNING' | 'UNASSIGNED' | 'PENDING_VALIDATION' | 'SETTLED' | 'READ_ONLY' | 'REPORT_RETIRED';
 export interface CollectionTimer { title_id: string; running: boolean; session_id: string | null; started_at: string | null; elapsed_seconds: number; total_seconds: number; actor_total_seconds: number; server_now: string; recovery_allowed?: boolean }
 export interface CollectionRow {
   id: string; customer_key: string; document: string; client_name: string; client_document: string | null; branch: string; due_date: string; amount_cents: number;
   collector_id: string | null; collector_name: string | null; status: string; validation_status: string; payment_source: string | null; payment_reported_date: string | null;
   revision: number; operational_status: CollectionStatus; case_revision: number; observation: string | null; next_action_text: string | null; next_date: string | null;
-  return_due?: boolean; return_due_date?: string | null; can_start?: boolean; start_block_reason?: CollectionStartBlock | null;
+  retired_from_report?: boolean; return_due?: boolean; return_due_date?: string | null; can_start?: boolean; start_block_reason?: CollectionStartBlock | null;
   delay_days: number; total_work_seconds: number; operational_label?: string; legacy_worked?: boolean; current_timer: { session_id: string | null; started_at: string | null; running: boolean; elapsed_seconds: number };
 }
 export interface CollectionWorkbench { as_of_date: string; server_now: string; count: number; total_cents: number; snapshot_revision: string; rows: CollectionRow[]; active_timer: CollectionTimer | null; workflow?: CollectionWorkflow; priority?: CollectionPriority }
@@ -24,7 +24,8 @@ export interface CollectionCase { status: CollectionStatus; observation: string 
 export interface CollectionHistory { id: string; action: string; observation: string | null; created_at: string; contact_date?: string | null; next_action?: string | null; next_date?: string | null; payment_date?: string | null; return_note?: string | null }
 export interface CollectionWorkSession { id: string; [key: string]: unknown }
 export interface CollectionCaseHistory { id: string; status: CollectionStatus; observation: string | null; next_action: string | null; next_date: string | null; finalized: boolean; created_at: string }
-export interface CollectionDetail { title: CollectionRow; case: CollectionCase; timer: CollectionTimer; history: CollectionHistory[]; case_history?: CollectionCaseHistory[]; work_sessions: CollectionWorkSession[]; workflow?: CollectionWorkflow; priority?: CollectionPriority }
+export interface CollectionReportHistory { id: string; action: 'RETIRED_WORKED' | 'RETIRED_UNWORKED' | 'REAPPEARED'; worked: boolean; reference_date: string; created_at: string }
+export interface CollectionDetail { title: CollectionRow; case: CollectionCase; timer: CollectionTimer; history: CollectionHistory[]; report_history?: CollectionReportHistory[]; case_history?: CollectionCaseHistory[]; work_sessions: CollectionWorkSession[]; workflow?: CollectionWorkflow; priority?: CollectionPriority }
 export interface CollectionDraft { status: CollectionStatus; observation: string; nextAction: string; nextDate: string; paymentDate: string }
 export interface CollectionSaveResult { title_id: string; revision: number; case_revision: number; event_id: string | null; finished: boolean; timer: CollectionTimer }
 export interface CollectionAgent { id: string; display_name: string; enabled: boolean }
@@ -65,8 +66,8 @@ function validPriority(value: CollectionPriority | undefined, day: string) {
 function validWorkflowRow(row: CollectionRow, day: string) {
   return typeof row.return_due === 'boolean' && (row.return_due_date === null || collectionDate(row.return_due_date))
     && (!row.return_due || !!row.return_due_date && row.return_due_date <= day) && typeof row.can_start === 'boolean'
-    && (row.start_block_reason === null || ['RETURN_PRIORITY', 'ALREADY_RUNNING', 'UNASSIGNED', 'PENDING_VALIDATION', 'SETTLED', 'READ_ONLY'].includes(row.start_block_reason ?? ''))
-    && (!row.can_start || row.start_block_reason === null);
+    && (row.start_block_reason === null || ['RETURN_PRIORITY', 'ALREADY_RUNNING', 'UNASSIGNED', 'PENDING_VALIDATION', 'SETTLED', 'READ_ONLY', 'REPORT_RETIRED'].includes(row.start_block_reason ?? ''))
+    && (!row.can_start || row.start_block_reason === null) && (!row.retired_from_report || !row.can_start && ['REPORT_RETIRED', 'READ_ONLY'].includes(row.start_block_reason ?? ''));
 }
 export function collectionStartReason(reason: CollectionStartBlock | null | undefined) {
   return reason === 'RETURN_PRIORITY' ? 'Atenda primeiro os retornos devidos desta carteira, com data até hoje.'
@@ -74,6 +75,7 @@ export function collectionStartReason(reason: CollectionStartBlock | null | unde
     : reason === 'UNASSIGNED' ? 'Este título está sem responsável definida. Acesse Importar Bases → Contas a Receber para definir as responsáveis na importação.'
     : reason === 'PENDING_VALIDATION' ? 'Pagamento informado aguarda validação de Contas a Receber. Este título está em leitura.'
     : reason === 'SETTLED' ? 'Recebimento já validado. O título está disponível somente no histórico.'
+    : reason === 'REPORT_RETIRED' ? 'Título ausente do relatório completo, disponível somente no histórico. O recebimento depende do relatório de quitados.'
     : reason === 'READ_ONLY' ? 'Seu perfil permite somente leitura; não pode iniciar ou alterar este atendimento.' : '';
 }
 export function assertCollectionWorkbench(value: unknown, isCollector: boolean, collectorId: string | null, filters: CollectionFilters): asserts value is CollectionWorkbench {
@@ -82,7 +84,7 @@ export function assertCollectionWorkbench(value: unknown, isCollector: boolean, 
   if (!result || !collectionDate(result.as_of_date) || !instant(result.server_now) || !integer(result.count) || !integer(result.total_cents) || typeof result.snapshot_revision !== 'string' || !result.snapshot_revision || !Array.isArray(result.rows) || result.rows.length > 500 || result.rows.length > result.count
     || result.active_timer !== null && (!validCollectionTimer(result.active_timer) || !result.active_timer.running)
     || ready && (!validPriority(result.priority, result.as_of_date) || result.rows.some(row => !validWorkflowRow(row, result.as_of_date)) || result.active_timer !== null && typeof result.active_timer.recovery_allowed !== 'boolean')
-    || result.rows.some(row => !validRow(row, result.as_of_date) || isCollector && row.collector_id !== collectorId || (filters.queue === 'active' || filters.queue === 'returns') && (row.status === 'VALIDATED' || ready && row.status === 'PENDING_VALIDATION') || ready && filters.queue === 'returns' && row.return_due !== true) || new Set(result.rows.map(row => row.id)).size !== result.rows.length
+    || result.rows.some(row => !validRow(row, result.as_of_date) || isCollector && row.collector_id !== collectorId || (filters.queue === 'active' || filters.queue === 'returns') && (row.retired_from_report === true || row.status === 'VALIDATED' || ready && row.status === 'PENDING_VALIDATION') || ready && filters.queue === 'returns' && row.return_due !== true) || new Set(result.rows.map(row => row.id)).size !== result.rows.length
     || result.rows.reduce((sum, row) => sum + BigInt(row.amount_cents), 0n) > BigInt(result.total_cents) || result.count === 0 && result.total_cents !== 0) throw new Error('invalid_workbench');
 }
 export function assertCollectionDetail(value: unknown, isCollector: boolean, collectorId: string | null): asserts value is CollectionDetail {
@@ -95,6 +97,7 @@ export function assertCollectionDetail(value: unknown, isCollector: boolean, col
     || !state || !COLLECTION_STATUSES.includes(state.status) || !integer(state.revision) || !nullableText(state.observation) || !nullableText(state.next_action) || state.next_date !== null && !collectionDate(state.next_date)
     || state.payment_date !== null && !collectionDate(state.payment_date) || !Array.isArray(data.history) || data.history.length > 100 || !Array.isArray(data.work_sessions) || data.work_sessions.length > 50
     || data.history.some(item => !item || typeof item.id !== 'string' || typeof item.action !== 'string' || !instant(item.created_at) || !nullableText(item.observation))
+    || data.report_history !== undefined && (!Array.isArray(data.report_history) || data.report_history.length > 100 || data.report_history.some(item => !item || typeof item.id !== 'string' || !['RETIRED_WORKED', 'RETIRED_UNWORKED', 'REAPPEARED'].includes(item.action) || typeof item.worked !== 'boolean' || !collectionDate(item.reference_date) || !instant(item.created_at)))
     || data.case_history !== undefined && (!Array.isArray(data.case_history) || data.case_history.length > 100 || data.case_history.some(item => !item || typeof item.id !== 'string' || !COLLECTION_STATUSES.includes(item.status) || !instant(item.created_at) || !nullableText(item.observation)))) throw new Error('invalid_detail');
 }
 export function collectionArguments(filters: CollectionFilters, offset: number, limit: number, isCollector: boolean, collectorId: string | null) {
@@ -132,8 +135,8 @@ export function collectionError(error: unknown, fallback = 'Não foi possível c
 export function downloadCollectionCsv(rows: CollectionRow[], day: string) {
   const escape = (value: unknown) => { let text = String(value ?? ''); if (/^\s*[=+\-@\t\r]/.test(text)) text = `'${text}`; return `"${text.replaceAll('"', '""')}"`; };
   const decimal = (value: number) => `${BigInt(value) / 100n},${String(BigInt(value) % 100n).padStart(2, '0')}`;
-  const header = ['Cliente', 'Documento', 'Empresa', 'Vencimento', 'Dias de atraso', 'Valor', 'Cobradora', 'Status da cobrança', 'Situação financeira', 'Observação', 'Próxima ação', 'Data da próxima ação'];
-  const lines = rows.map(row => [row.client_name, row.document, row.branch, row.due_date, row.delay_days, decimal(row.amount_cents), row.collector_name ?? 'Sem cobradora definida', row.operational_label || row.operational_status, FINANCIAL_STATUSES[row.status], row.observation, row.next_action_text, row.next_date].map(escape).join(';'));
+  const header = ['Cliente', 'Documento', 'Empresa', 'Vencimento', 'Dias de atraso', 'Valor', 'Cobradora', 'Status da cobrança', 'Situação financeira', 'Observação', 'Próxima ação', 'Data da próxima ação', 'Retirado da carteira ativa pelo relatório completo'];
+  const lines = rows.map(row => [row.client_name, row.document, row.branch, row.due_date, row.delay_days, decimal(row.amount_cents), row.collector_name ?? 'Sem cobradora definida', row.operational_label || row.operational_status, row.retired_from_report && row.status !== 'VALIDATED' ? 'Retirado da carteira ativa' : FINANCIAL_STATUSES[row.status], row.observation, row.next_action_text, row.next_date, row.retired_from_report ? 'SIM' : 'NÃO'].map(escape).join(';'));
   const url = URL.createObjectURL(new Blob(['\uFEFF' + header.map(escape).join(';') + '\r\n' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
   const link = document.createElement('a'); link.href = url; link.download = `Cobranca_Filtrado_${day}.csv`; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

@@ -599,3 +599,16 @@ Verificação local em 20/10/2026:
 - Build TypeScript/Vite 0.17.1 aprovado, com o aviso existente de tamanho dos chunks. Revisão independente e smoke SQL confirmaram lote bancário autorizado, saldo avulso negado e revogação com a mesma sessão. O artefato 046 corresponde à migration e sua reaplicação preserva os dados e as concessões.
 
 O agente não executou o SQL nem configurou o login real no Supabase remoto. A ativação requer o [SQL 046 e a chamada privada para a conta desejada](acesso-importacoes-usuario.md), além do site 0.17.1 e nova entrada da usuária. Os módulos precisam ter suas próprias atualizações instaladas. Publicar o código não aplica essas etapas nem comprova o deploy remoto.
+
+
+## Relatório completo de Contas a Receber — 0.18.0 / SQL 047
+
+O usuário confirmou que ausentes trabalhados devem aguardar o relatório de quitados em Comissões. A importação completa passou a retirar ausentes da carteira ativa sem criar recebimento, data de pagamento ou comissão. Importação parcial preserva ausentes. O ledger registra retiradas e reaparecimentos, com transação única, revisão financeira, protocolo de repetição, carteiras e histórico preservados. Intervalos abertos terminam com motivo próprio e mantêm o tempo. Quitados confirma o recebimento real no mesmo título.
+
+A fila pendente é separada da apuração financeira. Saldos de CR, Painel, cobrança, retornos, contatos ativos, referências e e-mail excluem retirados. O histórico continua consultável; a Diretoria permanece em leitura. Títulos posteriormente confirmados aparecem validados, preservando a retirada anterior no histórico. Instaladores 040 e 041 conservam o comportamento da 047 quando reaplicados. Migrations anteriores não foram alteradas.
+
+A planilha operacional apresentou quatro blocos com colunas deslocadas. Os documentos foram recuperados por correspondência única exata em relatório anterior fornecido pelo usuário; valores, datas, filiais e observações atuais foram preservados. A cópia privada contém 940 títulos, total de R$ 4.306.621,41, sem duplicidades ou erros de leitura. Nenhum registro operacional foi incorporado ao repositório ou importado em produção. O arquivo original foi preservado. A leitura agora informa linha/célula física para identificadores inválidos, mantendo a validação estrita.
+
+Verificação local: build TypeScript/Vite 0.18.0 aprovado, 319 testes Node, 19 cenários SQL do núcleo, oito dos caminhos operacionais e 176 cenários de navegador passaram após os ajustes. A regressão de navegador cobriu importação completa/parcial, parcelas, quitados, perda de resposta, fila pendente, cronômetro, retornos, Painel, histórico e Diretoria em leitura. Os 24 cenários de paridade da otimização e os 13 de rascunho de e-mail passaram com os geradores atualizados. A prévia do arquivo corrigido atravessou o gateway e o SQL local, com 940 títulos aceitos; nenhum commit desse arquivo real foi feito. Mil títulos sintéticos tiveram conciliação completa em poucos segundos no PostgreSQL local; o resultado não representa uma medição do serviço remoto.
+
+A usuária confirmou a ativação anterior do acesso individual às importações (046). Esta nova entrega exige [SQL 047 e publicação de receivables-import](recebiveis-relatorio-completo.md). O agente não executou essas etapas no Supabase remoto nem confirmou a versão servida pela Cloudflare.

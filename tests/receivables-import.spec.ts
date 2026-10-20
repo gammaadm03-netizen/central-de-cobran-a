@@ -1,19 +1,72 @@
 import { test, expect } from '@playwright/test';
 import ExcelJS from 'exceljs';
-import { setupReceivableImport as setup, analyzeReceivableImport as analyze, openCsv as csv, candidateId } from './helpers/receivable-import';
+import { setupReceivableImport as setup, analyzeReceivableImport as analyze, openCsv as csv, candidateId, referenceDate, retirementItems } from './helpers/receivable-import';
 
-test('abertos e vencidos exigem declaração do arquivo e preservam ausências sem confirmar recebimento', async ({ page }) => {
+test('relatório completo é o padrão e exige declaração, data e confirmação sem presumir recebimento', async ({ page }) => {
   const seen = await setup(page);
+  await expect(page.getByLabel('Abrangência do relatório', { exact: true })).toHaveValue('full');
+  await expect(page.getByLabel('Data da posição do relatório', { exact: true })).toHaveValue(/^\d{4}-\d{2}-\d{2}$/);
+  await page.getByLabel('Data da posição do relatório', { exact: true }).fill(referenceDate);
   await page.getByLabel('Relatório de abertos e vencidos de Contas a Receber', { exact: true }).setInputFiles({ name: 'cr.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
   await expect(page.getByRole('button', { name: 'Analisar arquivo', exact: true })).toBeDisabled();
   await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Analisar arquivo', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conferência de Contas a Receber' })).toBeVisible();
-  await expect(page.getByText('0 títulos com alterações. Ausências permanecem como estão; nenhum recebimento será confirmado.', { exact: true })).toBeVisible();
-  page.once('dialog', dialog => { expect(dialog.message()).toContain('Títulos ausentes neste arquivo continuarão como estão'); expect(dialog.message()).toContain('As carteiras e o histórico serão preservados'); return dialog.accept(); });
+  await expect(page.getByText('Nenhum recebimento ou comissão será calculado por ausência.', { exact: true })).toBeVisible();
+  page.once('dialog', dialog => { expect(dialog.message()).toContain('Posição do relatório: 19/10/2026'); expect(dialog.message()).toContain('0 títulos ausentes sairão da carteira ativa'); expect(dialog.message()).toContain('Nenhum recebimento será confirmado por ausência'); return dialog.accept(); });
   await page.getByRole('button', { name: 'Concluir importação de abertos e vencidos' }).click();
-  await expect(page.getByRole('status')).toContainText('Nenhum recebimento foi confirmado');
-  expect(seen.commits).toEqual([{ action: 'commit', mode: 'open', file_name: 'cr.csv', file_base64: Buffer.from(csv).toString('base64'), complete: true, title_mappings: {}, collector_mappings: {}, previous_import_id: null, previous_financial_revision: '17' }]);
+  await expect(page.getByRole('status').filter({ hasText: 'Importação concluída:' })).toContainText('Nenhum recebimento foi presumido');
+  expect(seen.commits).toHaveLength(1);
+  const { request_id, ...payload } = seen.commits[0];
+  expect(request_id).toMatch(/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i);
+  expect(payload).toEqual({ action: 'commit', mode: 'open', file_name: 'cr.csv', file_base64: Buffer.from(csv).toString('base64'), complete: true, title_mappings: {}, collector_mappings: {}, previous_import_id: null, previous_financial_revision: '17', full_report: true, reference_date: referenceDate });
   expect(seen.financialWrites).toEqual([]); await expect(page.getByRole('cell', { name: 'cr.csv', exact: true })).toBeVisible();
+});
+
+test('relatório completo mostra os ausentes trabalhados e não trabalhados antes de retirar a carteira sem criar caixa', async ({ page }) => {
+  const seen = await setup(page, { retireMissing: true, reappeared: 1 }); await analyze(page);
+  await expect(page.getByText('0 títulos com alterações · 1 retornando à carteira.', { exact: true })).toBeVisible();
+  await expect(page.getByText('2 títulos ausentes sairão da carteira ativa: 1 ficarão pendentes em Comissões e 1 permanecerão somente no histórico.', { exact: true })).toBeVisible();
+  await page.getByText('Conferir 2 títulos ausentes do relatório completo', { exact: true }).click();
+  const missing = page.getByRole('table', { name: 'Títulos que sairão da carteira ativa', exact: true });
+  await expect(missing.getByRole('row')).toHaveCount(3);
+  await expect(missing.getByRole('cell', { name: 'Pendente em Comissões — aguardando quitados', exact: true })).toBeVisible();
+  await expect(missing.getByRole('cell', { name: 'Histórico, sem recebimento confirmado', exact: true })).toBeVisible();
+  await expect(page.getByText('Nenhum recebimento ou comissão será calculado por ausência.', { exact: true })).toBeVisible();
+  expect(seen.commits).toHaveLength(0); expect(seen.retirementApplications).toHaveLength(0); expect(seen.receipts.size).toBe(0);
+  page.once('dialog', dialog => { expect(dialog.message()).toContain('2 títulos ausentes sairão da carteira ativa: 1 pendentes em Comissões e 1 sem cobrança'); return dialog.accept(); });
+  await page.getByRole('button', { name: 'Concluir importação de abertos e vencidos', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Importação concluída:' })).toContainText('2 ausentes retirados da carteira ativa; 1 pendentes em Comissões, aguardando o relatório de quitados');
+  expect(seen.previews[0]).toMatchObject({ full_report: true, reference_date: referenceDate });
+  expect(seen.commits[0]).toMatchObject({ full_report: true, reference_date: referenceDate });
+  expect(seen.retirementApplications).toEqual(retirementItems); expect(seen.receipts.size).toBe(0); expect(seen.financialWrites).toEqual([]);
+});
+
+test('inclusão e atualização preserva todos os ausentes e envia a abrangência explicitamente', async ({ page }) => {
+  const seen = await setup(page, { retireMissing: true });
+  await page.getByLabel('Abrangência do relatório', { exact: true }).selectOption('incremental');
+  await analyze(page);
+  await expect(page.getByText('Somente inclusão e atualização: títulos ausentes serão preservados.', { exact: true })).toBeVisible();
+  await expect(page.getByText(/^Conferir \d+ títulos ausentes do relatório completo$/)).toHaveCount(0);
+  page.once('dialog', dialog => { expect(dialog.message()).toContain('Inclusão/atualização: títulos ausentes continuarão como estão'); return dialog.accept(); });
+  await page.getByRole('button', { name: 'Concluir importação de abertos e vencidos', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Importação concluída:' })).toContainText('0 ausentes retirados da carteira ativa; 0 pendentes em Comissões');
+  expect(seen.previews[0]).toMatchObject({ full_report: false, reference_date: referenceDate });
+  expect(seen.commits[0]).toMatchObject({ full_report: false, reference_date: referenceDate });
+  expect(seen.retirementApplications).toEqual([]); expect(seen.receipts.size).toBe(0); expect(seen.financialWrites).toEqual([]);
+});
+
+test('mudar data ou abrangência invalida análise e declaração anteriores', async ({ page }) => {
+  const seen = await setup(page); await analyze(page);
+  await expect(page.getByRole('heading', { name: 'Conferência de Contas a Receber', exact: true })).toBeVisible();
+  await page.getByLabel('Abrangência do relatório', { exact: true }).selectOption('incremental');
+  await expect(page.getByRole('heading', { name: 'Conferência de Contas a Receber', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('checkbox')).not.toBeChecked();
+  await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Analisar arquivo', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Conferência de Contas a Receber', exact: true })).toBeVisible();
+  await page.getByLabel('Data da posição do relatório', { exact: true }).fill('2026-10-18');
+  await expect(page.getByRole('heading', { name: 'Conferência de Contas a Receber', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('checkbox')).not.toBeChecked();
+  expect(seen.previews).toHaveLength(2); expect(seen.commits).toHaveLength(0);
 });
 test('CR bloqueia coluna ausente e data inválida antes de enviar a análise ao servidor', async ({ page }) => {
   const seen = await setup(page); await analyze(page, csv.replace('16/10/2026', '31/02/2026'));
@@ -75,3 +128,27 @@ for (const options of [{ activationMissing: true }, { legacyPreview: true }, { t
     expect(seen.previews.every(body => body.mode === 'open')).toBe(true);
   });
 }
+
+test('prévia anterior à atualização047 orienta ativação e não permite confirmar relatório completo', async ({ page }) => {
+  const seen = await setup(page, { missingOpenReportMetadata: true }); await analyze(page);
+  await expect(page.getByRole('alert')).toContainText('Ative a atualização 047 no banco e publique a função receivables-import');
+  await expect(page.getByRole('button', { name: 'Concluir importação de abertos e vencidos', exact: true })).toHaveCount(0);
+  expect(seen.previews).toHaveLength(1); expect(seen.commits).toHaveLength(0); expect(seen.financialWrites).toEqual([]);
+});
+
+test('contagem inconsistente dos ausentes bloqueia a confirmação sem presumir baixa financeira', async ({ page }) => {
+  const seen = await setup(page, { retireMissing: true, invalidOpenReportCounts: true }); await analyze(page);
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Concluir importação de abertos e vencidos', exact: true })).toHaveCount(0);
+  expect(seen.commits).toHaveLength(0); expect(seen.retirementApplications).toEqual([]); expect(seen.receipts.size).toBe(0);
+});
+
+test('resposta de confirmação com protocolo divergente permanece pendente e confere o mesmo envio', async ({ page }) => {
+  const seen = await setup(page, { tamperFirstCommitEcho: true }); await analyze(page);
+  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação de abertos e vencidos', exact: true }).click();
+  await expect(page.getByText('A confirmação está pendente.', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Analisar arquivo', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Conferir confirmação pendente', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Importação concluída:' })).toBeVisible();
+  expect(seen.commits).toHaveLength(2); expect(seen.commits[1]).toEqual(seen.commits[0]); expect(seen.previews).toHaveLength(1); expect(seen.imports.size).toBe(1); expect(seen.financialWrites).toEqual([]);
+});

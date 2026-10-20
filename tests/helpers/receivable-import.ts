@@ -10,19 +10,26 @@ export const candidateId = '50000000-0000-4000-8000-000000000001';
 export const collectorA = '60000000-0000-4000-8000-000000000001';
 export const collectorB = '60000000-0000-4000-8000-000000000002';
 export const collectorNames = { [collectorA]: 'Responsável sintética A', [collectorB]: 'Responsável sintética B' };
+export const referenceDate = '2026-10-19';
+export const retirementItems = [
+  { title_id: '70000000-0000-4000-8000-000000000001', client_name: 'Cliente ausente trabalhado', document: 'AUS-001', branch: 'Filial sintética A', due_date: '2026-10-01', amount_cents: 23456, collector_id: collectorA, worked: true },
+  { title_id: '70000000-0000-4000-8000-000000000002', client_name: 'Cliente ausente sem atendimento', document: 'AUS-002', branch: 'Filial sintética B', due_date: '2026-10-02', amount_cents: 34567, collector_id: null, worked: false },
+];
 export function receivableCustomerKey(row: { client_document: string | null; client_name: string }) { return row.client_document ? `cnpj:${row.client_document}` : `name:${row.client_name.trim().replace(/\s+/g, ' ').toUpperCase()}`; }
-export interface FixtureOptions { stale?: boolean; serverInvalid?: boolean; validatedPresent?: boolean; ambiguous?: number; ambiguousLines?: number[]; ignoreTitleMappings?: boolean; mappingConflict?: boolean; invalidMappedPreview?: boolean; correction?: boolean; matched?: boolean; historical?: boolean; conflict?: boolean; activationMissing?: boolean; uncertainCommit?: boolean; deferCommit?: boolean; legacyPreview?: boolean; tamperHash?: boolean; unassignedCustomers?: 'all' | string[]; missingCollectorMetadata?: boolean; agentsEmpty?: boolean; agentsFailure?: boolean; collectorOwners?: Record<string, string>; paidAfterUncertainCommit?: boolean; inactiveAfterUncertainCommit?: boolean }
+export interface FixtureOptions { stale?: boolean; serverInvalid?: boolean; validatedPresent?: boolean; ambiguous?: number; ambiguousLines?: number[]; ignoreTitleMappings?: boolean; mappingConflict?: boolean; invalidMappedPreview?: boolean; correction?: boolean; matched?: boolean; historical?: boolean; conflict?: boolean; activationMissing?: boolean; uncertainCommit?: boolean; deferCommit?: boolean; legacyPreview?: boolean; tamperHash?: boolean; unassignedCustomers?: 'all' | string[]; missingCollectorMetadata?: boolean; agentsEmpty?: boolean; agentsFailure?: boolean; collectorOwners?: Record<string, string>; paidAfterUncertainCommit?: boolean; inactiveAfterUncertainCommit?: boolean; retireMissing?: boolean; reappeared?: number; missingOpenReportMetadata?: boolean; invalidOpenReportCounts?: boolean; tamperFirstCommitEcho?: boolean }
 export async function setupReceivableImport(page: Page, options: FixtureOptions = {}) {
   const id = '10000000-0000-4000-8000-000000000001';
-  const access = { profile: { id, username: 'UsuarioTeste', display_name: 'Pessoa Teste', role_key: 'contas_receber', enabled: true }, permissions: [{ resource: 'painel', action: 'read' }, { resource: 'contas_receber', action: 'read' }, { resource: 'contas_receber', action: 'import' }, { resource: 'importar_bases', action: 'read' }], collector_id: null };
+  const access = { profile: { id, username: 'UsuarioTeste', display_name: 'Pessoa Teste', role_key: 'contas_receber', enabled: true }, permissions: [{ resource: 'painel', action: 'read' }, { resource: 'contas_receber', action: 'read' }, { resource: 'contas_receber', action: 'write' }, { resource: 'contas_receber', action: 'import' }, { resource: 'importar_bases', action: 'read' }], collector_id: null };
   const claims = { sub: id, session_id: '20000000-0000-4000-8000-000000000001', exp: Math.floor(Date.now() / 1000) + 3600, iat: Math.floor(Date.now() / 1000), role: 'authenticated' };
   const token = [Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'), Buffer.from(JSON.stringify(claims)).toString('base64url'), 'synthetic-test-only'].join('.');
   const user = { id, aud: 'authenticated', role: 'authenticated', email: 'synthetic@test.invalid', created_at: new Date().toISOString(), app_metadata: {}, user_metadata: {} };
   const owners = new Map<string, string | null>(), importHashes = new Set<string>();
+  const completedOpenRequests = new Map<string, any>();
   const scenario = { paid: false, inactiveChoice: false };
   const receipts = new Map<string, { title_id: string; amount_cents: number; payment_date: string }>();
-  const seen = { owners, imports: importHashes, receipts, rejectedCollectorPreviews: 0, assignmentApplications: [] as { customer_key: string; collector_id: string; row_count: number }[], reads: [] as { path: string; query: string }[], previews: [] as any[], commits: [] as any[], financialWrites: [] as string[], releaseCommit: () => {} };
+  const seen = { owners, imports: importHashes, receipts, rejectedCollectorPreviews: 0, assignmentApplications: [] as { customer_key: string; collector_id: string; row_count: number }[], retirementApplications: [] as typeof retirementItems, reads: [] as { path: string; query: string }[], previews: [] as any[], commits: [] as any[], financialWrites: [] as string[], releaseCommit: () => {} };
   let imported = false, lastCount = 1, lastMode = 'open';
+  let lastOpenReport: Record<string, unknown> = {};
   let lastGroups: { customer_key: string; client_name: string; client_document: string | null; row_count: number }[] = [];
   const commitGate = new Promise<void>(resolve => { seen.releaseCommit = resolve; });
   await page.route(`${project}/**`, async route => {
@@ -93,14 +100,24 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
           preview.missing_collector_count = assignments.filter(item => item.requires_selection && !item.collector_id).length;
           preview.can_commit = preview.can_commit && preview.missing_collector_count === 0;
         }
+        if (body.mode === 'open') {
+          const items = options.retireMissing && body.full_report && !imported ? retirementItems : [];
+          lastOpenReport = { format_version: 'receivables-open-report-v1', full_report: body.full_report, reference_date: body.reference_date,
+            retired_count: items.length, retired_worked_count: items.filter(item => item.worked).length,
+            retired_unworked_count: items.filter(item => !item.worked).length, reappeared_count: options.reappeared ?? 0 };
+          if (!options.missingOpenReportMetadata) Object.assign(preview, lastOpenReport, { retirement_items: items });
+          if (options.invalidOpenReportCounts) preview.retired_worked_count = preview.retired_count + 1;
+        }
         if (options.invalidMappedPreview && Object.keys(body.title_mappings ?? {}).length) { preview.errors = []; preview.can_commit = true; }
         lastCount = rows.length; lastMode = body.mode;
         return reply({ rows, file_sha256: options.tamperHash ? '0'.repeat(64) : createHash('sha256').update(bytes).digest('hex'), preview: options.legacyPreview ? { previous_import_id: null, row_count: rows.length, new_count: rows.length, open_count: 0, pending_count: 2, validated_in_source_count: 0 } : preview });
       }
       seen.commits.push(body);
       if (options.deferCommit) await commitGate;
+      if (body.mode === 'open' && completedOpenRequests.has(body.request_id)) return reply({ ...completedOpenRequests.get(body.request_id), idempotent: true });
       if (options.stale) return reply({ code: '40001', error: 'private SQL details' }, 409);
       if (options.inactiveAfterUncertainCommit && seen.commits.length === 1) { scenario.inactiveChoice = true; return reply({ error: 'unavailable' }, 503); }
+      if (body.mode === 'open' && scenario.inactiveChoice && Object.values(body.collector_mappings ?? {}).includes(collectorA)) return reply({ code: 'P0030' }, 409);
       if (body.mode === 'open') {
         for (const group of lastGroups) {
           const existing = owners.get(group.customer_key), selected = body.collector_mappings?.[group.customer_key];
@@ -113,10 +130,14 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
         }
       }
       importHashes.add(createHash('sha256').update(Buffer.from(body.file_base64, 'base64')).digest('hex'));
+      if (body.mode === 'open' && body.full_report && !imported && options.retireMissing) seen.retirementApplications.push(...retirementItems);
       imported = true;
+      const summary = { import_id: '40000000-0000-4000-8000-000000000001', row_count: lastCount, new_count: 1, open_count: 0, pending_count: 0, validated_in_source_count: 0, idempotent: seen.commits.length > 1,
+        ...(body.mode === 'open' ? { ...lastOpenReport, request_id: body.request_id } : {}) };
+      if (body.mode === 'open') completedOpenRequests.set(body.request_id, summary);
       if (options.paidAfterUncertainCommit && seen.commits.length === 1) { scenario.paid = true; receipts.set(candidateId, { title_id: candidateId, amount_cents: 120000, payment_date: '2026-10-17' }); }
       if ((options.uncertainCommit || options.paidAfterUncertainCommit) && seen.commits.length === 1) return reply({ error: 'unavailable' }, 503);
-      return reply({ import_id: '40000000-0000-4000-8000-000000000001', row_count: lastCount, new_count: 1, open_count: 0, pending_count: 0, validated_in_source_count: 0, idempotent: seen.commits.length > 1 });
+      return reply(options.tamperFirstCommitEcho && body.mode === 'open' && seen.commits.length === 1 ? { ...summary, request_id: '80000000-0000-4000-8000-000000000001' } : summary);
     }
     if (req.method() !== 'GET') { seen.financialWrites.push(url.pathname); throw new Error(`Unexpected financial write ${url.pathname}`); }
     throw new Error(`Unexpected offline read ${url.pathname}`);
@@ -128,5 +149,6 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
 export async function analyzeReceivableImport(page: Page, content = openCsv, mode: 'open' | 'received' = 'open') {
   const label = mode === 'open' ? 'Relatório de abertos e vencidos de Contas a Receber' : 'Relatório de títulos quitados de Contas a Receber';
   await page.getByLabel(label, { exact: true }).setInputFiles({ name: 'cr.csv', mimeType: 'text/csv', buffer: Buffer.from(content) });
+  if (mode === 'open') await page.getByLabel('Data da posição do relatório', { exact: true }).fill(referenceDate);
   await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Analisar arquivo', exact: true }).click();
 }
