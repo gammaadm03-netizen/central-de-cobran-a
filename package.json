@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.16.0",
+  "version": "0.17.0",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -72,7 +72,10 @@
     "test:payable-administrative-writeoff-sql": "node scripts/test-payable-administrative-writeoff-sql.mjs",
     "bundle:payable-import-reconciliation": "node scripts/bundle-payable-import-reconciliation.mjs",
     "test:payable-forecast-reconciliation-sql": "node scripts/test-payable-forecast-reconciliation-sql.mjs",
-    "test:payable-paid-reconciliation-sql": "node scripts/test-payable-paid-reconciliation-sql.mjs"
+    "test:payable-paid-reconciliation-sql": "node scripts/test-payable-paid-reconciliation-sql.mjs",
+    "test:product-costs-sql": "node scripts/test-product-costs-sql.mjs",
+    "test:product-cost-recalculation-sql": "node scripts/test-product-cost-recalculation-sql.mjs",
+    "bundle:product-costs": "node scripts/bundle-product-costs.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

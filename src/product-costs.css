@@ -1,0 +1,9 @@
+.product-costs .field>span{font-size:12px;color:#55725f;line-height:1.5}
+.product-costs .commercial-cards strong{font-size:25px}
+.product-costs .table-wrap td{vertical-align:top}
+.cost-application-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.cost-application-summary>div{border:1px solid #dae7de;border-radius:10px;padding:15px;background:#f8fcf9}
+.cost-application-summary dt{font-size:12px;color:#50725b;margin-bottom:8px}
+.cost-application-summary dd{margin:0;font-size:21px;font-weight:650;color:#124f3d}
+.cost-application-summary small{display:block;margin-top:6px;color:#52705c;font-size:11px}
+@media(max-width:640px){.cost-application-summary{grid-template-columns:1fr}.product-costs .inline-actions input{min-width:0;width:100%}}

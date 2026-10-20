@@ -10,13 +10,17 @@ const base64=Buffer.from(csv).toString('base64');
 const permissions=[{resource:'importar_bases',action:'read'},{resource:'fechamento',action:'import'},{resource:'faturamento',action:'read'},{resource:'rh_dp',action:'read'},{resource:'rh_dp',action:'write'},{resource:'rh_dp',action:'import'}];
 const body=(extra={})=>({action:'preview',mode:'commercial',month:'2026-10-01',file_name:'synthetic.csv',file_base64:base64,...extra});
 const request=(data=body(),headers={})=>new Request('https://functions.example/business-import',{method:'POST',headers:{origin,authorization:`Bearer ${token}`,'content-type':'application/json',...headers},body:JSON.stringify(data)});
-function fixture({grants=permissions,authStatus=200,accessStatus=200,upstreamFailure,loadWorkbook,hrPreview}={}){
+function fixture({grants=permissions,authStatus=200,accessStatus=200,upstreamFailure,loadWorkbook,hrPreview,costPreview,costCommit,recalculationPreview,recalculationCommit}={}){
  const calls=[];let loaded=0;
  const gateway=createBusinessGateway({env:name=>({ALLOWED_ORIGINS:origin,SUPABASE_URL:'https://project.example',SUPABASE_ANON_KEY:'public-key',SUPABASE_SERVICE_ROLE_KEY:'server-only-key'}[name]),loadWorkbook:async buffer=>{loaded++;return loadWorkbook(buffer);},fetch:async(url,options)=>{
   const data=options.body===undefined?undefined:JSON.parse(options.body);calls.push({url,data,headers:options.headers});
   if(url.endsWith('/auth/v1/user'))return Response.json({id:uid},{status:authStatus});
   if(url.endsWith('/current_access'))return Response.json({profile:{id:uid,enabled:true},permissions:grants},{status:accessStatus});
   if(upstreamFailure)return Response.json(upstreamFailure,{status:400});
+  if(url.endsWith('/preview_product_cost_import'))return Response.json(costPreview?costPreview(data):costPayload(data));
+  if(url.endsWith('/commit_product_cost_import_from_gateway'))return Response.json(costCommit?costCommit(data):{format_version:'costs-v1',import_id:importId,row_count:data.p_rows.length,item_count:new Set(data.p_rows.map(row=>row.code)).size,reference_date:data.p_reference_date,idempotent:false});
+  if(url.endsWith('/preview_product_cost_recalculation'))return Response.json(recalculationPreview?recalculationPreview(data):recalculationPayload(data));
+  if(url.endsWith('/commit_product_cost_recalculation_from_gateway'))return Response.json(recalculationCommit?recalculationCommit(data):{format_version:'costs-recalculation-v1',import_id:derivedImportId,source_import_id:data.p_previous_import_id,cost_import_id:data.p_cost_import_id,month:data.p_month,row_count:1,idempotent:false,request_id:data.p_request_id});
   if(url.endsWith('/preview_hr_sheet_import'))return Response.json(hrPreview?hrPreview(data):{row_count:data.p_rows.length,previous_import_id:null,summary:{total_formula_version:'rh-reported-total-v1'},rows:data.p_rows.map(row=>({...row,reported_total_cents:row.total_cents}))});
   if(url.includes('/preview_'))return Response.json({row_count:data.p_rows.length,previous_import_id:null,sale_cents:10000,margin_cents:0});
   if(url.includes('/commit_'))return Response.json({import_id:importId,row_count:data.p_rows.length,idempotent:false});
@@ -26,6 +30,64 @@ function fixture({grants=permissions,authStatus=200,accessStatus=200,upstreamFai
 }
 test('business preview parses preserved original bytes canonically and preserves reported zero margin',async()=>{
  const f=fixture(),response=await f.gateway(request()),result=await response.json();assert.equal(response.status,200);assert.equal(result.rows[0].sale_cents,10000);assert.equal(result.rows[0].margin_cents,0);assert.equal(result.rows[0].margin_source,'PROVIDED');assert.equal(result.file_sha256,createHash('sha256').update(csv).digest('hex'));assert(f.calls.at(-1).url.endsWith('/preview_commercial_import'));assert.equal(f.calls.at(-1).data.p_month,'2026-10-01');assert.equal(f.calls.at(-1).headers.Authorization,`Bearer ${token}`);
+});
+const costImportId='91000000-0000-4000-8000-000000000004',derivedImportId='91000000-0000-4000-8000-000000000005',recalculationRequestId='91000000-0000-4000-8000-000000000006';
+const costPermissions=[{resource:'importar_bases',action:'read'},{resource:'custos',action:'import'},{resource:'margens',action:'read'}];
+const recalculationPermissions=[...costPermissions,{resource:'fechamento',action:'import'},{resource:'faturamento',action:'read'}];
+const costCsv='Produto: código;Produto: nome;peso;custo atual\r\n001;Produto sintético;;12,345678\r\n001;Produto sintético;;12,345678\r\n002;Outro produto sintético;0,125;0\r\n002;Outro produto sintético;0,125;6,56';
+const costBody=(extra={})=>({action:'preview',mode:'costs',reference_date:'2026-10-20',file_name:'custos-sinteticos.csv',file_base64:Buffer.from(costCsv).toString('base64'),resolutions:{},...extra});
+function costPayload(data){
+ const selected=data.p_resolutions['002']??null,valid=selected===4||selected===5;
+ return{format_version:'costs-v1',reference_date:data.p_reference_date,previous_import_id:null,row_count:4,item_count:2,can_commit:valid,zero_cost_count:selected===4?1:0,missing_weight_count:valid?1:2,missing_cost_count:valid?0:1,duplicate_row_count:2,duplicate_code_count:2,conflicting_cost_code_count:1,unresolved_count:valid?0:1,new_count:2,changed_count:0,unchanged_count:0,removed_count:0,exact_duplicate_count:1,
+  rows:[{...data.p_rows[0],source_lines:[2,3],duplicate_count:1,cost_conflict:false,resolved:true,selected_line_number:null},
+   {...data.p_rows[valid?selected-2:2],unit_cost:valid?data.p_rows[selected-2].unit_cost:null,weight_kg:valid?data.p_rows[selected-2].weight_kg:null,source_lines:[4,5],duplicate_count:1,cost_conflict:true,resolved:valid,selected_line_number:selected}],
+  conflicts:[{code:'002',product:'Outro produto sintético',selected_line_number:selected,options:data.p_rows.slice(2).map(row=>({line_number:row.line_number,unit_cost:row.unit_cost,weight_kg:row.weight_kg}))}]};
+}
+const recalculationBody=(extra={})=>({action:'preview',mode:'costs_recalculation',month:'2026-10-01',cost_import_id:costImportId,...extra});
+function recalculationPayload(data){return{format_version:'costs-recalculation-v1',month:data.p_month,cost_import_id:data.p_cost_import_id,previous_import_id:importId,revision:'closing-and-catalogue-revision',can_apply:true,row_count:1,matched_count:1,missing_code_count:0,missing_quantity_count:0,invalid_quantity_count:0,missing_cost_count:0,zero_cost_count:0,missing_components_count:0,totals:{previous_cost_cents:1000,new_cost_cents:2469,previous_margin_cents:9000,new_margin_cents:7531},source:{import_id:importId,month:data.p_month,file_name:'Fechamento sintético.csv'},cost_source:{import_id:data.p_cost_import_id,reference_date:'2026-10-20',file_name:'Custos sintéticos.csv'},rows:[{id:'91000000-0000-4000-8000-000000000007',line_number:2,code:'001',product:'Produto sintético',invoice:'NF-SINT',branch:'A',quantity:'2',unit_cost:'12.345678',previous_cost_cents:1000,new_cost_cents:2469,previous_margin_cents:9000,new_margin_cents:7531,error_codes:[]}]};}
+test('cost catalogue preview preserves every original line, exact unit precision and explicit unresolved alternatives',async()=>{
+ const f=fixture({grants:costPermissions}),response=await f.gateway(request(costBody())),result=await response.json();
+ assert.equal(response.status,200,JSON.stringify(result));assert.equal(result.format_version,'costs-v1');assert.equal(result.preview.row_count,4);assert.equal(result.rows.length,2);assert.equal(result.preview.can_commit,false);assert.equal(result.rows[0].unit_cost,'12.345678');assert.equal(result.rows[0].code,'001');assert.equal(result.rows[1].unit_cost,null);assert.equal(result.preview.conflicts[0].options[0].unit_cost,'0');
+ assert.equal(result.file_sha256,createHash('sha256').update(costCsv).digest('hex'));const call=f.calls.at(-1);assert(call.url.endsWith('/preview_product_cost_import'));assert.equal(call.data.p_rows.length,4);assert.equal(call.data.p_rows[1].line_number,3);assert.deepEqual(call.data.p_resolutions,{});assert.equal(call.headers.Authorization,`Bearer ${token}`);
+});
+test('cost catalogue commit reparses preserved bytes and forwards the exact choice with verified actor and session',async()=>{
+ const f=fixture({grants:costPermissions}),data=costBody({resolutions:{'002':5}});
+ const preview=await f.gateway(request(data));assert.equal(preview.status,200);assert.equal((await preview.json()).preview.can_commit,true);
+ const response=await f.gateway(request({...data,action:'commit',complete:true,previous_import_id:null})),result=await response.json();assert.equal(response.status,200,JSON.stringify(result));assert.equal(result.item_count,2);
+ const call=f.calls.at(-1);assert(call.url.endsWith('/commit_product_cost_import_from_gateway'));assert.deepEqual(call.data.p_resolutions,{'002':5});assert.equal(call.data.p_rows.length,4);assert.equal(call.data.p_rows[3].unit_cost,'6.56');assert.equal(call.data.p_file_base64,data.file_base64);assert.equal(call.data.p_user_id,uid);assert.equal(call.data.p_session_id,session);assert.equal(call.headers.Authorization,'Bearer server-only-key');
+});
+test('cost catalogue requires all module permissions before parsing and does not expose the file to another importer',async()=>{
+ for(const grants of [permissions,costPermissions.filter(p=>p.resource!=='custos'),costPermissions.filter(p=>p.resource!=='margens'),costPermissions.filter(p=>p.resource!=='importar_bases')]){const f=fixture({grants}),response=await f.gateway(request(costBody({file_name:'source.xlsx',file_base64:'BAD'})));assert.equal(response.status,403);assert.equal(f.loaded(),0);assert.equal(f.calls.length,2);}
+});
+test('cost catalogue rejects caller rows, forged choices, invalid dates and cross-mode fields before persistence',async()=>{
+ for(const extra of [{rows:[]},{p_rows:[]},{p_user_id:uid},{resolutions:null},{resolutions:[]},{resolutions:{'002':'5'}},{resolutions:{'002':1}},{resolutions:{'002':5002}},{month:'2026-10-01'},{reference_date:'2026-02-31'}]){const f=fixture({grants:costPermissions}),response=await f.gateway(request(costBody(extra)));assert.equal(response.status,400,JSON.stringify(extra));assert.equal(f.calls.length,2);}
+});
+test('cost catalogue refuses an old response or an explicit choice that the service silently ignored',async()=>{
+ for(const changes of [()=>({row_count:4,previous_import_id:null}),data=>{const p=costPayload(data);p.rows[1].selected_line_number=null;return p;},data=>{const p=costPayload(data);p.rows[1].unit_cost='0';return p;},data=>{const p=costPayload(data);p.rows[0].source_lines=[2];return p;}]){const f=fixture({grants:costPermissions,costPreview:changes}),response=await f.gateway(request(costBody({resolutions:{'002':5}})));assert.equal(response.status,503);assert(!(await response.text()).includes('Produto sintético'));}
+});
+test('cost catalogue reports its own activation code and never forwards database internals',async()=>{
+ const f=fixture({grants:costPermissions,upstreamFailure:{code:'PGRST202',message:'sensitive source function signature'}}),response=await f.gateway(request(costBody()));assert.equal(response.status,409);const text=await response.text();assert.equal(JSON.parse(text).code,'P0044');assert(!text.includes('sensitive'));
+});
+test('cost recalculation preview is fileless and preserves server-calculated original and replacement financial totals',async()=>{
+ const f=fixture({grants:recalculationPermissions}),response=await f.gateway(request(recalculationBody())),result=await response.json();assert.equal(response.status,200,JSON.stringify(result));assert.equal(result.format_version,'costs-recalculation-v1');assert.equal(result.totals.new_cost_cents,2469);assert.equal(result.rows[0].unit_cost,'12.345678');assert.equal(f.loaded(),0);
+ const call=f.calls.at(-1);assert(call.url.endsWith('/preview_product_cost_recalculation'));assert.deepEqual(call.data,{p_cost_import_id:costImportId,p_month:'2026-10-01'});assert.equal(call.headers.Authorization,`Bearer ${token}`);
+});
+test('cost recalculation commit sends only the frozen source, catalogue and protocol to the service-only writer',async()=>{
+ const f=fixture({grants:recalculationPermissions}),response=await f.gateway(request(recalculationBody({action:'commit',complete:true,previous_import_id:importId,request_id:recalculationRequestId}))),result=await response.json();assert.equal(response.status,200,JSON.stringify(result));assert.equal(result.import_id,derivedImportId);assert.equal(result.request_id,recalculationRequestId);assert.equal(f.loaded(),0);
+ const call=f.calls.at(-1);assert.deepEqual(call.data,{p_user_id:uid,p_session_id:session,p_cost_import_id:costImportId,p_month:'2026-10-01',p_previous_import_id:importId,p_request_id:recalculationRequestId});assert.equal(call.headers.Authorization,'Bearer server-only-key');
+});
+test('cost recalculation requires closing and sales permissions in addition to catalogue access',async()=>{
+ for(const grants of [costPermissions,recalculationPermissions.filter(p=>p.resource!=='fechamento'),recalculationPermissions.filter(p=>p.resource!=='faturamento'),recalculationPermissions.filter(p=>p.resource!=='margens')]){const f=fixture({grants}),response=await f.gateway(request(recalculationBody()));assert.equal(response.status,403);assert.equal(f.calls.length,2);assert.equal(f.loaded(),0);}
+});
+test('cost recalculation rejects files, replacement rows and commits without an exact confirmed source or protocol',async()=>{
+ for(const extra of [{file_name:'forged.csv'},{file_base64:base64},{rows:[]},{reference_date:'2026-10-20'},{p_user_id:uid},{cost_import_id:[costImportId]},{month:'2026-10-20'},{month:'2200-01-01'},{action:'commit',complete:true,previous_import_id:importId},{action:'commit',request_id:recalculationRequestId,previous_import_id:importId},{action:'commit',complete:true,request_id:recalculationRequestId,previous_import_id:null}]){const f=fixture({grants:recalculationPermissions}),response=await f.gateway(request(recalculationBody(extra)));assert.equal(response.status,400,JSON.stringify(extra));assert.equal(f.calls.length,2);}
+});
+test('cost recalculation refuses inconsistent totals, non-matching sources and unsupported response versions',async()=>{
+ for(const mutate of [p=>{p.totals.new_margin_cents++;},p=>{p.rows[0].unit_cost=null;},p=>{p.rows[0].unit_cost='0';p.zero_cost_count=1;},p=>{p.rows[0].quantity='0';},p=>{p.source.import_id=costImportId;},p=>{p.format_version='old';},p=>{p.rows[0].error_codes=['MISSING_COST'];}]){const f=fixture({grants:recalculationPermissions,recalculationPreview:data=>{const p=recalculationPayload(data);mutate(p);return p;}}),response=await f.gateway(request(recalculationBody()));assert.equal(response.status,503);assert(!(await response.text()).includes('Produto sintético'));}
+});
+test('cost recalculation activation and uncertain commits preserve only safe protocol diagnostics',async()=>{
+ const unavailable=fixture({grants:recalculationPermissions,upstreamFailure:{code:'42883',message:'private SQL signature'}}),response=await unavailable.gateway(request(recalculationBody()));assert.equal(response.status,409);assert.equal((await response.json()).code,'P0045');
+ const mismatch=fixture({grants:recalculationPermissions,recalculationCommit:data=>({...recalculationPayload(data),format_version:'costs-recalculation-v1',import_id:derivedImportId,source_import_id:data.p_previous_import_id,cost_import_id:data.p_cost_import_id,month:data.p_month,row_count:1,idempotent:false,request_id:uid})});assert.equal((await mismatch.gateway(request(recalculationBody({action:'commit',complete:true,previous_import_id:importId,request_id:recalculationRequestId})))).status,503);
 });
 test('business commit reparses and sends only trusted actor/session and original hash using service RPC',async()=>{
  const f=fixture(),response=await f.gateway(request(body({action:'commit',complete:true,previous_import_id:null})));assert.equal(response.status,200);const commit=f.calls.at(-1);assert(commit.url.endsWith('/commit_commercial_import_from_gateway'));assert.equal(commit.headers.Authorization,'Bearer server-only-key');assert.equal(commit.data.p_user_id,uid);assert.equal(commit.data.p_session_id,session);assert.equal(commit.data.p_file_base64,base64);assert.equal(commit.data.p_rows[0].margin_cents,0);

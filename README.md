@@ -1,6 +1,12 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.16.0**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.17.0**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Custos por item e recálculo do fechamento — 0.17.0
+
+Importar Bases → Custos recebe o catálogo por código, preserva custos unitários com até seis casas decimais e exige escolha de linha para custos divergentes do mesmo produto. O original e as versões ficam no histórico. Uma prévia separada permite aplicar a base ao mês escolhido: CMV = custo unitário × quantidade; a margem mantém os demais componentes do fechamento. A confirmação cria uma versão mensal derivada e preserva a fonte anterior. Custos ausentes ou zerados, quantidade inválida e informações incompletas bloqueiam o recálculo.
+
+Ativação: [SQL combinado 044/045, função business-import existente e site 0.17.0](docs/custos-fechamento.md). Publicar código não executa SQL, importa a planilha ou recalcula dados remotos.
 
 ## Conciliação durante a importação de Contas a Pagar — 0.16.0
 
@@ -198,6 +204,10 @@ npm run test:director-report-sql
 npm run test:upgrade-sql
 npm run bundle:receivables-gateway
 npm run bundle:collection-reference-gateway
+npm run test:product-costs-sql
+npm run test:product-cost-recalculation-sql
+npm run bundle:product-costs
+npm run bundle:business-gateway
 npm run build
 npm run test:browser
 ```
