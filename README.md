@@ -2,6 +2,10 @@
 
 Versão de desenvolvimento **0.18.0**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
 
+## Treinamento completo por área
+
+[Guia ilustrado, caminhos e capturas de todas as áreas](docs/treinamento/README.md), com versão navegável e PDF. As telas utilizam dados fictícios de treinamento.
+
 ## Relatório completo de Contas a Receber — 0.18.0
 
 A importação completa retira os títulos ausentes da carteira ativa, preservando o histórico. Os trabalhados ficam pendentes em Comissões até Quitados confirmar data e valor reais; ausências nunca geram recebimentos ou comissões. Arquivos parciais usam inclusão/atualização. A leitura também identifica documentos inválidos pela linha e célula. [Ativação do SQL 047 e da função receivables-import](docs/recebiveis-relatorio-completo.md).

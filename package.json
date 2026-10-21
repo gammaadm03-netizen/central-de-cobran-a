@@ -80,7 +80,10 @@
     "bundle:user-import-access": "node scripts/bundle-user-import-access.mjs",
     "bundle:receivable-complete-report": "node scripts/bundle-receivable-complete-report.mjs",
     "test:receivable-complete-report-sql": "node scripts/test-receivables-complete-report-sql.mjs",
-    "test:receivable-retired-active-sql": "node scripts/test-receivable-retired-active-sql.mjs"
+    "test:receivable-retired-active-sql": "node scripts/test-receivable-retired-active-sql.mjs",
+    "training:build": "node scripts/build-training.mjs",
+    "training:pdf": "node scripts/render-training-pdf.mjs && python scripts/finalize-training-pdf.py",
+    "training:capture": "node scripts/capture-training.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",
