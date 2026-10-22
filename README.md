@@ -6,6 +6,10 @@ Versão de desenvolvimento **0.18.2**. As quatro abas restantes da V75 — Comis
 
 O botão lateral **Fechamento** abre seus dashboards e expande as opções **Margens** e **Custos** logo abaixo. Um novo clique recolhe essas opções. O dashboard consolida todos os itens do mês, com indicadores e distribuição de venda e margem por filial e centro de custo; valida a mesma versão durante a consulta. Margens mantém a análise do fechamento por mês e item. Custos permite consultar o catálogo, buscar produtos e comparar versões por data de referência. Importação e aplicação de custos ao fechamento continuam restritas às permissões existentes; a Diretoria consulta sem alterar. Importar Bases → Custos permanece disponível para os operadores autorizados. A reorganização não exige uma nova migração SQL.
 
+## Preparar a carga oficial: limpeza administrativa das bases de teste
+
+[Procedimento e SQLs completos](docs/zerar-bases-teste.md) para uma limpeza única autorizada, com cópia privada antes de remover dados e históricos operacionais, mantendo usuários, permissões e configurações. A repetição do mesmo SQL não limpa novas importações oficiais. Não é migration: publicar o site não executa a limpeza. A recuperação é separada e recusa sobrepor novos dados. Validação local: `npm run test:base-reset-sql`.
+
 ## Treinamento completo por área
 
 [Guia ilustrado, caminhos e capturas de todas as áreas](docs/treinamento/README.md), com versão navegável e PDF. As telas utilizam dados fictícios de treinamento.

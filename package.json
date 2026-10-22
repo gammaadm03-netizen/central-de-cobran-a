@@ -83,7 +83,8 @@
     "test:receivable-retired-active-sql": "node scripts/test-receivable-retired-active-sql.mjs",
     "training:build": "node scripts/build-training.mjs",
     "training:pdf": "node scripts/render-training-pdf.mjs && python scripts/finalize-training-pdf.py",
-    "training:capture": "node scripts/capture-training.mjs"
+    "training:capture": "node scripts/capture-training.mjs",
+    "test:base-reset-sql": "node scripts/test-reset-bases-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",
