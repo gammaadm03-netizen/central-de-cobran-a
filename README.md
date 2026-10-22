@@ -1,10 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.1**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.2**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
 
-## Fechamento: Margens e Custos — 0.18.1
+## Fechamento: dashboards e menu lateral recolhível — 0.18.2
 
-O menu lateral **Fechamento** reúne as sub-abas **Margens** e **Custos**. Margens mantém a análise do fechamento por mês e item. Custos permite consultar o catálogo, buscar produtos e comparar versões por data de referência. Importação e aplicação de custos ao fechamento continuam restritas às permissões existentes; a Diretoria consulta sem alterar. Importar Bases → Custos permanece disponível para os operadores autorizados. A reorganização não exige uma nova migração SQL.
+O botão lateral **Fechamento** abre seus dashboards e expande as opções **Margens** e **Custos** logo abaixo. Um novo clique recolhe essas opções. O dashboard consolida todos os itens do mês, com indicadores e distribuição de venda e margem por filial e centro de custo; valida a mesma versão durante a consulta. Margens mantém a análise do fechamento por mês e item. Custos permite consultar o catálogo, buscar produtos e comparar versões por data de referência. Importação e aplicação de custos ao fechamento continuam restritas às permissões existentes; a Diretoria consulta sem alterar. Importar Bases → Custos permanece disponível para os operadores autorizados. A reorganização não exige uma nova migração SQL.
 
 ## Treinamento completo por área
 

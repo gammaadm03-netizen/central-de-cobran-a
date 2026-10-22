@@ -312,22 +312,50 @@ test('an interrupted application freezes month and cost selection and repeats th
   await expect(page.getByText('private interrupted application', { exact: false })).toHaveCount(0);
 });
 
-test('Fechamento groups Margens and Custos, preserves each consultation and lets the Director read costs without mutation controls', async ({ page }) => {
+test('Fechamento expands and collapses sidebar children while keeping the dashboard as the parent page', async ({ page }) => {
   const calls = await setup(page, { permission: 'director' });
   const nav = page.getByRole('navigation', { name: 'Módulos da Central' });
-  await expect(nav.getByRole('button', { name: 'Margens', exact: true })).toHaveCount(0);
-  await nav.getByRole('button', { name: 'Fechamento', exact: true }).click();
+  const parent = nav.getByRole('button', { name: 'Fechamento', exact: true });
+  const children = nav.getByRole('group', { name: 'Áreas do fechamento', exact: true });
+  await expect(parent).toHaveAttribute('aria-expanded', 'false');
+  await expect(nav.getByRole('button', { name: 'Margens', exact: true })).toBeHidden();
+  await parent.focus(); await page.keyboard.press('Enter');
+  await expect(parent).toHaveAttribute('aria-expanded', 'true');
+  await expect(parent).toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('heading', { name: 'Fechamento', level: 1, exact: true })).toBeVisible();
-  const tabs = page.getByRole('tablist', { name: 'Áreas do fechamento', exact: true });
-  await expect(tabs.getByRole('tab')).toHaveText(['Margens', 'Custos']);
-  const margins = tabs.getByRole('tab', { name: 'Margens', exact: true });
-  const costs = tabs.getByRole('tab', { name: 'Custos', exact: true });
-  await expect(margins).toHaveAttribute('aria-selected', 'true');
+  await expect(children).toBeVisible();
+  await expect(children.getByRole('button')).toHaveText([/Margens$/, /Custos$/]);
+  await expect(page.getByRole('tablist', { name: 'Áreas do fechamento', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Margens do fechamento', exact: true })).not.toBeVisible();
+  await page.keyboard.press('Tab');
+  const margins = children.getByRole('button', { name: 'Margens', exact: true });
+  await expect(margins).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Margens', level: 1, exact: true })).toBeVisible();
+  await expect(margins).toHaveAttribute('aria-current', 'page');
+  await parent.click();
+  await expect(parent).toHaveAttribute('aria-expanded', 'false');
+  await expect(children).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'Fechamento', level: 1, exact: true })).toBeVisible();
+  await parent.click();
+  await expect(children).toBeVisible();
+  expect(calls.some(call => call.name === 'business-import')).toBe(false);
+});
+
+test('sidebar Margens and Custos preserve each consultation and let the Director read costs without mutation controls', async ({ page }) => {
+  const calls = await setup(page, { permission: 'director' });
+  const nav = page.getByRole('navigation', { name: 'Módulos da Central' });
+  await nav.getByRole('button', { name: 'Fechamento', exact: true }).click();
+  const children = nav.getByRole('group', { name: 'Áreas do fechamento', exact: true });
+  const margins = children.getByRole('button', { name: 'Margens', exact: true });
+  const costs = children.getByRole('button', { name: 'Custos', exact: true });
+  await margins.click();
   await expect(page.getByRole('heading', { name: 'Margens do fechamento', exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: 'Faixa de margem final', exact: true }).selectOption('lt10');
   await expect.poll(() => calls.filter(call => call.name === 'list_commercial_items').at(-1)?.body.p_margin_band).toBe('lt10');
-  await margins.focus(); await page.keyboard.press('End');
-  await expect(costs).toBeFocused(); await expect(costs).toHaveAttribute('aria-selected', 'true');
+  await costs.click();
+  await expect(costs).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('heading', { name: 'Custos', level: 1, exact: true })).toBeVisible();
   const catalog = page.getByRole('table', { name: 'Custos por item cadastrados', exact: true });
   await expect(catalog.getByRole('cell', { name: 'R$ 1,234567', exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: 'Versão da base de custos', exact: true }).selectOption(costImportId);
@@ -349,10 +377,27 @@ test('Fechamento groups Margens and Custos, preserves each consultation and lets
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
+test('mobile closing expansion keeps the sidebar open until a child is selected', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await setup(page, { permission: 'director' });
+  await page.getByRole('button', { name: 'Abrir navegação', exact: true }).click();
+  const nav = page.getByRole('navigation', { name: 'Módulos da Central' });
+  await nav.getByRole('button', { name: 'Fechamento', exact: true }).click();
+  const children = nav.getByRole('group', { name: 'Áreas do fechamento', exact: true });
+  await expect(children).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Abrir navegação', exact: true })).toHaveAttribute('aria-expanded', 'true');
+  await children.getByRole('button', { name: 'Custos', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Abrir navegação', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('heading', { name: 'Custos', level: 1, exact: true })).toBeVisible();
+  await expect(page.getByRole('table', { name: 'Custos por item cadastrados', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
 test('a margins reader can consult the closing cost catalog without gaining cost import or recalculation rights', async ({ page }) => {
   const calls = await setup(page, { permission: 'no-costs', closingRead: true });
-  await page.getByRole('navigation', { name: 'Módulos da Central' }).getByRole('button', { name: 'Fechamento', exact: true }).click();
-  await page.getByRole('tablist', { name: 'Áreas do fechamento', exact: true }).getByRole('tab', { name: 'Custos', exact: true }).click();
+  const nav = page.getByRole('navigation', { name: 'Módulos da Central' });
+  await nav.getByRole('button', { name: 'Fechamento', exact: true }).click();
+  await nav.getByRole('group', { name: 'Áreas do fechamento', exact: true }).getByRole('button', { name: 'Custos', exact: true }).click();
   await expect(page.getByRole('table', { name: 'Custos por item cadastrados', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Importar custos', exact: true })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Aplicar custos ao fechamento', exact: true })).toHaveCount(0);
@@ -362,8 +407,9 @@ test('a margins reader can consult the closing cost catalog without gaining cost
 
 test('an authorized closing cost consultation links to the existing Costs import area and exposes explicit recalculation', async ({ page }) => {
   const calls = await setup(page, { apply: true });
-  await page.getByRole('navigation', { name: 'Módulos da Central' }).getByRole('button', { name: 'Fechamento', exact: true }).click();
-  await page.getByRole('tablist', { name: 'Áreas do fechamento', exact: true }).getByRole('tab', { name: 'Custos', exact: true }).click();
+  const nav = page.getByRole('navigation', { name: 'Módulos da Central' });
+  await nav.getByRole('button', { name: 'Fechamento', exact: true }).click();
+  await nav.getByRole('group', { name: 'Áreas do fechamento', exact: true }).getByRole('button', { name: 'Custos', exact: true }).click();
   await expect(page.getByRole('table', { name: 'Custos por item cadastrados', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Aplicar custos ao fechamento', exact: true })).toBeVisible();
   await expect(page.locator('input[type="file"]')).toHaveCount(0);
@@ -374,33 +420,45 @@ test('an authorized closing cost consultation links to the existing Costs import
   await expect(page.getByRole('heading', { name: 'Importar custos por item', exact: true })).toBeVisible();
 });
 
-test('a pending closing cost application keeps the consultation on Costs and retries the same application', async ({ page }) => {
+test('a pending closing cost application locks the parent and children and retries the same application', async ({ page }) => {
   const calls = await setup(page, { apply: true, applyUnknown: true });
-  await page.getByRole('navigation', { name: 'Módulos da Central' }).getByRole('button', { name: 'Fechamento', exact: true }).click();
-  const tabs = page.getByRole('tablist', { name: 'Áreas do fechamento', exact: true });
+  const nav = page.getByRole('navigation', { name: 'Módulos da Central' });
+  const parent = nav.getByRole('button', { name: 'Fechamento', exact: true });
+  await parent.click();
+  const children = nav.getByRole('group', { name: 'Áreas do fechamento', exact: true });
+  const margins = children.getByRole('button', { name: 'Margens', exact: true });
+  await margins.click();
   await page.getByRole('combobox', { name: 'Faixa de margem final', exact: true }).selectOption('lt10');
   await expect.poll(() => calls.filter(call => call.name === 'list_commercial_items').at(-1)?.body.p_margin_band).toBe('lt10');
   await expect(page.getByRole('table', { name: 'Margens por item do fechamento', exact: true })).toBeVisible();
-  const readsBeforeApplication = calls.filter(call => call.name === 'list_commercial_items').length;
-  await tabs.getByRole('tab', { name: 'Custos', exact: true }).click();
+  const marginReads = () => calls.filter(call => call.name === 'list_commercial_items' && call.body.p_margin_band === 'lt10');
+  const readsBeforeApplication = marginReads().length;
+  await children.getByRole('button', { name: 'Custos', exact: true }).click();
   const section = await analyzeImpact(page);
   await section.getByRole('checkbox').check();
   await section.getByRole('button', { name: 'Aplicar custos e recalcular margens', exact: true }).click();
   const retry = section.getByRole('button', { name: 'Repetir aplicação pendente', exact: true });
   await expect(retry).toBeVisible();
-  await expect(tabs.getByRole('tab', { name: 'Margens', exact: true })).toBeDisabled();
+  await expect(parent).toBeDisabled();
+  await expect(nav.getByRole('button', { name: 'Faturamento', exact: true })).toBeDisabled();
+  await expect(nav.getByRole('button', { name: 'Importar Bases', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Central Financeira — início', exact: true })).toBeDisabled();
+  await expect(margins).toBeDisabled();
+  await expect(children.getByRole('button', { name: 'Custos', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Importar custos', exact: true })).toBeDisabled();
   await expect(page.getByRole('combobox', { name: 'Versão da base de custos', exact: true })).toBeDisabled();
-  expect(calls.filter(call => call.name === 'list_commercial_items')).toHaveLength(readsBeforeApplication);
+  expect(marginReads()).toHaveLength(readsBeforeApplication);
   const first = calls.filter(call => call.name === 'business-import' && call.body.mode === 'costs_recalculation' && call.body.action === 'commit').at(-1)?.body;
   await retry.click();
   await expect(section.getByRole('status')).toContainText('Esta aplicação já estava registrada');
-  await expect(tabs.getByRole('tab', { name: 'Margens', exact: true })).toBeEnabled();
+  await expect(parent).toBeEnabled();
+  await expect(nav.getByRole('button', { name: 'Faturamento', exact: true })).toBeEnabled();
+  await expect(nav.getByRole('button', { name: 'Importar Bases', exact: true })).toBeEnabled();
+  await expect(margins).toBeEnabled();
   const writes = calls.filter(call => call.name === 'business-import' && call.body.mode === 'costs_recalculation' && call.body.action === 'commit');
   expect(writes).toHaveLength(2); expect(writes[1].body).toEqual(first);
-  await expect.poll(() => calls.filter(call => call.name === 'list_commercial_items').length).toBe(readsBeforeApplication + 1);
-  expect(calls.filter(call => call.name === 'list_commercial_items').at(-1)?.body.p_margin_band).toBe('lt10');
-  await tabs.getByRole('tab', { name: 'Margens', exact: true }).click();
+  await expect.poll(() => marginReads().length).toBe(readsBeforeApplication + 1);
+  await margins.click();
   await expect(page.getByRole('combobox', { name: 'Faixa de margem final', exact: true })).toHaveValue('lt10');
   await expect(page.getByRole('table', { name: 'Margens por item do fechamento', exact: true })).toBeVisible();
 });

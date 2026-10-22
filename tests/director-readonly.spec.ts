@@ -120,7 +120,7 @@ test('stale Director write, import, validation and admin grants cannot restore m
     await noFinancialWrites(page);
     await expect(page.getByRole('button', { name: /Importar Bases|Ir para Importar|Informar posição da Diretoria/ })).toHaveCount(0);
   }
-  await expect(page.getByRole('navigation', { name: 'Módulos da Central' }).getByRole('button')).toHaveCount(9);
+  await expect(page.getByRole('navigation', { name: 'Módulos da Central' }).getByRole('button')).toHaveCount(11);
   expect(seen.mutations).toEqual([]); expect(seen.unhandled).toEqual([]);
 });
 

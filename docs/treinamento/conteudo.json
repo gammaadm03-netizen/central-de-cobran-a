@@ -1,5 +1,5 @@
 {
-  "version": "0.18.1",
+  "version": "0.18.2",
   "date_label": "22 de outubro de 2026",
   "modules": [
     {
@@ -40,7 +40,7 @@
         {
           "title": "Encontrar cada área autorizada",
           "path": "Menu lateral → Nome da área",
-          "text": "Use os botões do menu lateral para abrir Painel Gerencial, Caixa / Bancos, Contas a Pagar, Contas a Receber, Cobrança, Comissões, Faturamento, Fechamento, RH / DP ou Importar Bases, conforme sua autorização. Em tela estreita, clique em Abrir navegação para mostrar o menu. O título no cabeçalho confirma a área aberta. Dentro de Fechamento, use as sub-abas Margens e Custos para alternar entre a rentabilidade dos itens e o catálogo de custos.",
+          "text": "Use os botões do menu lateral para abrir Painel Gerencial, Caixa / Bancos, Contas a Pagar, Contas a Receber, Cobrança, Comissões, Faturamento, Fechamento, RH / DP ou Importar Bases, conforme sua autorização. Em tela estreita, clique em Abrir navegação para mostrar o menu. O título no cabeçalho confirma a área aberta. Clique em Fechamento no menu lateral para abrir seus dashboards e mostrar, logo abaixo, as opções Margens e Custos. Clique novamente em Fechamento para recolher essas opções. Escolha Margens ou Custos no próprio menu lateral para abrir a consulta correspondente.",
           "screenshot_ids": []
         },
         {
@@ -771,7 +771,7 @@
       "duration_minutes": 25,
       "prerequisites": [
         "Relatórios originais do sistema de origem separados entre Abertos e vencidos e Títulos quitados.",
-        "Acesso autorizado a Importar Bases → Contas a Receber; o treinamento considera a versão 0.18.1 e suas atualizações ativas.",
+        "Acesso autorizado a Importar Bases → Contas a Receber; o treinamento considera a versão 0.18.2 e suas atualizações ativas.",
         "Cobradoras cadastradas e ativas para escolher a responsável dos clientes ainda sem carteira."
       ],
       "steps": [
@@ -1715,11 +1715,11 @@
     },
     {
       "id": "margens",
-      "title": "Fechamento: consultar margens e custos dos itens",
-      "path": "Menu lateral → Fechamento → Margens / Custos",
+      "title": "Fechamento: dashboards, margens e custos",
+      "path": "Menu lateral → Fechamento → Dashboards / Margens / Custos",
       "audience": "Diretoria, Gerência e usuários com consulta de Margens",
-      "objective": "Consultar a margem por item do fechamento e a base de custos, conferir suas origens e reconhecer quais ações dependem de permissão.",
-      "duration_minutes": 25,
+      "objective": "Consultar os dashboards do fechamento, detalhar a margem por item e consultar a base de custos, reconhecendo as origens dos valores e as ações permitidas ao seu acesso.",
+      "duration_minutes": 30,
       "prerequisites": [
         "Fechamento de Faturamento importado para o mês.",
         "Acesso a Fechamento, que utiliza a permissão de consulta a Margens.",
@@ -1727,11 +1727,21 @@
       ],
       "steps": [
         {
-          "title": "Abrir o fechamento e escolher a sub-aba",
-          "path": "Menu lateral → Fechamento → Margens / Custos",
-          "text": "Clique em Fechamento no menu lateral. A sub-aba Margens abre a análise por item do mês. Clique em Custos para consultar códigos, custos unitários e versões da base de custos. Faturamento continua em sua própria área do menu. A Diretoria pode consultar as duas sub-abas, sem importar ou aplicar alterações.",
+          "title": "Abrir o fechamento e expandir o menu lateral",
+          "path": "Menu lateral → Fechamento",
+          "text": "Clique em Fechamento no menu lateral. A página principal mostra os dashboards do fechamento, e as opções Margens e Custos aparecem logo abaixo de Fechamento na barra lateral. Clique novamente em Fechamento para recolher essas opções; os dashboards continuam na página principal. Para detalhar os itens, expanda Fechamento e clique em Margens. Para consultar o catálogo, clique em Custos. Faturamento continua em sua própria área do menu. A Diretoria consulta os dashboards e as duas opções, sem importar ou aplicar alterações.",
           "screenshot_ids": [
-            "margens"
+            "fechamento-dashboard",
+            "fechamento-dashboard-graficos"
+          ]
+        },
+        {
+          "title": "Consultar os dashboards do mês",
+          "path": "Menu lateral → Fechamento → Mês dos dashboards do fechamento",
+          "text": "Em Mês dos dashboards do fechamento, escolha a referência e confira o arquivo e a data da base. Compare Venda total, CMV total, Margem do fechamento e Margem do fechamento %. Confira também os itens, os itens sem margem, os impostos, os fretes e as comissões do fechamento. Os gráficos Venda e margem por filial e Venda e margem por centro de custo mostram a composição do mês consultado. Não informado significa que falta um componente na origem; não trate essa indicação como custo zero. Use Atualizar dashboards para conferir a base novamente antes de comparar os valores com o detalhamento em Margens.",
+          "screenshot_ids": [
+            "fechamento-dashboard",
+            "fechamento-dashboard-graficos"
           ]
         },
         {
@@ -1791,13 +1801,14 @@
         {
           "title": "Consultar o catálogo de custos do fechamento",
           "path": "Menu lateral → Fechamento → Custos → Custos cadastrados e histórico",
-          "text": "Selecione a Versão da base de custos, pesquise em Buscar código ou produto e clique em Consultar custos. Confira arquivo, referência, código, produto, peso e custo unitário; percorra as páginas quando necessário. Importar custos abre a área correspondente em Importar Bases somente para acessos autorizados. Aplicar custos ao fechamento aparece somente para quem tem autorização de aplicação; consulte o capítulo próprio antes de confirmar qualquer recálculo. Consultar ou trocar de sub-aba não altera o fechamento.",
+          "text": "Selecione a Versão da base de custos, pesquise em Buscar código ou produto e clique em Consultar custos. Confira arquivo, referência, código, produto, peso e custo unitário; percorra as páginas quando necessário. Importar custos abre a área correspondente em Importar Bases somente para acessos autorizados. Aplicar custos ao fechamento aparece somente para quem tem autorização de aplicação; consulte o capítulo próprio antes de confirmar qualquer recálculo. Consultar ou trocar de opção no menu lateral não altera o fechamento.",
           "screenshot_ids": [
             "fechamento-custos"
           ]
         }
       ],
       "checks": [
+        "Reconheço os dashboards na página Fechamento e consigo expandir e recolher Margens e Custos no menu lateral.",
         "Mês e origem do fechamento conferidos.",
         "Os cards filtrados são usados para avaliar o recorte.",
         "A origem da margem foi lida no detalhe de um item.",
@@ -1822,15 +1833,18 @@
       ],
       "source_files": [
         "src/components/Closing.tsx",
+        "src/components/ClosingDashboard.tsx",
         "src/components/ProductCostsCatalog.tsx",
         "src/components/Commercial.tsx",
         "src/lib/commercial-parser.mjs",
         "docs/custos-fechamento.md"
       ],
       "screenshot_ids": [
+        "fechamento-dashboard",
         "margens",
         "margens-detalhe",
-        "fechamento-custos"
+        "fechamento-custos",
+        "fechamento-dashboard-graficos"
       ]
     },
     {
@@ -3111,7 +3125,7 @@
       "file": "login.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "315d43b5de410db5d2ffc98a025e2ee8984c40bb987840f3269130e39d803cad"
+      "sha256": "c34a90565a3eee3c71c50917623fa52f94ef1c4a5bc4ce0f80bd317c78c78f23"
     },
     {
       "id": "recuperar-senha",
@@ -3121,7 +3135,7 @@
       "file": "recuperar-senha.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "852fa2ca59a83e54c5e7a1fc2836a910d516b781a0f7c973fba48829ce9335a6"
+      "sha256": "65ca6be6d946b994a4e14ff2387eb7249a6a58ce1389f2fdaaa2b1951b8303ac"
     },
     {
       "id": "painel-gerencial",
@@ -3181,7 +3195,7 @@
       "file": "importar-caixa-bancos.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "a678664e49ae5b4ff49e852c217c20acb9bc2305e46c1c97725f51f5e646b5f2"
+      "sha256": "d9268cd6c81aee0e4d4c220de1c91847237af241ba3830f87e2ce8c23d958ca0"
     },
     {
       "id": "contas-pagar-resumo",
@@ -3221,7 +3235,7 @@
       "file": "contas-pagar-previsoes-importacao.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "e08fbc370798393ef04814f061a2f1db5b439e58e83c8f46b4cff372d2a53b92"
+      "sha256": "406d7d154b0ea344c920b10b023bc57352b4b5f770a7a47c4bd33e1237abfe37"
     },
     {
       "id": "contas-pagar-previa-importacao",
@@ -3241,7 +3255,7 @@
       "file": "contas-pagar-pagos-importacao.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "6488a783fc96ec9987ee29e297eafdaad09f63407a0c5302893aee8ba60bfef6"
+      "sha256": "cf1d3abbe2684f3913e605fbe7fac4cc923f85c7768442c3ee9b2e52c75d725f"
     },
     {
       "id": "contas-pagar-pagos-previa",
@@ -3281,7 +3295,7 @@
       "file": "cr-titulos.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "cf71a0673adf22d6388a6fd85887c5b8990ef55b228ea3a6340a5fd4f7d77c64"
+      "sha256": "ed1fdc993038bd3f358ecd4bf74824c028d66a9c76d832e0f6b90234db299b63"
     },
     {
       "id": "imports-receber",
@@ -3291,7 +3305,7 @@
       "file": "imports-receber.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "ca7126c4c3c2b5940f405c52abd12ddaa43b27871156dbcfa5b5bc77101b9d1b"
+      "sha256": "3ace23ae6d83e00bd7840a09d31a395936be8f7efd6741040d3b6fa83cb3eef1"
     },
     {
       "id": "cr-previa-ausentes",
@@ -3311,7 +3325,7 @@
       "file": "imports-receber-quitados.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "8418340d6144b9e481a65b27bf96bf34833c812111d648241e30f37e5fefd1eb"
+      "sha256": "38108966774997388802cbdd5d115d8d98c28eccb50e9545218c3afed2af9d2a"
     },
     {
       "id": "cr-previa-quitados",
@@ -3411,7 +3425,7 @@
       "file": "imports-contatos.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "a8a7550ac5f8701efe13a86c0b3afe4e314c49a2dafdcf7a5b0dafe59f7ce50b"
+      "sha256": "1aa30b4c5dc7a342fc3c8b897f9e323d4a0f3a552c7c78497ed0fe4336ac6d8c"
     },
     {
       "id": "imports-descricoes",
@@ -3421,7 +3435,7 @@
       "file": "imports-descricoes.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "32ac6cdf7fa69232a3893bb6e9dbe04bffe85ded98b38b931b78baf55c4ca199"
+      "sha256": "891869c6691aa1217e375437f080447a929e99573f98bfbb32672437c7b0af69"
     },
     {
       "id": "cobranca-tempo",
@@ -3491,7 +3505,7 @@
       "file": "faturamento.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "78e0504d68c33066f91a56c3eb6f41fe10a051cf6b764e190da6546a44c0731a"
+      "sha256": "8673cb310690d7432a9c12bdbc06530adcc93ea844fef991cdb9f67ebe30c984"
     },
     {
       "id": "faturamento-detalhe",
@@ -3511,7 +3525,7 @@
       "file": "margens.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "6fe270bf8a3fd201860b939d4df86e477cfa6f8ea6c38e94fb9c9f26e4df17af"
+      "sha256": "85ad9b766bee3afc0580a3b3cc6e64ec266d98c6aa31145317af082fbb1a9a75"
     },
     {
       "id": "margens-detalhe",
@@ -3571,7 +3585,7 @@
       "file": "importar-bases.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "e08fbc370798393ef04814f061a2f1db5b439e58e83c8f46b4cff372d2a53b92"
+      "sha256": "406d7d154b0ea344c920b10b023bc57352b4b5f770a7a47c4bd33e1237abfe37"
     },
     {
       "id": "importar-estoque",
@@ -3581,7 +3595,7 @@
       "file": "importar-estoque.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "c1d6273552a375c9ea6ba076f5ded87f8fa95db4c9a1183b5522011ef213a9fd"
+      "sha256": "87dea6e1b533e33a2495542d64127ce59aecb50883bc42a5f63bf8131ea389e0"
     },
     {
       "id": "resumo-diretoria-importacao",
@@ -3591,7 +3605,7 @@
       "file": "resumo-diretoria-importacao.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "759ba9e151f4b89247262dfb3229f0b55c2444f928464f80a9d45acd9a7ad102"
+      "sha256": "ff768c1bef9a854f14cf6593a58e84357a159d9a6dc53138ff4dc1b3a5508880"
     },
     {
       "id": "imports-fechamento",
@@ -3601,7 +3615,7 @@
       "file": "imports-fechamento.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "1ab54c2cfbcaab0437df5dde327e944debfafab4793a2da0f25d13bf5c6020ce"
+      "sha256": "5e150be9c41fec08433f9304cfdc97f0260251a45d02457adad31fc2ad48b7f2"
     },
     {
       "id": "imports-fechamento-previa",
@@ -3621,7 +3635,7 @@
       "file": "imports-rh.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "321ae37f8d6e2e2f4c254a103443ad98a0f67d9d9dc52cb4f6af4242b88622f7"
+      "sha256": "7a183bfd926c0a47dae9702efd8a14feeafd2f734023bec956bfd6956e7b9922"
     },
     {
       "id": "imports-rh-previa",
@@ -3641,7 +3655,7 @@
       "file": "imports-custos.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "bd4cef61d0474280e742528c39ac0f09abc6f848884766dab7fabd8126593839"
+      "sha256": "d1dd1f03cb783823f63f9f9414d5873aec617228192c92c5216fa36f75ece309"
     },
     {
       "id": "imports-custos-previa",
@@ -3691,7 +3705,7 @@
       "file": "administracao-usuarios.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "fca5682bb879d868b7c00ce5589e087fb2a35ac8f3195a82bcb61055e75aa56c"
+      "sha256": "85ab8495c85aac2925f4d72c75a434ba2b95783fd00a803467687ae6b58b09dc"
     },
     {
       "id": "administracao-vincular-usuario",
@@ -3701,7 +3715,7 @@
       "file": "administracao-vincular-usuario.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "900847de5ad82dfd2cf93492482bd79e6774e58c5939e43cb2148f4c18cd7780"
+      "sha256": "e84ca80ca291a043a2d72963af2901b4da61e602753ea01faeb16733508fe763"
     },
     {
       "id": "administracao-cobradoras",
@@ -3711,7 +3725,7 @@
       "file": "administracao-cobradoras.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "fb2832c3f02db7c20cdfeaaf79203fbc85a960c35b63c089e29dcac9f3c28604"
+      "sha256": "cbd0d02a2d08be79f2e240bb0701ad13f6a6e38ff381c129955ed9f4a1b621e3"
     },
     {
       "id": "administracao-vincular-cobradora",
@@ -3721,7 +3735,7 @@
       "file": "administracao-vincular-cobradora.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "fb2832c3f02db7c20cdfeaaf79203fbc85a960c35b63c089e29dcac9f3c28604"
+      "sha256": "cbd0d02a2d08be79f2e240bb0701ad13f6a6e38ff381c129955ed9f4a1b621e3"
     },
     {
       "id": "administracao-auditoria",
@@ -3731,23 +3745,43 @@
       "file": "administracao-auditoria.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "674a720b2d465f89fb9c645cca24e790f3022cf7547b478220095de5968c6754"
+      "sha256": "5cdb0d734e2d79aec94efad91302dd15d95804e95ec2ec0ce4a456a4ac5300a0"
     },
     {
       "id": "fechamento-custos",
       "number": "64",
-      "title": "Fechamento: sub-aba Custos",
+      "title": "Fechamento: opção Custos no menu lateral",
       "path": "Menu lateral → Fechamento → Custos",
       "file": "fechamento-custos.png",
       "width": 1440,
       "height": 1050,
-      "sha256": "12911963bd1968fbb84ba7d6f250eb12e221ede18e77bc1b65d22b4a5e046dba"
+      "sha256": "7f67533f3e2736d105ce147f9b54669c4c18272a326db4f9a6e4c7ed86fadf27"
+    },
+    {
+      "id": "fechamento-dashboard",
+      "number": "65",
+      "title": "Dashboards do fechamento e opções no menu lateral",
+      "path": "Menu lateral → Fechamento",
+      "file": "fechamento-dashboard.png",
+      "width": 1440,
+      "height": 1050,
+      "sha256": "07f79e645ee3a7d4d34dfbd2753daf57c699854fcfcb35862f82e2bf3d3e9354"
+    },
+    {
+      "id": "fechamento-dashboard-graficos",
+      "number": "66",
+      "title": "Venda e margem por filial e centro de custo",
+      "path": "Menu lateral → Fechamento → Gráficos do mês",
+      "file": "fechamento-dashboard-graficos.png",
+      "width": 1140,
+      "height": 301,
+      "sha256": "093aa40a0b961d3b5a9346dd73dcc85640507db87d5ccd53afff3010e29bd4f6"
     }
   ],
   "roles": [
     {
       "title": "Diretor",
-      "can": "Painel Gerencial, Caixa / Bancos, Contas a Pagar, Contas a Receber, Cobrança, Comissões, Faturamento, Margens, RH / DP e Administração em consulta. Pode filtrar, detalhar e exportar onde o módulo oferece exportação autorizada. Não importa, concilia, valida pagamentos, inicia atendimentos ou altera dados.",
+      "can": "Painel Gerencial, Caixa / Bancos, Contas a Pagar, Contas a Receber, Cobrança, Comissões, Faturamento, Fechamento (dashboards, Margens e Custos), RH / DP e Administração em consulta. Pode filtrar, detalhar e exportar onde o módulo oferece exportação autorizada. Não importa, concilia, valida pagamentos, inicia atendimentos ou altera dados.",
       "notes": "Consulta Usuários, Cobradoras e Auditoria. Importar Bases não aparece."
     },
     {

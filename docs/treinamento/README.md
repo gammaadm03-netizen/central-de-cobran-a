@@ -1,6 +1,6 @@
 # Treinamento operacional ilustrado
 
-Material de referência da Central Financeira **0.18.1**, elaborado em **22/10/2026**. Reúne rotinas por área, caminhos de menus, campos, botões, conferências, exercícios e capturas da interface.
+Material de referência da Central Financeira **0.18.2**, elaborado em **22/10/2026**. Reúne rotinas por área, caminhos de menus, campos, botões, conferências, exercícios e capturas da interface.
 
 - [Guia completo em texto](TREINAMENTO.md)
 - [Versão navegável publicada](https://central-de-cobran-a.pages.dev/treinamento/)

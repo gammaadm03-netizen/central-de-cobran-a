@@ -1,0 +1,28 @@
+.closing-dashboard{min-width:0}
+.closing-dashboard-controls{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;flex-wrap:wrap}
+.closing-dashboard-controls>.field{width:280px;max-width:100%}
+.closing-source{margin-top:16px}
+.closing-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}
+.closing-kpi{padding:22px;border:1px solid var(--border);border-radius:11px;background:#fff;min-width:0;box-shadow:0 2px 4px #233d2a02}
+.closing-kpi h3{font-size:11px;color:#6c8475;font-weight:650;margin-bottom:12px}
+.closing-kpi strong{display:block;font-size:26px;line-height:1.25;color:var(--green-deep);overflow-wrap:anywhere}
+.closing-kpi small{display:block;color:#82978a;font-size:10px;margin-top:9px}
+.closing-breakdowns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.closing-breakdown{min-width:0;margin-bottom:0}
+.closing-breakdown>h3{margin-bottom:8px}
+.closing-breakdown .table-wrap{max-height:520px}
+.closing-breakdown th[scope=row]{background:transparent;white-space:normal;min-width:110px;font-size:11px;letter-spacing:0;color:#40594b}
+.closing-breakdown td{min-width:95px;white-space:nowrap}
+.closing-chart-legend{display:flex;gap:16px;margin-top:14px;color:#6f8376;font-size:10px}
+.closing-chart-legend span:before{content:'';display:inline-block;width:8px;height:8px;margin-right:5px;border-radius:2px;background:#1b7956}
+.closing-chart-legend span:last-child:before{background:#a7be46}
+.closing-data-bar{display:block;height:5px;min-width:0;max-width:100%;margin-top:7px;border-radius:3px;background:#1b7956}
+.closing-data-bar-margin{background:#a7be46}
+.closing-negative{color:#b3443d}
+.closing-data-bar-negative{background:#c15950}
+@media(max-width:1150px){.closing-breakdowns{grid-template-columns:1fr}.closing-kpi strong{font-size:23px}}
+@media(max-width:760px){.closing-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.closing-kpi{padding:17px}.closing-kpi strong{font-size:22px}.closing-dashboard-controls{align-items:stretch}.closing-dashboard-controls>.field{width:100%}}
+@media(max-width:420px){.closing-kpis{grid-template-columns:1fr}}
+
+@media(hover:hover) and (pointer:fine){.closing-kpi{transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease}.closing-kpi:hover{transform:translateY(-3px);border-color:#8bb99a;box-shadow:0 8px 22px #135b4514}}
+@media(prefers-reduced-motion:reduce){.closing-kpi{transition:none}.closing-kpi:hover{transform:none}}

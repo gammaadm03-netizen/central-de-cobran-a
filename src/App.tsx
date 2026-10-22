@@ -11,7 +11,7 @@ import Receivables from './components/Receivables';
 import Collections from './components/Collections';
 import ReceivableCommissions from './components/ReceivableCommissions';
 import Commercial from './components/Commercial';
-import Closing from './components/Closing';
+import Closing, { type ClosingView } from './components/Closing';
 import HumanResources from './components/HumanResources';
 import PasswordRecovery from './components/PasswordRecovery';
 import PasswordResetRequest from './components/PasswordResetRequest';
@@ -31,18 +31,24 @@ const modules = [
   { id: 'cobranca', label: 'Cobrança', icon: '◉', description: 'Central de cobrança, atendimentos e acompanhamento das carteiras.' },
   { id: 'comissoes', label: 'Comissões', icon: '%', description: 'Regras e apuração com histórico de vigência.' },
   { id: 'faturamento', label: 'Faturamento', icon: '▥', description: 'Receita e acompanhamento de metas.' },
-  { id: 'fechamento', label: 'Fechamento', icon: '◷', description: 'Margens e custos do fechamento.' },
+  { id: 'fechamento', label: 'Fechamento', icon: '◷', description: 'Dashboards, margens e custos do fechamento.' },
   { id: 'rh_dp', label: 'RH / DP', icon: '♙', description: 'Equipe, folha e benefícios.' },
   { id: 'importar_bases', label: 'Importar Bases', icon: '⇧', description: 'Atualização centralizada das bases oficiais.' },
 ];
+
+const closingChildren = [
+  { id: 'fechamento_margens', label: 'Margens', icon: '%' },
+  { id: 'fechamento_custos', label: 'Custos', icon: '▤' },
+];
+const isClosingPage = (id: string) => id === 'fechamento' || closingChildren.some(child => child.id === id);
 
 function canReadModule(access: Access, id: string) {
   return permits(access, id === 'fechamento' ? 'margens' : id);
 }
 
-function Brand({ onClick }: { onClick?: () => void }) {
+function Brand({ onClick, disabled = false }: { onClick?: () => void; disabled?: boolean }) {
   const inner = <><span className="brand-mark" aria-hidden="true"><img src="/ecoplast-logo.png" alt="" width="58" height="58" /></span><span className="brand-copy"><strong>Central Financeira</strong><small>GRUPO ECOPLAST</small></span></>;
-  return onClick ? <button type="button" className="brand" onClick={onClick} aria-label="Central Financeira — início">{inner}</button> : <div className="brand">{inner}</div>;
+  return onClick ? <button type="button" className="brand" disabled={disabled} onClick={onClick} aria-label="Central Financeira — início">{inner}</button> : <div className="brand">{inner}</div>;
 }
 
 function Login({ onLogin, notice }: { onLogin: (username: string, password: string) => Promise<void>; notice: string }) {
@@ -78,6 +84,8 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
   const [notice, setNotice] = useState(initialNotice);
   const [busyLogout, setBusyLogout] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [closingExpanded, setClosingExpanded] = useState(false);
+  const [closingBusy, setClosingBusy] = useState(false);
   const [clientRevision, setClientRevision] = useState(0);
   const loggingOut = useRef(false);
   const sessionGeneration = useRef(0);
@@ -93,6 +101,8 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
     clearClientSession();
     setClientRevision(value => value + 1);
     setMobileOpen(false);
+    setClosingExpanded(false);
+    setClosingBusy(false);
   }
 
   async function reloadAccess() {
@@ -175,10 +185,20 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
   const visibleModules = modules.filter(module => canReadModule(access, module.id));
   const isManager = permits(access, 'usuarios', 'admin') && access.profile.role_key === 'gerente_geral';
   const canReadAdministration = isManager || access.profile.role_key === 'diretor' && permits(access, 'usuarios');
-  const activeModule = visibleModules.find(module => module.id === selected);
+  const activeModule = visibleModules.find(module => module.id === selected || module.id === 'fechamento' && isClosingPage(selected));
   const safeSelected = activeModule ? selected : canReadAdministration && selected === 'administracao' ? selected : visibleModules[0]?.id ?? '';
-  const title = safeSelected === 'administracao' ? 'Administração' : modules.find(module => module.id === safeSelected)?.label ?? 'Acesso à Central';
-  function navigate(id: string) { setSelected(id); setMobileOpen(false); }
+  const title = safeSelected === 'administracao' ? 'Administração' : closingChildren.find(child => child.id === safeSelected)?.label ?? modules.find(module => module.id === safeSelected)?.label ?? 'Acesso à Central';
+  function navigate(id: string) { if (closingBusy) return; setSelected(id); setMobileOpen(false); }
+  function showClosing(view: ClosingView) {
+    if (closingBusy) return;
+    setClosingExpanded(true);
+    navigate(view === 'dashboard' ? 'fechamento' : view === 'margins' ? 'fechamento_margens' : 'fechamento_custos');
+  }
+  function toggleClosing() {
+    if (closingBusy) return;
+    setSelected('fechamento');
+    setClosingExpanded(previous => !previous);
+  }
   let content: ReactNode;
   if (safeSelected === 'administracao' && canReadAdministration) content = <Administration canManage={isManager} onAccessChanged={reloadAccess} />;
   else if (safeSelected === 'painel') content = <ExecutiveDashboard canManage={isManager && permits(access, 'resumo_diretoria', 'write')} canReadDirectorSummary={permits(access, 'resumo_diretoria')} canViewPayables={permits(access, 'contas_pagar')} canViewCash={permits(access, 'caixa')} canViewReceivables={permits(access, 'contas_receber')} onDirectorInputs={isManager && permits(access, 'resumo_diretoria', 'write') && permits(access, 'importar_bases') ? () => { setImportArea('resumo_diretoria'); navigate('importar_bases'); } : undefined} onNavigate={navigate} />;
@@ -188,10 +208,15 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
   else if (safeSelected === 'cobranca') content = <Collections canWrite={permits(access, 'cobranca', 'write')} canManage={permits(access, 'contas_receber', 'write')} canReadFinance={permits(access, 'contas_receber', 'read')} canValidate={permits(access, 'contas_receber', 'validate')} collectorId={access.collector_id} isCollector={['cobradora_1', 'cobradora_2'].includes(access.profile.role_key)} />;
   else if (safeSelected === 'comissoes') content = <ReceivableCommissions canConfigure={isManager && permits(access, 'comissoes', 'write')} canExport={permits(access, 'comissoes', 'export')} onCollections={permits(access, 'cobranca') ? () => navigate('cobranca') : undefined} />;
   else if (safeSelected === 'faturamento') content = <Commercial view="sales" canExport={permits(access, 'faturamento', 'export')} onImport={permits(access, 'importar_bases') && permits(access, 'fechamento', 'import') && permits(access, 'faturamento') ? () => { setImportArea('fechamento'); navigate('importar_bases'); } : undefined} />;
-  else if (safeSelected === 'fechamento') content = <Closing canExportMargins={permits(access, 'margens', 'export')} canApplyCosts={permits(access, 'importar_bases') && permits(access, 'custos', 'import') && permits(access, 'fechamento', 'import') && permits(access, 'faturamento')} onImportClosing={permits(access, 'importar_bases') && permits(access, 'fechamento', 'import') && permits(access, 'faturamento') ? () => { setImportArea('fechamento'); navigate('importar_bases'); } : undefined} onImportCosts={permits(access, 'importar_bases') && permits(access, 'custos', 'import') ? () => { setImportArea('custos'); navigate('importar_bases'); } : undefined} />;
+  else if (isClosingPage(safeSelected)) content = <Closing view={safeSelected === 'fechamento_margens' ? 'margins' : safeSelected === 'fechamento_custos' ? 'costs' : 'dashboard'} onViewChange={showClosing} onBusyChange={setClosingBusy} canExportMargins={permits(access, 'margens', 'export')} canApplyCosts={permits(access, 'importar_bases') && permits(access, 'custos', 'import') && permits(access, 'fechamento', 'import') && permits(access, 'faturamento')} onImportClosing={permits(access, 'importar_bases') && permits(access, 'fechamento', 'import') && permits(access, 'faturamento') ? () => { setImportArea('fechamento'); navigate('importar_bases'); } : undefined} onImportCosts={permits(access, 'importar_bases') && permits(access, 'custos', 'import') ? () => { setImportArea('custos'); navigate('importar_bases'); } : undefined} />;
   else if (safeSelected === 'rh_dp') content = <HumanResources canExport={permits(access, 'rh_dp', 'export')} onImport={permits(access, 'importar_bases') && permits(access, 'rh_dp', 'write') && permits(access, 'rh_dp', 'import') ? () => { setImportArea('rh_dp'); navigate('importar_bases'); } : undefined} />;
   else if (safeSelected === 'contas_pagar') content = <><Payables canWrite={permits(access, 'contas_pagar', 'write')} canConfigure={isManager && permits(access, 'contas_pagar', 'write')} onImport={permits(access, 'contas_pagar', 'import') ? () => { setImportArea('contas_pagar'); navigate('importar_bases'); } : undefined} />{permits(access, 'mensagens_cp') && <ManagementMessages canWrite={permits(access, 'mensagens_cp', 'write')} />}</>;
   else content = <section className="panel"><h2>Nenhum módulo autorizado</h2><p>Procure a Gerência Geral para revisar suas permissões.</p></section>;
 
-  return <div className="app-shell">{mobileOpen && <button className="sidebar-backdrop" aria-label="Fechar navegação" onClick={() => setMobileOpen(false)} />}<aside className={`sidebar ${mobileOpen ? 'is-open' : ''}`}><Brand onClick={() => navigate(visibleModules.find(module => module.id === 'painel')?.id ?? visibleModules[0]?.id ?? '')} /><span className="nav-label">ESPAÇO DE TRABALHO</span><nav aria-label="Módulos da Central">{visibleModules.map(module => <button key={module.id} className={`nav-item ${safeSelected === module.id ? 'active' : ''}`} onClick={() => navigate(module.id)} aria-current={safeSelected === module.id ? 'page' : undefined}><span className="nav-icon" aria-hidden="true">{module.icon}</span>{module.label}</button>)}</nav>{canReadAdministration && <div className="admin-nav"><span className="nav-label">GESTÃO DO SISTEMA</span><button className={`nav-item ${safeSelected === 'administracao' ? 'active' : ''}`} onClick={() => navigate('administracao')}><span className="nav-icon" aria-hidden="true">⚙</span>Administração</button></div>}<div className="sidebar-footer"><span className="small-shield">✓</span><div>Acesso individual<small>Permissões verificadas no banco</small></div></div></aside><div className="main-shell"><header className="topbar"><div className="topbar-title"><button className="menu-button" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Abrir navegação" aria-expanded={mobileOpen}>☰</button><span>Central Financeira <span className="breadcrumb-separator">/</span> <strong>{title}</strong></span></div><div className="user-menu"><span className="avatar" aria-hidden="true">{access.profile.display_name.slice(0, 1).toUpperCase()}</span><div><strong>{access.profile.display_name}</strong><small>{roleNames[access.profile.role_key]}</small></div><button className="logout-button" disabled={busyLogout} onClick={() => void logout()}>{busyLogout ? 'Saindo…' : 'Sair'}<span aria-hidden="true">↪</span></button></div></header><main className="workspace"><div className="page-heading"><div><span className="eyebrow">GRUPO ECOPLAST</span><h1>{title}</h1></div><span className="time-zone">Horário oficial · Brasília</span></div><MonthlyCampaignCard />{content}</main><footer className="app-footer"><span>Central Financeira · Grupo Ecoplast</span><span>Versão {version} · America/Sao_Paulo</span></footer></div></div>;
+  return <div className="app-shell">{mobileOpen && <button className="sidebar-backdrop" aria-label="Fechar navegação" onClick={() => setMobileOpen(false)} />}<aside className={`sidebar ${mobileOpen ? 'is-open' : ''}`}><Brand disabled={closingBusy} onClick={() => navigate(visibleModules.find(module => module.id === 'painel')?.id ?? visibleModules[0]?.id ?? '')} /><span className="nav-label">ESPAÇO DE TRABALHO</span><nav aria-label="Módulos da Central">{visibleModules.map(module => module.id === 'fechamento' ? <div key={module.id} className="nav-closing-group">
+        <button type="button" className={`nav-item ${safeSelected === 'fechamento' ? 'active' : ''} ${isClosingPage(safeSelected) ? 'nav-parent-current' : ''}`} onClick={toggleClosing} aria-current={safeSelected === 'fechamento' ? 'page' : undefined} aria-expanded={closingExpanded} aria-controls="closing-submenu" disabled={closingBusy}><span className="nav-icon" aria-hidden="true">{module.icon}</span><span>{module.label}</span><span className="nav-chevron" aria-hidden="true">{closingExpanded ? '⌃' : '⌄'}</span></button>
+        <div id="closing-submenu" className="nav-submenu" role="group" aria-label="Áreas do fechamento" hidden={!closingExpanded}>
+          {closingChildren.map(child => <button type="button" key={child.id} className={`nav-item nav-subitem ${safeSelected === child.id ? 'active' : ''}`} disabled={closingBusy} aria-current={safeSelected === child.id ? 'page' : undefined} onClick={() => showClosing(child.id === 'fechamento_margens' ? 'margins' : 'costs')}><span className="nav-icon" aria-hidden="true">{child.icon}</span>{child.label}</button>)}
+        </div>
+      </div> : <button key={module.id} disabled={closingBusy} className={`nav-item ${safeSelected === module.id ? 'active' : ''}`} onClick={() => navigate(module.id)} aria-current={safeSelected === module.id ? 'page' : undefined}><span className="nav-icon" aria-hidden="true">{module.icon}</span>{module.label}</button>)}</nav>{canReadAdministration && <div className="admin-nav"><span className="nav-label">GESTÃO DO SISTEMA</span><button disabled={closingBusy} className={`nav-item ${safeSelected === 'administracao' ? 'active' : ''}`} onClick={() => navigate('administracao')}><span className="nav-icon" aria-hidden="true">⚙</span>Administração</button></div>}<div className="sidebar-footer"><span className="small-shield">✓</span><div>Acesso individual<small>Permissões verificadas no banco</small></div></div></aside><div className="main-shell"><header className="topbar"><div className="topbar-title"><button className="menu-button" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Abrir navegação" aria-expanded={mobileOpen}>☰</button><span>Central Financeira <span className="breadcrumb-separator">/</span> <strong>{title}</strong></span></div><div className="user-menu"><span className="avatar" aria-hidden="true">{access.profile.display_name.slice(0, 1).toUpperCase()}</span><div><strong>{access.profile.display_name}</strong><small>{roleNames[access.profile.role_key]}</small></div><button className="logout-button" disabled={busyLogout} onClick={() => void logout()}>{busyLogout ? 'Saindo…' : 'Sair'}<span aria-hidden="true">↪</span></button></div></header><main className="workspace"><div className="page-heading"><div><span className="eyebrow">GRUPO ECOPLAST</span><h1>{title}</h1></div><span className="time-zone">Horário oficial · Brasília</span></div><MonthlyCampaignCard />{content}</main><footer className="app-footer"><span>Central Financeira · Grupo Ecoplast</span><span>Versão {version} · America/Sao_Paulo</span></footer></div></div>;
 }
