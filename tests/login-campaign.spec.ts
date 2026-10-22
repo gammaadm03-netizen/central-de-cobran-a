@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
-const moduleLabels = ['Painel Gerencial', 'Caixa / Bancos', 'Contas a Pagar', 'Contas a Receber', 'Cobrança', 'Comissões', 'Faturamento', 'Margens', 'RH / DP', 'Importar Bases'];
+const moduleLabels = ['Painel Gerencial', 'Caixa / Bancos', 'Contas a Pagar', 'Contas a Receber', 'Cobrança', 'Comissões', 'Faturamento', 'Fechamento', 'RH / DP', 'Importar Bases'];
 const resources = ['painel', 'caixa', 'contas_pagar', 'contas_receber', 'cobranca', 'comissoes', 'faturamento', 'margens', 'rh_dp', 'importar_bases'];
 
 async function setup(page: Page, now = '2026-10-19T15:00:00Z') {

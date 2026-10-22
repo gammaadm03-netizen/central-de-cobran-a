@@ -27,7 +27,7 @@ function problemLabel(code: string) {
   if (key.includes('OVERFLOW') || key.includes('PRECISION')) return 'Valor acima do limite de precisão';
   return 'Confira os dados desta linha antes de aplicar';
 }
-export default function CostClosingApplication({ costSource, disabled, onBusyChange }: { costSource: CostSource; disabled: boolean; onBusyChange: (busy: boolean) => void }) {
+export default function CostClosingApplication({ costSource, disabled, onBusyChange, onApplied }: { costSource: CostSource; disabled: boolean; onBusyChange: (busy: boolean) => void; onApplied?: () => void }) {
   const [month,setMonth] = useState(() => officialToday().slice(0,7)), [analysis,setAnalysis] = useState<CostRecalculation | null>(null);
   const [reviewed,setReviewed] = useState(false), [busy,setBusy] = useState<'preview'|'commit'|null>(null), [pending,setPending] = useState<CostRecalculationBody|null>(null);
   const [error,setError] = useState(''), [success,setSuccess] = useState(''), [page,setPage] = useState(0);
@@ -51,7 +51,7 @@ export default function CostClosingApplication({ costSource, disabled, onBusyCha
     try{const result=await productCostRequest<{format_version:string;import_id:string;source_import_id:string;cost_import_id:string;request_id:string;month:string;row_count:number;idempotent?:boolean}>(body);
       if(current!==generation.current)return;
       if(result?.format_version!=='costs-recalculation-v1'||!costUuid(result.import_id)||result.cost_import_id!==body.cost_import_id||result.source_import_id!==body.previous_import_id||result.request_id!==body.request_id||result.month!==body.month||result.row_count!==analysis?.row_count)throw new Error('unconfirmed_cost_recalculation');
-      setPending(null);setAnalysis(null);setReviewed(false);setSuccess(`${result.idempotent?'Esta aplicação já estava registrada':'Custos aplicados e margens recalculadas'}: ${result.row_count.toLocaleString('pt-BR')} itens em ${month.split('-').reverse().join('/')}. A nova versão está disponível em Faturamento e Margens; o fechamento anterior e os arquivos originais permanecem no histórico.`);
+      setPending(null);setAnalysis(null);setReviewed(false);setSuccess(`${result.idempotent?'Esta aplicação já estava registrada':'Custos aplicados e margens recalculadas'}: ${result.row_count.toLocaleString('pt-BR')} itens em ${month.split('-').reverse().join('/')}. A nova versão está disponível em Faturamento e Fechamento → Margens; o fechamento anterior e os arquivos originais permanecem no histórico.`);onApplied?.();
     }catch(failure){if(current===generation.current){const code=failure&&typeof failure==='object'&&'code'in failure?String(failure.code):'';
       if(['40001','22023','22003','23514','42501','P0045','PGRST202','PGRST301','PGRST303'].includes(code)){setPending(null);setReviewed(false);setAnalysis(null);}
       else setPending(body);setError(productCostError(failure,'A confirmação da aplicação não chegou. O mês, a base de custos e o protocolo foram preservados. Confira o mesmo envio pela confirmação pendente.'));

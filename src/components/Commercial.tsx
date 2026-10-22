@@ -20,7 +20,7 @@ function validReport(data: CommercialReport) {
   return data.rows.every(row => typeof row.id === 'string' && typeof row.product === 'string' && typeof row.code === 'string' && typeof row.client === 'string' && typeof row.branch === 'string' && typeof row.invoice === 'string' && typeof row.employee === 'string' && typeof row.cost_center === 'string' && Number.isSafeInteger(row.sale_cents) && [row.freight_cents, row.tax_cents, row.cost_cents, row.commission_cents, row.margin_cents].every(nullableInteger) && nullablePercent(row.margin_percent) && ['PROVIDED', 'CALCULATED', 'UNAVAILABLE'].includes(row.margin_source));
 }
 
-export default function Commercial({ view, canExport = false, onImport }: { view: 'sales' | 'margins'; canExport?: boolean; onImport?: () => void }) {
+export default function Commercial({ view, canExport = false, onImport, refreshKey = 0 }: { view: 'sales' | 'margins'; canExport?: boolean; onImport?: () => void; refreshKey?: number }) {
   const margins = view === 'margins';
   const [filters, setFilters] = useState<CommercialFilters>(initialFilters), [search, setSearch] = useState('');
   const [page, setPage] = useState(0), [refresh, setRefresh] = useState(0), [report, setReport] = useState<CommercialReport | null>(null);
@@ -44,7 +44,7 @@ export default function Commercial({ view, canExport = false, onImport }: { view
       if (page > last) setPage(last); else setReport(data);
     }).catch(failure => { if (!abort.signal.aborted) setError(commercialError(failure, 'Não foi possível consultar o fechamento. Atualize para tentar novamente.')); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
-  }, [filters, page, refresh]);
+  }, [filters, page, refresh, refreshKey]);
   function change(key: keyof CommercialFilters, value: string) { setFilters(previous => ({ ...previous, [key]: value })); setPage(0); setProgress(''); }
   function clearFilters() { setSearch(''); setFilters(previous => ({ ...initialFilters, month: previous.month || report?.month || '' })); setPage(0); setProgress(''); }
   async function exportWorkbook() {

@@ -4,7 +4,7 @@ const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const now = '2026-10-19T15:00:00Z';
 const day = '2026-10-19';
 const uuid = (value: number) => `81000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
-const moduleLabels = ['Painel Gerencial', 'Caixa / Bancos', 'Contas a Pagar', 'Contas a Receber', 'Cobrança', 'Comissões', 'Faturamento', 'Margens', 'RH / DP'];
+const moduleLabels = ['Painel Gerencial', 'Caixa / Bancos', 'Contas a Pagar', 'Contas a Receber', 'Cobrança', 'Comissões', 'Faturamento', 'Fechamento', 'RH / DP'];
 const resources = ['painel', 'caixa', 'contas_pagar', 'contas_receber', 'cobranca', 'comissoes', 'faturamento', 'margens', 'rh_dp', 'resumo_diretoria', 'mensagens_cp', 'usuarios', 'configuracoes', 'auditoria'];
 const workflow = { version: '029', normal_pause: true, finish_requires_started: true, pending_read_only: true, returns_priority: true };
 const priority = { collector_id: null, due_count: 0, total_cents: 0, next_title_id: null, next_due_date: null };

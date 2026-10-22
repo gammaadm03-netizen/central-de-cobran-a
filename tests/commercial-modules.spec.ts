@@ -62,7 +62,7 @@ test('sales filters reach the server, paginate all closing items, and open item 
 });
 
 test('margins preserve the closing margin and filter by the original final margin bands', async ({ page }) => {
-  const calls = await setup(page); await page.getByRole('navigation').getByRole('button', { name: 'Margens', exact: true }).click();
+  const calls = await setup(page); await page.getByRole('navigation').getByRole('button', { name: 'Fechamento', exact: true }).click();
   const table = page.getByRole('table', { name: 'Margens por item do fechamento' }); await expect(table).toBeVisible();
   await expect(table.getByRole('cell', { name: 'R$ 20,00', exact: true })).toBeVisible();
   await expect(table.getByRole('cell', { name: '20,00%', exact: true })).toBeVisible();
@@ -71,7 +71,7 @@ test('margins preserve the closing margin and filter by the original final margi
 });
 
 test('missing cost components keep margin unknown instead of reporting a zero cost or margin', async ({ page }) => {
-  await setup(page, { missing: true }); await page.getByRole('navigation').getByRole('button', { name: 'Margens', exact: true }).click();
+  await setup(page, { missing: true }); await page.getByRole('navigation').getByRole('button', { name: 'Fechamento', exact: true }).click();
   const table = page.getByRole('table', { name: 'Margens por item do fechamento' }); await expect(table).toBeVisible();
   await expect(table.getByRole('cell', { name: 'Não informado', exact: true })).toHaveCount(6); await expect(table.getByRole('cell', { name: 'R$ 0,00', exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Indicadores de margem').getByText('Não informado', { exact: true })).toHaveCount(4);
@@ -82,7 +82,7 @@ test('RH can read Faturamento when confidential cost and margin fields are omitt
   const table = page.getByRole('table', { name: 'Itens do faturamento' }); await expect(table).toBeVisible();
   await expect(table.getByRole('cell', { name: 'R$ 100,00', exact: true })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
-  await expect(page.getByRole('navigation').getByRole('button', { name: 'Margens', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('navigation').getByRole('button', { name: 'Fechamento', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Abrir item ITEM-1', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Item ITEM-1 · NF NF-1', exact: true })).toBeVisible();
   await expect(page.getByText('Margem indisponível nesta consulta.', { exact: false })).toBeVisible();

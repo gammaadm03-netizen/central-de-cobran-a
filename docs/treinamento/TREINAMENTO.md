@@ -1,6 +1,6 @@
-# Treinamento completo — Central Financeira 0.18.0
+# Treinamento completo — Central Financeira 0.18.1
 
-21 de outubro de 2026. Capturas da interface com dados fictícios de treinamento.
+22 de outubro de 2026. Capturas da interface com dados fictícios de treinamento.
 
 ## 1. Acesso, perfis e navegação
 
@@ -32,7 +32,7 @@ Entrar com o acesso individual, reconhecer o próprio perfil e localizar as áre
 
 4. **Encontrar cada área autorizada** — Menu lateral → Nome da área
 
-   Use os botões do menu lateral para abrir Painel Gerencial, Caixa / Bancos, Contas a Pagar, Contas a Receber, Cobrança, Comissões, Faturamento, Margens, RH / DP ou Importar Bases, conforme sua autorização. Em tela estreita, clique em Abrir navegação para mostrar o menu. O título no cabeçalho confirma a área aberta.
+   Use os botões do menu lateral para abrir Painel Gerencial, Caixa / Bancos, Contas a Pagar, Contas a Receber, Cobrança, Comissões, Faturamento, Fechamento, RH / DP ou Importar Bases, conforme sua autorização. Em tela estreita, clique em Abrir navegação para mostrar o menu. O título no cabeçalho confirma a área aberta. Dentro de Fechamento, use as sub-abas Margens e Custos para alternar entre a rentabilidade dos itens e o catálogo de custos.
 
 5. **Entender por que os menus diferem entre pessoas** — Menu lateral → Áreas disponíveis para o seu acesso
 
@@ -435,7 +435,7 @@ Atualizar a carteira, retirar ausentes de um relatório completo e confirmar rec
 ### Antes de começar
 
 - Relatórios originais do sistema de origem separados entre Abertos e vencidos e Títulos quitados.
-- Acesso autorizado a Importar Bases → Contas a Receber; o treinamento considera a versão 0.18.0 e suas atualizações ativas.
+- Acesso autorizado a Importar Bases → Contas a Receber; o treinamento considera a versão 0.18.1 e suas atualizações ativas.
 - Cobradoras cadastradas e ativas para escolher a responsável dos clientes ainda sem carteira.
 
 ### Passo a passo
@@ -996,53 +996,61 @@ Localizar os itens de um fechamento, conferir a origem e obter um relatório com
 - Registros filtrados conta itens do fechamento, não clientes únicos ou notas únicas.
 - Não some apenas a página visível para comparar com o card.
 
-## 16. Margens: analisar rentabilidade por item
+## 16. Fechamento: consultar margens e custos dos itens
 
-**Caminho:** Menu lateral → Margens
+**Caminho:** Menu lateral → Fechamento → Margens / Custos
 
-Interpretar o valor e o percentual de margem, localizar itens críticos e conferir como o resultado foi obtido.
+Consultar a margem por item do fechamento e a base de custos, conferir suas origens e reconhecer quais ações dependem de permissão.
 
 **Quem utiliza:** Diretoria, Gerência e usuários com consulta de Margens
 
 ### Antes de começar
 
 - Fechamento de Faturamento importado para o mês.
-- Acesso à aba Margens.
+- Acesso a Fechamento, que utiliza a permissão de consulta a Margens.
 - Componentes de custo ou margem final disponíveis na origem.
 
 ### Passo a passo
 
-1. **Selecionar o fechamento** — Menu lateral → Margens → Mês do fechamento
+1. **Abrir o fechamento e escolher a sub-aba** — Menu lateral → Fechamento → Margens / Custos
+
+   Clique em Fechamento no menu lateral. A sub-aba Margens abre a análise por item do mês. Clique em Custos para consultar códigos, custos unitários e versões da base de custos. Faturamento continua em sua própria área do menu. A Diretoria pode consultar as duas sub-abas, sem importar ou aplicar alterações.
+
+2. **Selecionar o fechamento** — Menu lateral → Fechamento → Margens → Mês do fechamento
 
    Escolha o mês e confirme que ele é o mesmo da análise de Faturamento. Clique em Atualizar margens para consultar novamente a base, especialmente depois de uma importação ou aplicação de custos.
 
-2. **Comparar consolidado e recorte** — Menu lateral → Margens → Indicadores de margem
+3. **Comparar consolidado e recorte** — Menu lateral → Fechamento → Margens → Indicadores de margem
 
    Margem líquida e Margem líquida % consideram todos os itens do fechamento. Margem filtrada e Margem filtrada % consideram o recorte atual. O percentual consolidado é a margem total dividida pela venda total; não é a média simples dos percentuais das linhas.
 
-3. **Localizar itens com margem baixa** — Menu lateral → Margens → Faixa de margem final
+4. **Localizar itens com margem baixa** — Menu lateral → Fechamento → Margens → Faixa de margem final
 
    Selecione a faixa, por exemplo Abaixo de 10%, e combine com Filial e Funcionário quando necessário. Buscar item permite localizar código, produto, cliente ou NF. Limpar filtros remove os recortes e mantém o mês selecionado.
 
-4. **Ler os componentes da linha** — Menu lateral → Margens → Tabela Margens por item do fechamento
+5. **Ler os componentes da linha** — Menu lateral → Fechamento → Margens → Tabela Margens por item do fechamento
 
    Compare Venda, CMV, Imposto, Frete, Comissão, Margem final e % final. Não informado indica ausência de um dado necessário. Um custo desconhecido não deve ser tratado como custo zero conhecido.
 
-5. **Identificar a origem da margem** — Menu lateral → Margens → Abrir item [código]
+6. **Identificar a origem da margem** — Menu lateral → Fechamento → Margens → Abrir item [código]
 
    No detalhe, confira a mensagem de origem. Quando o fechamento informa a margem final, ela é preservada sem descontar os componentes uma segunda vez. Quando a margem não é informada e todos os componentes estão presentes, a Central calcula venda menos CMV, imposto, frete e comissão.
 
-6. **Tratar uma divergência encontrada** — Menu lateral → Margens → Abrir item [código] → Conferência da origem
+7. **Tratar uma divergência encontrada** — Menu lateral → Fechamento → Margens → Abrir item [código] → Conferência da origem
 
    Anote mês, código, NF, filial e linha do arquivo. Se houver informação errada no fechamento, solicite a correção da base e a reimportação do mês. Se a atualização é do custo unitário, use Importar Bases → Custos e confira o impacto antes de aplicar a nova versão.
 
-7. **Exportar a análise** — Menu lateral → Margens → Baixar Excel
+8. **Exportar a análise** — Menu lateral → Fechamento → Margens → Baixar Excel
 
    Com permissão de exportação, baixe o Excel do filtro. Ele inclui os componentes da margem e a indicação de origem da margem. O arquivo permite conferir todos os itens encontrados, e não só a página visível.
 
-8. **Distinguir margem do fechamento e margem da comissão** — Menu lateral → Margens / Menu lateral → Comissões → Comissões — Vendedores
+9. **Distinguir margem do fechamento e margem da comissão** — Menu lateral → Fechamento → Margens / Menu lateral → Comissões → Comissões — Vendedores
 
    A aba Margens acompanha o fechamento importado ou sua nova versão após aplicar custos. A apuração de vendedores recalcula a margem após a própria comissão, conforme a política vigente. Os dois resultados podem ter naturezas diferentes; confira origem e regra antes de comparar diretamente.
+
+10. **Consultar o catálogo de custos do fechamento** — Menu lateral → Fechamento → Custos → Custos cadastrados e histórico
+
+   Selecione a Versão da base de custos, pesquise em Buscar código ou produto e clique em Consultar custos. Confira arquivo, referência, código, produto, peso e custo unitário; percorra as páginas quando necessário. Importar custos abre a área correspondente em Importar Bases somente para acessos autorizados. Aplicar custos ao fechamento aparece somente para quem tem autorização de aplicação; consulte o capítulo próprio antes de confirmar qualquer recálculo. Consultar ou trocar de sub-aba não altera o fechamento.
 
 ### Conferência
 
@@ -1050,6 +1058,7 @@ Interpretar o valor e o percentual de margem, localizar itens críticos e confer
 - Os cards filtrados são usados para avaliar o recorte.
 - A origem da margem foi lida no detalhe de um item.
 - Itens Não informado foram encaminhados para conferência da base.
+- Catálogo consultado em Fechamento → Custos, com arquivo e data de referência conferidos.
 
 ### Cuidados
 
@@ -1348,7 +1357,7 @@ Atualizar a base completa de um mês que alimenta Faturamento, Margens e a apura
 
    Marque a declaração de que conferiu o mês, os totais e a abrangência completa. Clique em Confirmar importação do fechamento e aguarde a mensagem de conclusão. Uma nova importação atualiza a posição daquele mês; os arquivos anteriores e os outros meses ficam preservados.
 
-8. **Conferir o resultado nas duas abas** — Menu lateral → Faturamento / Menu lateral → Margens → Mês do fechamento
+8. **Conferir o resultado nas duas abas** — Menu lateral → Faturamento / Menu lateral → Fechamento → Margens → Mês do fechamento
 
    Selecione o mês importado e clique em Atualizar faturamento ou Atualizar margens quando necessário. Confira os totais e abra um item. Depois, se aplicável, atualize a consulta de Comissões — Vendedores e confira as regras e pendências.
 
@@ -1477,7 +1486,7 @@ Cadastrar o custo correto de cada produto, resolver repetições divergentes e s
 
 7. **Consultar código e versão importados** — Menu lateral → Importar Bases → Custos → Custos cadastrados e histórico → Versão da base de custos
 
-   Selecione Base mais recente por referência ou uma versão preservada. Pesquise em Buscar código ou produto e clique em Consultar custos. Confira código, produto, peso informado e custo unitário; use Custos anteriores e Próximos custos para percorrer as páginas. Importar uma base antiga não a torna a mais recente por referência.
+   Selecione Base mais recente por referência ou uma versão preservada. Pesquise em Buscar código ou produto e clique em Consultar custos. Confira código, produto, peso informado e custo unitário; use Custos anteriores e Próximos custos para percorrer as páginas. Importar uma base antiga não a torna a mais recente por referência. A mesma consulta está disponível em Fechamento → Custos, inclusive para acessos de consulta como a Diretoria.
 
 8. **Conferir novamente após uma atualização** — Menu lateral → Importar Bases → Custos → Atualizar custos cadastrados
 
@@ -1521,7 +1530,7 @@ Avaliar o impacto e criar uma nova versão do fechamento com o CMV atualizado e 
 
 1. **Conferir a base de custos selecionada** — Menu lateral → Importar Bases → Custos → Custos cadastrados e histórico → Versão da base de custos
 
-   Selecione a versão que deve ser aplicada. Em Aplicar custos ao fechamento, confira Base selecionada, arquivo e data de referência. Se a seção de aplicação não aparecer, verifique o acesso de fechamento com a Gerência.
+   Selecione a versão que deve ser aplicada. Em Aplicar custos ao fechamento, confira Base selecionada, arquivo e data de referência. Se a seção de aplicação não aparecer, verifique o acesso de fechamento com a Gerência. Este fluxo também pode ser aberto em Fechamento → Custos quando o seu acesso permite aplicar custos; consultar o catálogo não concede essa autorização.
 
 2. **Selecionar o mês que será recalculado** — Menu lateral → Importar Bases → Custos → Aplicar custos ao fechamento → Mês do fechamento para aplicar custos
 
@@ -1547,7 +1556,7 @@ Avaliar o impacto e criar uma nova versão do fechamento com o CMV atualizado e 
 
    Depois da conferência, marque a declaração de que quer substituir o CMV e recalcular as margens do mês em uma nova versão. Clique em Aplicar custos e recalcular margens e aguarde. O fechamento anterior, a fonte e o catálogo ficam preservados. Uma indicação de que a base já foi aplicada mantém a versão existente, sem criar outra igual.
 
-8. **Validar os resultados publicados na consulta** — Menu lateral → Margens → Mês do fechamento → Atualizar margens
+8. **Validar os resultados publicados na consulta** — Menu lateral → Fechamento → Margens → Mês do fechamento → Atualizar margens
 
    Selecione o mesmo mês e atualize Margens. Abra um item de exemplo e compare novo CMV e margem com a prévia conferida. Faturamento continua disponível no mês; o recálculo mantém venda, quantidade, frete, imposto e comissão informados na origem. A nova fonte é identificada como recálculo, não como outra planilha exportada do sistema de origem.
 

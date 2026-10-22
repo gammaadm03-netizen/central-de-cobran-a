@@ -11,6 +11,7 @@ import Receivables from './components/Receivables';
 import Collections from './components/Collections';
 import ReceivableCommissions from './components/ReceivableCommissions';
 import Commercial from './components/Commercial';
+import Closing from './components/Closing';
 import HumanResources from './components/HumanResources';
 import PasswordRecovery from './components/PasswordRecovery';
 import PasswordResetRequest from './components/PasswordResetRequest';
@@ -30,10 +31,14 @@ const modules = [
   { id: 'cobranca', label: 'Cobrança', icon: '◉', description: 'Central de cobrança, atendimentos e acompanhamento das carteiras.' },
   { id: 'comissoes', label: 'Comissões', icon: '%', description: 'Regras e apuração com histórico de vigência.' },
   { id: 'faturamento', label: 'Faturamento', icon: '▥', description: 'Receita e acompanhamento de metas.' },
-  { id: 'margens', label: 'Margens', icon: '◷', description: 'Custos e resultado líquido das vendas.' },
+  { id: 'fechamento', label: 'Fechamento', icon: '◷', description: 'Margens e custos do fechamento.' },
   { id: 'rh_dp', label: 'RH / DP', icon: '♙', description: 'Equipe, folha e benefícios.' },
   { id: 'importar_bases', label: 'Importar Bases', icon: '⇧', description: 'Atualização centralizada das bases oficiais.' },
 ];
+
+function canReadModule(access: Access, id: string) {
+  return permits(access, id === 'fechamento' ? 'margens' : id);
+}
 
 function Brand({ onClick }: { onClick?: () => void }) {
   const inner = <><span className="brand-mark" aria-hidden="true"><img src="/ecoplast-logo.png" alt="" width="58" height="58" /></span><span className="brand-copy"><strong>Central Financeira</strong><small>GRUPO ECOPLAST</small></span></>;
@@ -141,7 +146,7 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
       if (result.error || !isAccess(result.data)) throw new Error('Seu acesso ainda não foi habilitado. Procure a Gerência Geral.');
       const nextAccess = result.data;
       setAccess(nextAccess);
-      setSelected(modules.find(module => permits(nextAccess, module.id))?.id ?? '');
+      setSelected(modules.find(module => canReadModule(nextAccess, module.id))?.id ?? '');
       setNotice('');
     } catch {
       if (client === supabase && generation === sessionGeneration.current) endLocalSession('');
@@ -167,7 +172,7 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
   }
 
   if (!access) return <Login onLogin={signIn} notice={notice} />;
-  const visibleModules = modules.filter(module => permits(access, module.id));
+  const visibleModules = modules.filter(module => canReadModule(access, module.id));
   const isManager = permits(access, 'usuarios', 'admin') && access.profile.role_key === 'gerente_geral';
   const canReadAdministration = isManager || access.profile.role_key === 'diretor' && permits(access, 'usuarios');
   const activeModule = visibleModules.find(module => module.id === selected);
@@ -182,7 +187,8 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
   else if (safeSelected === 'contas_receber') content = <Receivables canWrite={permits(access, 'contas_receber', 'write')} canValidate={permits(access, 'contas_receber', 'validate')} onImport={permits(access, 'contas_receber', 'import') ? () => { setImportArea('contas_receber'); navigate('importar_bases'); } : undefined} />;
   else if (safeSelected === 'cobranca') content = <Collections canWrite={permits(access, 'cobranca', 'write')} canManage={permits(access, 'contas_receber', 'write')} canReadFinance={permits(access, 'contas_receber', 'read')} canValidate={permits(access, 'contas_receber', 'validate')} collectorId={access.collector_id} isCollector={['cobradora_1', 'cobradora_2'].includes(access.profile.role_key)} />;
   else if (safeSelected === 'comissoes') content = <ReceivableCommissions canConfigure={isManager && permits(access, 'comissoes', 'write')} canExport={permits(access, 'comissoes', 'export')} onCollections={permits(access, 'cobranca') ? () => navigate('cobranca') : undefined} />;
-  else if (safeSelected === 'faturamento' || safeSelected === 'margens') content = <Commercial view={safeSelected === 'margens' ? 'margins' : 'sales'} canExport={permits(access, safeSelected, 'export')} onImport={permits(access, 'importar_bases') && permits(access, 'fechamento', 'import') && permits(access, 'faturamento') ? () => { setImportArea('fechamento'); navigate('importar_bases'); } : undefined} />;
+  else if (safeSelected === 'faturamento') content = <Commercial view="sales" canExport={permits(access, 'faturamento', 'export')} onImport={permits(access, 'importar_bases') && permits(access, 'fechamento', 'import') && permits(access, 'faturamento') ? () => { setImportArea('fechamento'); navigate('importar_bases'); } : undefined} />;
+  else if (safeSelected === 'fechamento') content = <Closing canExportMargins={permits(access, 'margens', 'export')} canApplyCosts={permits(access, 'importar_bases') && permits(access, 'custos', 'import') && permits(access, 'fechamento', 'import') && permits(access, 'faturamento')} onImportClosing={permits(access, 'importar_bases') && permits(access, 'fechamento', 'import') && permits(access, 'faturamento') ? () => { setImportArea('fechamento'); navigate('importar_bases'); } : undefined} onImportCosts={permits(access, 'importar_bases') && permits(access, 'custos', 'import') ? () => { setImportArea('custos'); navigate('importar_bases'); } : undefined} />;
   else if (safeSelected === 'rh_dp') content = <HumanResources canExport={permits(access, 'rh_dp', 'export')} onImport={permits(access, 'importar_bases') && permits(access, 'rh_dp', 'write') && permits(access, 'rh_dp', 'import') ? () => { setImportArea('rh_dp'); navigate('importar_bases'); } : undefined} />;
   else if (safeSelected === 'contas_pagar') content = <><Payables canWrite={permits(access, 'contas_pagar', 'write')} canConfigure={isManager && permits(access, 'contas_pagar', 'write')} onImport={permits(access, 'contas_pagar', 'import') ? () => { setImportArea('contas_pagar'); navigate('importar_bases'); } : undefined} />{permits(access, 'mensagens_cp') && <ManagementMessages canWrite={permits(access, 'mensagens_cp', 'write')} />}</>;
   else content = <section className="panel"><h2>Nenhum módulo autorizado</h2><p>Procure a Gerência Geral para revisar suas permissões.</p></section>;

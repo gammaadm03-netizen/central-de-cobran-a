@@ -19,7 +19,7 @@ bookmarks=[[1,'Capa',1],[1,'Como usar e percursos por perfil',2]]
 for n,module in enumerate(content['modules']):bookmarks.append([1,f'{n+1:02d}. {module["title"]}',starts[n]+1])
 bookmarks.append([1,'Conferência de aprendizagem',len(pdf)])
 pdf.set_toc(bookmarks)
-pdf.set_metadata({'title':'Treinamento completo — Central Financeira','author':'Central Financeira — Grupo Ecoplast','subject':'Rotinas por área, caminhos e capturas da interface com dados de demonstração','keywords':'treinamento, financeiro, cobrança, contas a pagar, contas a receber, RH, custos','creator':'Central Financeira 0.18.0'})
+pdf.set_metadata({'title':'Treinamento completo — Central Financeira','author':'Central Financeira — Grupo Ecoplast','subject':'Rotinas por área, caminhos e capturas da interface com dados de demonstração','keywords':'treinamento, financeiro, cobrança, contas a pagar, contas a receber, RH, custos','creator':f'Central Financeira {content["version"]}'})
 tmp=reports/'manual-com-marcadores.pdf';pdf.save(tmp,garbage=4,deflate=True);pdf.close();tmp.replace(reports/name)
 pdf=fitz.open(reports/name)
 modules={module['id']:index for index,module in enumerate(content['modules'])}
@@ -50,7 +50,7 @@ for filename,ids in groups:
     area.set_toc(toc);area.set_metadata({'title':filename[3:].replace('_',' ')+' — Central Financeira','author':'Central Financeira — Grupo Ecoplast','subject':'Treinamento ilustrado com dados de demonstração'})
     area.save(area_dir/(filename+'.pdf'),garbage=4,deflate=True);summary.append({'file':filename+'.pdf','pages':len(area),'modules':ids});area.close()
 pdf.close()
-readme='TREINAMENTO CENTRAL FINANCEIRA — 21/10/2026\n\nAbra o PDF completo para consultar todas as áreas, com sumário clicável e marcadores por capítulo.\nA pasta por-area contém os 12 treinamentos separados para distribuir às equipes.\nO HTML é uma versão navegável autônoma: use a busca para encontrar uma área ou rotina.\n\nAs capturas foram feitas na interface 0.18.0, com dados fictícios. Não representam saldos, cadastros ou folha da empresa.\nAs permissões e as atualizações instaladas determinam os recursos disponíveis para cada conta.\n'
+readme=f'TREINAMENTO CENTRAL FINANCEIRA — {content["date_label"]}\n\nAbra o PDF completo para consultar todas as áreas, com sumário clicável e marcadores por capítulo.\nA pasta por-area contém os 12 treinamentos separados para distribuir às equipes.\nO HTML é uma versão navegável autônoma: use a busca para encontrar uma área ou rotina.\n\nAs capturas foram feitas na interface {content["version"]}, com dados fictícios. Não representam saldos, cadastros ou folha da empresa.\nAs permissões e as atualizações instaladas determinam os recursos disponíveis para cada conta.\n'
 (reports/'LEIA-ME.txt').write_text(readme)
 with zipfile.ZipFile(reports/'Treinamentos_por_Area.zip','w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as archive:
     archive.write(reports/name,name)

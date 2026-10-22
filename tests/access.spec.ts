@@ -120,7 +120,7 @@ test('collector sees only collection navigation and no automatic wallet binding'
  await expect(page.getByText('Seu login ainda não está vinculado a uma cobradora.',{exact:false})).toBeVisible();
 });
 test('RH does not receive financial navigation',async({page})=>{
- await setup(page,'rh_dp');await login(page);const nav=page.getByRole('navigation');await expect(nav).not.toContainText('Caixa / Bancos');await expect(nav).not.toContainText('Contas a Pagar');await expect(nav).toContainText('RH / DP');
+ await setup(page,'rh_dp');await login(page);const nav=page.getByRole('navigation');await expect(nav).not.toContainText('Caixa / Bancos');await expect(nav).not.toContainText('Contas a Pagar');await expect(nav).not.toContainText('Fechamento');await expect(nav).toContainText('RH / DP');
 });
 
 test('CR com liberação individual acessa as nove bases e os formulários operacionais sem virar gerente',async({page})=>{
@@ -198,6 +198,7 @@ test('limite individual de CP mostra somente três módulos e uma única base de
  const nav=page.getByRole('navigation',{name:'Módulos da Central'});
  await expect(nav.getByRole('button')).toHaveCount(3);
  await expect(nav.getByRole('button')).toHaveText([/Painel Gerencial$/,/Contas a Pagar$/,/Importar Bases$/]);
+ await expect(nav.getByRole('button',{name:'Fechamento',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:/Administração/})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Abrir Caixa →',exact:true})).toHaveCount(0);
  await nav.getByRole('button',{name:'Importar Bases',exact:true}).click();

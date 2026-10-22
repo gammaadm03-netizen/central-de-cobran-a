@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { officialToday } from './Treasury';
 import { dateLabel, type ImportProblem } from '../lib/payables';
-import { costDecimal, costUuid, displayUnitCost, displayWeight, productCostError, productCostRequest, readCostHistory, readProductCosts, type CostAnalysis, type CostImportBody, type CostReport, type ProductCostRow } from '../lib/product-costs';
+import { costDecimal, costUuid, displayUnitCost, displayWeight, productCostError, productCostRequest, type CostAnalysis, type CostImportBody, type CostSource, type ProductCostRow } from '../lib/product-costs';
 import CostClosingApplication from './CostClosingApplication';
+import ProductCostsCatalog from './ProductCostsCatalog';
 import '../commercial.css';
 import '../product-costs.css';
 
@@ -16,7 +17,6 @@ function validAnalysis(data: CostAnalysis, hash: string, date: string) {
     && data.rows.every(validRow) && new Set(data.rows.map(row => row.code)).size === data.rows.length && typeof p.can_commit === 'boolean'
     && Array.isArray(p.conflicts) && p.conflicts.every(item => typeof item.code === 'string' && typeof item.product === 'string' && Array.isArray(item.options) && item.options.length > 1 && item.options.every(option => count(option.line_number) && option.line_number > 1 && (option.unit_cost === null || costDecimal(option.unit_cost)) && (option.weight_kg === null || costDecimal(option.weight_kg))));
 }
-function validReport(data: CostReport) { return data && count(data.count) && typeof data.revision === 'string' && Array.isArray(data.rows) && data.rows.length <= 25 && data.rows.every(validRow) && (data.source === null || costUuid(data.source.import_id) && typeof data.source.file_name === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(data.source.reference_date)); }
 function failureCode(error: unknown) { return error && typeof error === 'object' && 'code' in error ? String(error.code) : ''; }
 
 export default function CostsImport({ canImport, canApply }: { canImport: boolean; canApply: boolean }) {
@@ -26,21 +26,10 @@ export default function CostsImport({ canImport, canApply }: { canImport: boolea
   const [busy, setBusy] = useState<'preview' | 'commit' | null>(null), [pending, setPending] = useState<CostImportBody | null>(null);
   const [error, setError] = useState(''), [success, setSuccess] = useState(''), [problems, setProblems] = useState<ImportProblem[]>([]);
   const [applicationBusy, setApplicationBusy] = useState(false);
-  const [history, setHistory] = useState<Awaited<ReturnType<typeof readCostHistory>>['rows']>([]), [historyCount, setHistoryCount] = useState(0);
-  const [report, setReport] = useState<CostReport | null>(null), [selectedImport, setSelectedImport] = useState<string | null>(null);
-  const [search, setSearch] = useState(''), [query, setQuery] = useState(''), [page, setPage] = useState(0), [refresh, setRefresh] = useState(0), [loading, setLoading] = useState(true), [readError, setReadError] = useState('');
+  const [costSource, setCostSource] = useState<CostSource | null>(null), [selectedImport, setSelectedImport] = useState<string | null>(null), [catalogRefresh, setCatalogRefresh] = useState(0);
   const generation = useRef(0), controller = useRef<AbortController | null>(null), input = useRef<HTMLInputElement | null>(null);
   useEffect(() => () => { generation.current++; controller.current?.abort(); }, []);
   useEffect(() => { if (!pending && busy !== 'commit') return; const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; }; window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn); }, [pending, busy]);
-  useEffect(() => {
-    const abort = new AbortController(); setLoading(true); setReadError(''); setReport(null);
-    void Promise.all([readProductCosts(selectedImport, query, page * 25, abort.signal), readCostHistory(abort.signal)]).then(([data, imports]) => {
-      if (abort.signal.aborted) return;
-      if (!validReport(data) || !Array.isArray(imports.rows) || !count(imports.count) || imports.rows.some(item => !costUuid(item.id) || typeof item.file_name !== 'string')) throw new Error('invalid_cost_report');
-      setReport(data); setHistory(imports.rows); setHistoryCount(imports.count);
-    }).catch(failure => { if (!abort.signal.aborted) setReadError(productCostError(failure, 'Não foi possível consultar a base de custos. Atualize para tentar novamente.')); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
-    return () => abort.abort();
-  }, [selectedImport, query, page, refresh]);
   function reset() { generation.current++; controller.current?.abort(); setPrepared(null); setResolutions({}); setDirty(false); setReviewed(false); setError(''); setSuccess(''); setProblems([]); }
   async function analyze(event?: FormEvent) {
     event?.preventDefault(); if (!canImport || !file || busy || pending || applicationBusy) return;
@@ -70,7 +59,7 @@ export default function CostsImport({ canImport, canApply }: { canImport: boolea
       if (current !== generation.current) return;
       if (!costUuid(result?.import_id) || result.reference_date !== body.reference_date || result.row_count !== prepared?.analysis.preview.row_count || result.item_count !== prepared?.analysis.preview.item_count) throw new Error('unconfirmed_cost_import');
       setSuccess(`${result.idempotent ? 'Esta base já estava registrada' : 'Base de custos importada'}: ${result.item_count.toLocaleString('pt-BR')} produtos, referência ${dateLabel(result.reference_date)}. O histórico foi preservado. Selecione o mês abaixo para aplicar os custos ao fechamento.`);
-      setPending(null); setPrepared(null); setFile(null); setResolutions({}); setReviewed(false); setDirty(false); setSelectedImport(result.import_id); setPage(0); setRefresh(value => value + 1); if (input.current) input.current.value = '';
+      setPending(null); setPrepared(null); setFile(null); setResolutions({}); setReviewed(false); setDirty(false); setSelectedImport(result.import_id); setCatalogRefresh(value => value + 1); if (input.current) input.current.value = '';
     } catch (failure) { if (current === generation.current) {
       if (['40001','22023','22007','22003','23514','42501','P0044','PGRST202','PGRST301','PGRST303'].includes(failureCode(failure))) { setPending(null); setDirty(true); setReviewed(false); }
       else setPending(body);
@@ -95,12 +84,7 @@ export default function CostsImport({ canImport, canApply }: { canImport: boolea
       <button className="button" disabled={frozen || dirty || !reviewed || !p.can_commit} onClick={() => void execute({ ...prepared.body, action: 'commit', previous_import_id: p.previous_import_id, complete: true, resolutions: { ...prepared.body.resolutions } })}>{busy === 'commit' ? 'Importando custos…' : 'Confirmar importação dos custos'}</button>
     </div>}
   </section>
-  <section className="panel" aria-labelledby="cost-catalog-title"><div className="panel-header"><div><h2 id="cost-catalog-title">Custos cadastrados e histórico</h2><p className="muted">Consulte cada versão pelo arquivo e pela data de referência.</p></div><button className="button secondary" disabled={loading || frozen} onClick={() => setRefresh(value => value+1)}>Atualizar custos cadastrados</button></div>
-    {readError && <p className="notice error" role="alert">{readError}</p>}
-    <div className="form-grid"><label className="field">Versão da base de custos<select aria-label="Versão da base de custos" value={selectedImport ?? ''} disabled={loading || frozen} onChange={event => { setSelectedImport(event.target.value || null); setPage(0); }}><option value="">Base mais recente por referência</option>{history.map(item => <option key={item.id} value={item.id}>{dateLabel(item.reference_date)} · {item.file_name} · {dateLabel(item.created_at)}</option>)}</select></label><form className="field" onSubmit={event => { event.preventDefault(); setQuery(search.trim()); setPage(0); }}><label htmlFor="cost-search">Buscar código ou produto</label><div className="inline-actions"><input id="cost-search" value={search} maxLength={500} disabled={frozen} onChange={event => setSearch(event.target.value)} /><button className="button secondary" disabled={loading || frozen}>Consultar custos</button></div></form></div>
-    {historyCount > history.length && <p className="help-text">Mostrando as {history.length} versões mais recentes de {historyCount} importações.</p>}
-    {loading ? <p role="status">Consultando custos…</p> : report && <><p className="help-text">{report.source ? `${report.source.file_name} · Referência ${dateLabel(report.source.reference_date)} · ${report.count.toLocaleString('pt-BR')} produto(s) no filtro.` : 'Nenhuma base de custos importada.'}</p><div className="table-wrap"><table><caption>Custos por item cadastrados</caption><thead><tr><th>Código</th><th>Produto</th><th>Peso informado</th><th>Custo unitário</th></tr></thead><tbody>{report.rows.length ? report.rows.map(row => <tr key={row.code}><td>{row.code}</td><td>{row.product}</td><td>{displayWeight(row.weight_kg)}</td><td>{displayUnitCost(row.unit_cost)}</td></tr>) : <tr><td colSpan={4}>Nenhum produto encontrado nesta base.</td></tr>}</tbody></table></div><div className="pagination"><span>Página {page+1} de {Math.max(1,Math.ceil(report.count/25))}</span><button className="button secondary" disabled={!page || frozen} onClick={() => setPage(value => value-1)}>Custos anteriores</button><button className="button secondary" disabled={(page+1)*25>=report.count || frozen} onClick={() => setPage(value => value+1)}>Próximos custos</button></div></>}
-  </section>
-  {canApply && report?.source && <CostClosingApplication costSource={report.source} disabled={!!busy || !!pending} onBusyChange={setApplicationBusy} />}
+  <ProductCostsCatalog key={catalogRefresh} initialImportId={selectedImport} disabled={frozen} onSourceChange={setCostSource} />
+  {canApply && costSource && <CostClosingApplication costSource={costSource} disabled={!!busy || !!pending} onBusyChange={setApplicationBusy} />}
   </div>;
 }
