@@ -1,6 +1,6 @@
 import { MAX_FILE_BYTES, MAX_ROWS, parseCivilDate, parseMoneyCents, parseCsv, validateWorkbookExpandedSize } from './payables-parser.mjs';
 export { MAX_FILE_BYTES, MAX_ROWS, parseCsv, validateWorkbookExpandedSize };
-export const COLUMN_LABELS = { document: 'Documento / NF', client_name: 'Cliente / Órgão', branch: 'Filial', due_date: 'Vencimento', amount_cents: 'Valor', issued_on: 'Emissão', client_document: 'CNPJ', received_on: 'Quitação: data do recebimento', received_amount_cents: 'Quitação: valor recebido' };
+export const COLUMN_LABELS = { document: 'Documento / NF', client_name: 'Cliente / Órgão', branch: 'Filial', due_date: 'Vencimento', amount_cents: 'Valor', issued_on: 'Emissão', client_document: 'CNPJ', received_on: 'Quitação: data do recebimento', received_amount_cents: 'Quitação: valor recebido', collector_name: 'COBRADORA' };
 const REQUIRED = ['document', 'client_name', 'branch', 'due_date', 'amount_cents'];
 const normalize = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const ALIASES = {
@@ -13,6 +13,7 @@ const ALIASES = {
   client_document: ['CNPJ', 'CNPJCLIENTE', 'DOCUMENTOCLIENTE'],
   received_on: ['QUITACAODATADORECEBIMENTO'],
   received_amount_cents: ['QUITACAOVALORRECEBIDO'],
+  collector_name: ['COBRADORA', 'COBRADORARESPONSAVEL'],
 };
 const headerMap = new Map(Object.entries(ALIASES).flatMap(([key, aliases]) => aliases.map(alias => [alias, key])));
 const ERP_TIMESTAMP_HEADERS = new Set(['EMISSAODATA', 'VENCIMENTODATA', 'QUITACAODATADORECEBIMENTO']);
@@ -93,8 +94,12 @@ export function mergeReceivableImportProblems(parserErrors, cellErrors = []) {
 export function receivableCustomerKey(row) {
   return row.client_document ? `cnpj:${row.client_document}` : `name:${row.client_name.trim().replace(/\s+/g, ' ').toUpperCase()}`;
 }
+/** Exact matching of names; accents, case and repeated spaces do not create another person. */
+export function normalizeReceivableCollectorName(value) {
+  return String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').trim().replace(/\s+/g, ' ').toLocaleUpperCase('pt-BR');
+}
 function validateReceivableMatrix(matrix, { excel1904 = false } = {}, received = false) {
-  const errors = [], rows = [];
+  const errors = [], rows = [], collectorHints = [];
   if (!matrix.length) return { rows, errors: [{ line: 1, column: 'Arquivo', problem: 'Arquivo vazio.', correction: 'Exporte o relatório completo com os cabeçalhos.' }] };
   if (matrix[0].length > 100) return { rows, errors: [{ line: 1, column: 'Arquivo', problem: 'Mais de 100 colunas.', correction: 'Salve uma cópia com até 100 colunas.' }] };
   const columns = new Map(), timestampColumns = new Set();
@@ -110,13 +115,15 @@ function validateReceivableMatrix(matrix, { excel1904 = false } = {}, received =
     else if (key) columns.set(key, index);
   });
   for (const key of [...REQUIRED, ...(received ? ['received_on', 'received_amount_cents'] : [])]) if (!columns.has(key)) errors.push({ line: 1, column: COLUMN_LABELS[key], problem: 'Coluna obrigatória ausente.', correction: `Inclua a coluna ${COLUMN_LABELS[key]}.` });
-  if (errors.length) return { rows, errors };
+  const withCollectorHints = !received && columns.has('collector_name');
+  if (errors.length) return { rows, errors, ...(withCollectorHints ? { collector_hints: [] } : {}) };
   const keys = new Set(), recognized = new Set(columns.values()); let total = 0, receivedTotal = 0, nonempty = 0;
   for (let index = 1; index < matrix.length; index++) {
     const source = matrix[index];
     if (source.every(value => value === null || value === undefined || String(value).trim() === '')) continue;
     if (++nonempty > MAX_ROWS) { errors.push({ line: index + 1, column: 'Arquivo', problem: 'Mais de 5.000 linhas.', correction: 'Exporte uma origem completa dentro do limite.' }); break; }
     const row = { document: '', client_name: '', client_document: null, branch: '', issued_on: null, due_date: '', amount_cents: 0 };
+    let collectorName = '';
     if (received) { row.received_on = ''; row.received_amount_cents = 0; }
     const before = errors.length;
     if (source.length > 100 || (source.length > matrix[0].length && source.slice(matrix[0].length).some(value => value !== null && value !== undefined && String(value).trim()))) errors.push({ line: index + 1, column: 'Arquivo', problem: 'Há valores fora das colunas do cabeçalho ou mais de 100 colunas.', correction: 'Confira delimitadores e cabeçalhos; valores com vírgula em CSV devem estar entre aspas.' });
@@ -128,7 +135,15 @@ function validateReceivableMatrix(matrix, { excel1904 = false } = {}, received =
       try {
         const value = scalar(source[column]);
         if (!received && ['received_on', 'received_amount_cents'].includes(key)) continue;
-        if (key === 'amount_cents' || key === 'received_amount_cents') {
+        if (key === 'collector_name') {
+          // A received report never assigns a wallet. Still reject formulas via scalar above.
+          if (received) continue;
+          if (typeof value !== 'string') throw new Error('Informe o nome da cobradora como texto.');
+          if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) throw new Error('O nome da cobradora contém caracteres de controle.');
+          collectorName = value.trim().replace(/\s+/g, ' ');
+          if (collectorName.length > 150) throw new Error('Limite de 150 caracteres excedido.');
+        }
+        else if (key === 'amount_cents' || key === 'received_amount_cents') {
           row[key] = parseMoneyCents(value);
           if (key === 'received_amount_cents' && row[key] <= 0) throw new Error('O valor recebido deve ser maior que zero.');
         }
@@ -161,12 +176,28 @@ function validateReceivableMatrix(matrix, { excel1904 = false } = {}, received =
       total += row.amount_cents;
       if (received) receivedTotal += row.received_amount_cents;
       if (!Number.isSafeInteger(total) || !Number.isSafeInteger(receivedTotal)) errors.push({ line: index + 1, column: 'Valor', problem: 'Total do relatório excede o limite de precisão.', correction: 'Confira valores e origem da base antes de importar.' });
-      else { keys.add(identity); rows.push(row); }
+      else {
+        keys.add(identity); rows.push(row);
+        if (collectorName) collectorHints.push({ line: index + 1, customer_key: receivableCustomerKey(row), collector_name: collectorName });
+      }
     }
     if (errors.length >= 100) break;
   }
+  if (withCollectorHints && !errors.length) {
+    const customers = new Map();
+    for (const hint of collectorHints) {
+      const names = customers.get(hint.customer_key) ?? new Set();
+      names.add(normalizeReceivableCollectorName(hint.collector_name)); customers.set(hint.customer_key, names);
+    }
+    for (const hint of collectorHints) {
+      if (customers.get(hint.customer_key).size > 1) errors.push({ line: hint.line, column: COLUMN_LABELS.collector_name,
+        problem: 'O mesmo cliente possui cobradoras diferentes no arquivo.',
+        correction: 'Defina a mesma cobradora em todas as linhas deste cliente, ou deixe os nomes em branco para escolher a responsável na Central.' });
+      if (errors.length >= 100) break;
+    }
+  }
   if (!rows.length && !errors.length) errors.push({ line: 2, column: 'Arquivo', problem: 'Não há títulos no relatório.', correction: 'Selecione um relatório completo com títulos; uma base vazia não pode gerar ausências.' });
-  return { rows: errors.length ? [] : rows, errors: errors.slice(0,100) };
+  return { rows: errors.length ? [] : rows, errors: errors.slice(0,100), ...(withCollectorHints ? { collector_hints: errors.length ? [] : collectorHints } : {}) };
 }
 export function validateReceivableRows(matrix, options = {}) { return validateReceivableMatrix(matrix, options, false); }
 export function validateReceivablePaidRows(matrix, options = {}) { return validateReceivableMatrix(matrix, options, true); }

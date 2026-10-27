@@ -1,6 +1,7 @@
 import { publishableKey, supabase, supabaseUrl } from './supabase';
 import type { ImportProblem } from './payables';
 import { makeReceivableFailure } from './receivables-errors.mjs';
+import type { ReceivableCollectorHint } from './receivables-parser.mjs';
 export { formatCents, dateLabel } from './payables';
 export type { ImportProblem } from './payables';
 export { makeReceivableFailure, receivableFailureReference, receivableImportFailureMessage } from './receivables-errors.mjs';
@@ -62,7 +63,7 @@ export async function receivableImportRequest<T>(body: ReceivableImportRequestBo
 }
 
 
-async function analyzeReceivableImportFile<Row>(file: File, mode: 'open' | 'received', signal?: AbortSignal): Promise<{ rows: Row[]; errors: ImportProblem[]; hash: string; base64: string }> {
+async function analyzeReceivableImportFile<Row>(file: File, mode: 'open' | 'received', signal?: AbortSignal): Promise<{ rows: Row[]; errors: ImportProblem[]; hash: string; base64: string; collector_hints?: ReceivableCollectorHint[] }> {
   if (!file.size) throw makeReceivableFailure({ phase: 'preview', code: 'CR_FILE_EMPTY' });
   if (file.size > 2 * 1024 * 1024) throw makeReceivableFailure({ phase: 'preview', code: 'CR_FILE_TOO_LARGE' });
   if (!/\.(xlsx|xlsm|csv|xls)$/i.test(file.name)) throw makeReceivableFailure({ phase: 'preview', code: 'CR_FILE_FORMAT_INVALID' });
@@ -71,7 +72,7 @@ async function analyzeReceivableImportFile<Row>(file: File, mode: 'open' | 'rece
   catch { throw makeReceivableFailure({ phase: 'preview', code: 'CR_FILE_READ_FAILED' }); }
   if (signal?.aborted) throw new DOMException('Análise cancelada.', 'AbortError');
   const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', original))).map(byte => byte.toString(16).padStart(2, '0')).join('');
-  const result = await new Promise<{ rows: Row[]; errors: ImportProblem[] }>((resolve, reject) => {
+  const result = await new Promise<{ rows: Row[]; errors: ImportProblem[]; collector_hints?: ReceivableCollectorHint[] }>((resolve, reject) => {
     if (signal?.aborted) { reject(new DOMException('Análise cancelada.', 'AbortError')); return; }
     const worker = new Worker(new URL('../workers/receivables.worker.ts', import.meta.url), { type: 'module' });
     let timeout: number;

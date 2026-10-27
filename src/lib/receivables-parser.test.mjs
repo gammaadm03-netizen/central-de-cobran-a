@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
-import { parseCsv, validateWorkbookExpandedSize, validateReceivableRows, validateReceivablePaidRows, receivableCustomerKey, isReceivableIdentifierHeader, readReceivableIdentifierCell, readReceivableIdentifierCellResult, mergeReceivableImportProblems } from './receivables-parser.mjs';
+import { parseCsv, validateWorkbookExpandedSize, validateReceivableRows, validateReceivablePaidRows, receivableCustomerKey, normalizeReceivableCollectorName, isReceivableIdentifierHeader, readReceivableIdentifierCell, readReceivableIdentifierCellResult, mergeReceivableImportProblems } from './receivables-parser.mjs';
 import { parseCivilDate } from './payables-parser.mjs';
 const header = ['NF','Órgão','Filial','Vencimento','Valor','Emissão','CNPJ'];
 const row = ['00014','Cliente sintético','3','16/10/2026','1.234,56','01/10/2026','12.345.678/0001-90'];
@@ -203,4 +203,69 @@ test('recebimentos mantêm emissão opcional, validam cabeçalhos únicos e recu
     assert.deepEqual(validateReceivablePaidRows([receivedHeader, values]).rows, []);
   }
   assert.deepEqual(validateReceivablePaidRows([[...receivedHeader, 'Extra'], [...receivedRow, '=1+1']]).rows, []);
+});
+
+test('COBRADORA acompanha o aberto como metadado, sem alterar campos financeiros ou inventar UUID', () => {
+  const original = validateReceivableRows([erpHeader, erpRow]);
+  const source = [[...erpHeader, 'COBRADORA'], [...erpRow, '  Responsável   Sintética  '], [], ['Outro cliente', '000124', '50,00', '01/10/2026 00:00', '21/10/2026 00:00', 'FILIAL TESTE', 'Outra responsável']];
+  const result = validateReceivableRows(source);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.rows[0], original.rows[0]);
+  assert.deepEqual(Object.keys(original).sort(), ['errors', 'rows']);
+  assert.deepEqual(result.collector_hints, [
+    { line: 2, customer_key: receivableCustomerKey(original.rows[0]), collector_name: 'Responsável Sintética' },
+    { line: 4, customer_key: 'name:OUTRO CLIENTE', collector_name: 'Outra responsável' },
+  ]);
+  assert(result.rows.every(item => !Object.hasOwn(item, 'collector_name') && !Object.hasOwn(item, 'collector_id')));
+  assert.equal(normalizeReceivableCollectorName('  responsável\u00A0  SINTÉTICA '), 'RESPONSAVEL SINTETICA');
+  assert.notEqual(normalizeReceivableCollectorName('Responsável-Sintética'), normalizeReceivableCollectorName('Responsável Sintética'));
+});
+
+test('cobradora responsável admite cabeçalho com acento e espaços e deixa células vazias para a escolha no sistema', () => {
+  for (const column of ['COBRADORA', 'Cobradora responsável', ' cobradora\u00A0 responsável ']) {
+    for (const name of ['', null, undefined, ' \u00A0 ']) {
+      const result = validateReceivableRows([[...erpHeader, column], [...erpRow, name]]);
+      assert.deepEqual(result.errors, []); assert.equal(result.rows.length, 1); assert.deepEqual(result.collector_hints, []);
+    }
+  }
+  const ignoredGeneric = validateReceivableRows([[...erpHeader, 'Responsável'], [...erpRow, 'Não deve ser presumida como cobradora']]);
+  assert.equal(ignoredGeneric.collector_hints, undefined);
+});
+
+test('mesma carteira por cliente admite variações de escrita do nome e reúne parcelas com datas diferentes', () => {
+  const another = [...erpRow]; another[4] = '20/11/2026 00:00';
+  const result = validateReceivableRows([[...erpHeader, 'COBRADORA'], [...erpRow, 'Responsável Sintética'], [...another, 'RESPONSAVEL  SINTETICA']]);
+  assert.deepEqual(result.errors, []); assert.equal(result.rows.length, 2);
+  assert.equal(result.collector_hints.length, 2);
+  assert.equal(result.collector_hints[0].customer_key, result.collector_hints[1].customer_key);
+});
+
+test('cobradoras divergentes para um mesmo cliente bloqueiam a base e apontam as linhas físicas', () => {
+  const another = [...erpRow]; another[4] = '20/11/2026 00:00';
+  const result = validateReceivableRows([[...erpHeader, 'COBRADORA'], [...erpRow, 'Responsável A'], [], [...another, 'Responsável B']]);
+  assert.deepEqual(result.rows, []); assert.deepEqual(result.collector_hints, []);
+  assert.deepEqual(result.errors.map(error => ({ line: error.line, column: error.column })), [{ line: 2, column: 'COBRADORA' }, { line: 4, column: 'COBRADORA' }]);
+  assert(result.errors.every(error => /mesmo cliente/.test(error.problem)));
+  const cnpj = validateReceivableRows([[...header, 'COBRADORA'], [...row, 'Responsável A'], ['00015', 'Outro nome do mesmo CNPJ', '4', '17/10/2026', '1,00', '', row[6], 'Responsável B']]);
+  assert.deepEqual(cnpj.rows, []); assert.equal(cnpj.errors[0].column, 'COBRADORA');
+});
+
+test('cobradora exige texto limitado sem controles ou fórmulas e nunca devolve hints parciais', () => {
+  for (const value of [123, true, new Date('2026-10-20T00:00:00Z'), 'A'.repeat(151), 'Responsável\u0000Teste', 'Responsável\nTeste', { formula: '1+1', result: 2 }, '=1+1', '@responsavel']) {
+    const result = validateReceivableRows([[...erpHeader, 'COBRADORA'], [...erpRow, value]]);
+    assert.deepEqual(result.rows, []); assert.deepEqual(result.collector_hints, []); assert.equal(result.errors[0].column, 'COBRADORA');
+  }
+  const duplicate = validateReceivableRows([[...erpHeader, 'COBRADORA', 'Cobradora responsável'], [...erpRow, 'A', 'A']]);
+  assert.deepEqual(duplicate.rows, []); assert.equal(duplicate.errors[0].column, 'COBRADORA'); assert.match(duplicate.errors[0].problem, /duplicada/);
+  const invalid = [...erpRow]; invalid[2] = '1,001';
+  const result = validateReceivableRows([[...erpHeader, 'COBRADORA'], [...erpRow, 'Responsável A'], [...invalid, 'Responsável A']]);
+  assert.deepEqual(result.rows, []); assert.deepEqual(result.collector_hints, []);
+});
+
+test('quitados com COBRADORA mantêm somente os dados de recebimento e ainda recusam fórmulas nessa coluna', () => {
+  const original = validateReceivablePaidRows([receivedHeader, receivedRow]);
+  const result = validateReceivablePaidRows([[...receivedHeader, 'COBRADORA'], [...receivedRow, 'Responsável diferente']]);
+  assert.deepEqual(result, original); assert.equal(result.collector_hints, undefined);
+  const unsafe = validateReceivablePaidRows([[...receivedHeader, 'COBRADORA'], [...receivedRow, { formula: '1+1', result: 2 }]]);
+  assert.deepEqual(unsafe.rows, []); assert.equal(unsafe.errors[0].column, 'COBRADORA');
 });

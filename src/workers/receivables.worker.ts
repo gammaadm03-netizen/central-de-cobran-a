@@ -43,7 +43,7 @@ self.onmessage = async (event: MessageEvent<{ buffer: ArrayBuffer; name: string;
     } else throw new Error('Selecione um arquivo .xlsx, .xlsm ou .csv.');
     const parsed = mode === 'received' ? validateReceivablePaidRows(matrix, { excel1904 }) : validateReceivableRows(matrix, { excel1904 });
     const errors = mergeReceivableImportProblems(parsed.errors, cellErrors);
-    self.postMessage({ rows: errors.length ? [] : parsed.rows, errors });
+    self.postMessage({ rows: errors.length ? [] : parsed.rows, errors, ...(!errors.length && 'collector_hints' in parsed ? { collector_hints: parsed.collector_hints } : {}) });
   } catch (error) {
     self.postMessage({ rows: [], errors: [{ line: 0, column: 'Arquivo', problem: error instanceof Error ? error.message : 'Não foi possível analisar o arquivo.', correction: 'Confira o formato, salve uma cópia com valores e tente novamente.' }] });
   }

@@ -1,10 +1,14 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.2**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.3**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
 
 ## Fechamento: dashboards e menu lateral recolhível — 0.18.2
 
 O botão lateral **Fechamento** abre seus dashboards e expande as opções **Margens** e **Custos** logo abaixo. Um novo clique recolhe essas opções. O dashboard consolida todos os itens do mês, com indicadores e distribuição de venda e margem por filial e centro de custo; valida a mesma versão durante a consulta. Margens mantém a análise do fechamento por mês e item. Custos permite consultar o catálogo, buscar produtos e comparar versões por data de referência. Importação e aplicação de custos ao fechamento continuam restritas às permissões existentes; a Diretoria consulta sem alterar. Importar Bases → Custos permanece disponível para os operadores autorizados. A reorganização não exige uma nova migração SQL.
+
+## Carga inicial de Contas a Receber com cobradoras — 0.18.3
+
+A coluna opcional **COBRADORA** preenche a escolha dos clientes ainda sem carteira quando corresponde exatamente a uma única cobradora ativa, ignorando diferenças de acentos, caixa e espaços. A prévia consulta primeiro as carteiras oficiais, preserva vínculos existentes e exige conferência para nomes desconhecidos ou ambíguos. A confirmação usa as escolhas e o arquivo original conferidos. Os relatórios seguintes sem a coluna mantêm a atribuição na Central para clientes novos. [Como importar a carga inicial](docs/receber-carga-inicial-cobradoras.md). O ajuste usa os contratos 030/047 já existentes, sem nova migração SQL.
 
 ## Preparar a carga oficial: limpeza administrativa das bases de teste
 

@@ -177,7 +177,7 @@ async function validateWorkbookExpandedSize(buffer) {
 }
 
 // src/lib/receivables-parser.mjs
-var COLUMN_LABELS = { document: "Documento / NF", client_name: "Cliente / \xD3rg\xE3o", branch: "Filial", due_date: "Vencimento", amount_cents: "Valor", issued_on: "Emiss\xE3o", client_document: "CNPJ", received_on: "Quita\xE7\xE3o: data do recebimento", received_amount_cents: "Quita\xE7\xE3o: valor recebido" };
+var COLUMN_LABELS = { document: "Documento / NF", client_name: "Cliente / \xD3rg\xE3o", branch: "Filial", due_date: "Vencimento", amount_cents: "Valor", issued_on: "Emiss\xE3o", client_document: "CNPJ", received_on: "Quita\xE7\xE3o: data do recebimento", received_amount_cents: "Quita\xE7\xE3o: valor recebido", collector_name: "COBRADORA" };
 var REQUIRED = ["document", "client_name", "branch", "due_date", "amount_cents"];
 var normalize = (value) => String(value ?? "").normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 var ALIASES2 = {
@@ -189,7 +189,8 @@ var ALIASES2 = {
   issued_on: ["EMISSAO", "DATAEMISSAO", "DTEMISSAO", "EMISSAODATA"],
   client_document: ["CNPJ", "CNPJCLIENTE", "DOCUMENTOCLIENTE"],
   received_on: ["QUITACAODATADORECEBIMENTO"],
-  received_amount_cents: ["QUITACAOVALORRECEBIDO"]
+  received_amount_cents: ["QUITACAOVALORRECEBIDO"],
+  collector_name: ["COBRADORA", "COBRADORARESPONSAVEL"]
 };
 var headerMap2 = new Map(Object.entries(ALIASES2).flatMap(([key, aliases]) => aliases.map((alias) => [alias, key])));
 var ERP_TIMESTAMP_HEADERS = /* @__PURE__ */ new Set(["EMISSAODATA", "VENCIMENTODATA", "QUITACAODATADORECEBIMENTO"]);
@@ -279,8 +280,11 @@ function mergeReceivableImportProblems(parserErrors, cellErrors = []) {
 function receivableCustomerKey(row) {
   return row.client_document ? `cnpj:${row.client_document}` : `name:${row.client_name.trim().replace(/\s+/g, " ").toUpperCase()}`;
 }
+function normalizeReceivableCollectorName(value) {
+  return String(value ?? "").normalize("NFD").replace(/\p{M}/gu, "").trim().replace(/\s+/g, " ").toLocaleUpperCase("pt-BR");
+}
 function validateReceivableMatrix(matrix, { excel1904 = false } = {}, received = false) {
-  const errors = [], rows = [];
+  const errors = [], rows = [], collectorHints = [];
   if (!matrix.length) return { rows, errors: [{ line: 1, column: "Arquivo", problem: "Arquivo vazio.", correction: "Exporte o relat\xF3rio completo com os cabe\xE7alhos." }] };
   if (matrix[0].length > 100) return { rows, errors: [{ line: 1, column: "Arquivo", problem: "Mais de 100 colunas.", correction: "Salve uma c\xF3pia com at\xE9 100 colunas." }] };
   const columns = /* @__PURE__ */ new Map(), timestampColumns = /* @__PURE__ */ new Set();
@@ -298,7 +302,8 @@ function validateReceivableMatrix(matrix, { excel1904 = false } = {}, received =
     else if (key) columns.set(key, index);
   });
   for (const key of [...REQUIRED, ...received ? ["received_on", "received_amount_cents"] : []]) if (!columns.has(key)) errors.push({ line: 1, column: COLUMN_LABELS[key], problem: "Coluna obrigat\xF3ria ausente.", correction: `Inclua a coluna ${COLUMN_LABELS[key]}.` });
-  if (errors.length) return { rows, errors };
+  const withCollectorHints = !received && columns.has("collector_name");
+  if (errors.length) return { rows, errors, ...withCollectorHints ? { collector_hints: [] } : {} };
   const keys = /* @__PURE__ */ new Set(), recognized = new Set(columns.values());
   let total = 0, receivedTotal = 0, nonempty = 0;
   for (let index = 1; index < matrix.length; index++) {
@@ -309,6 +314,7 @@ function validateReceivableMatrix(matrix, { excel1904 = false } = {}, received =
       break;
     }
     const row = { document: "", client_name: "", client_document: null, branch: "", issued_on: null, due_date: "", amount_cents: 0 };
+    let collectorName = "";
     if (received) {
       row.received_on = "";
       row.received_amount_cents = 0;
@@ -326,7 +332,13 @@ function validateReceivableMatrix(matrix, { excel1904 = false } = {}, received =
       try {
         const value = scalar(source[column]);
         if (!received && ["received_on", "received_amount_cents"].includes(key)) continue;
-        if (key === "amount_cents" || key === "received_amount_cents") {
+        if (key === "collector_name") {
+          if (received) continue;
+          if (typeof value !== "string") throw new Error("Informe o nome da cobradora como texto.");
+          if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) throw new Error("O nome da cobradora cont\xE9m caracteres de controle.");
+          collectorName = value.trim().replace(/\s+/g, " ");
+          if (collectorName.length > 150) throw new Error("Limite de 150 caracteres excedido.");
+        } else if (key === "amount_cents" || key === "received_amount_cents") {
           row[key] = parseMoneyCents(value);
           if (key === "received_amount_cents" && row[key] <= 0) throw new Error("O valor recebido deve ser maior que zero.");
         } else if (key === "due_date" || key === "received_on") row[key] = timestampColumns.has(column) ? parseErpDate(value, excel1904) : parseCivilDate(value, excel1904);
@@ -362,12 +374,30 @@ function validateReceivableMatrix(matrix, { excel1904 = false } = {}, received =
       else {
         keys.add(identity);
         rows.push(row);
+        if (collectorName) collectorHints.push({ line: index + 1, customer_key: receivableCustomerKey(row), collector_name: collectorName });
       }
     }
     if (errors.length >= 100) break;
   }
+  if (withCollectorHints && !errors.length) {
+    const customers = /* @__PURE__ */ new Map();
+    for (const hint of collectorHints) {
+      const names = customers.get(hint.customer_key) ?? /* @__PURE__ */ new Set();
+      names.add(normalizeReceivableCollectorName(hint.collector_name));
+      customers.set(hint.customer_key, names);
+    }
+    for (const hint of collectorHints) {
+      if (customers.get(hint.customer_key).size > 1) errors.push({
+        line: hint.line,
+        column: COLUMN_LABELS.collector_name,
+        problem: "O mesmo cliente possui cobradoras diferentes no arquivo.",
+        correction: "Defina a mesma cobradora em todas as linhas deste cliente, ou deixe os nomes em branco para escolher a respons\xE1vel na Central."
+      });
+      if (errors.length >= 100) break;
+    }
+  }
   if (!rows.length && !errors.length) errors.push({ line: 2, column: "Arquivo", problem: "N\xE3o h\xE1 t\xEDtulos no relat\xF3rio.", correction: "Selecione um relat\xF3rio completo com t\xEDtulos; uma base vazia n\xE3o pode gerar aus\xEAncias." });
-  return { rows: errors.length ? [] : rows, errors: errors.slice(0, 100) };
+  return { rows: errors.length ? [] : rows, errors: errors.slice(0, 100), ...withCollectorHints ? { collector_hints: errors.length ? [] : collectorHints } : {} };
 }
 function validateReceivableRows(matrix, options = {}) {
   return validateReceivableMatrix(matrix, options, false);
@@ -495,6 +525,9 @@ var SAFE_MESSAGES = /* @__PURE__ */ new Set([
   "Identificador de documento inv\xE1lido. Use texto ou n\xFAmero inteiro n\xE3o negativo, sem nota\xE7\xE3o cient\xEDfica.",
   "Formato do identificador n\xE3o suportado. No Excel, use Texto ou um formato simples de zeros, como 000000.",
   "O valor recebido deve ser maior que zero.",
+  "Informe o nome da cobradora como texto.",
+  "O nome da cobradora cont\xE9m caracteres de controle.",
+  "O mesmo cliente possui cobradoras diferentes no arquivo.",
   "Este arquivo cont\xE9m colunas de quita\xE7\xE3o. Selecione o modo Recebimentos para importar datas e valores efetivamente recebidos."
 ]);
 var safeMessage = (message) => SAFE_MESSAGES.has(message) || /^Limite de (?:150|300|1500) caracteres excedido\.$/.test(message) ? message : PARSE_FAILURE;

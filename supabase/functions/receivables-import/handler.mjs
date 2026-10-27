@@ -49,6 +49,9 @@ const SAFE_MESSAGES = new Set([
   'Identificador de documento inválido. Use texto ou número inteiro não negativo, sem notação científica.',
   'Formato do identificador não suportado. No Excel, use Texto ou um formato simples de zeros, como 000000.',
   'O valor recebido deve ser maior que zero.',
+  'Informe o nome da cobradora como texto.',
+  'O nome da cobradora contém caracteres de controle.',
+  'O mesmo cliente possui cobradoras diferentes no arquivo.',
   'Este arquivo contém colunas de quitação. Selecione o modo Recebimentos para importar datas e valores efetivamente recebidos.',
 ]);
 const safeMessage = message => SAFE_MESSAGES.has(message) || /^Limite de (?:150|300|1500) caracteres excedido\.$/.test(message) ? message : PARSE_FAILURE;

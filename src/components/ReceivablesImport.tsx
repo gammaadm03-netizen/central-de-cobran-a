@@ -3,6 +3,8 @@ import { supabase } from '../lib/supabase';
 import { analyzeReceivableFile, analyzeReceivableReceivedFile, dateLabel, formatCents, RECEIVABLE_SCOPE, receivableError, receivableImportRequest, makeReceivableFailure, receivableFailureReference, receivableImportFailureMessage, type ImportProblem, type ReceivableImportRow, type ReceivableImportRequestBody } from '../lib/receivables';
 
 import { officialToday } from './Treasury';
+import { resolveReceivableCollectorHints, type CollectorHintSummary } from '../lib/receivable-collector-plan.mjs';
+import type { ReceivableCollectorHint } from '../lib/receivables-parser.mjs';
 
 type Mode = 'open' | 'received';
 interface Batch { id: string; file_name: string; created_at: string; row_count: number; new_count: number; open_count: number; pending_count: number; validated_in_source_count: number; import_mode?: string }
@@ -19,7 +21,7 @@ interface Preview {
   conflict_count: number; can_commit: boolean; errors?: ImportProblem[];
   collector_assignment_version?: string; customer_collector_assignments?: Assignment[]; missing_collector_count?: number;
 }
-interface Analysis { file: File; mode: Mode; base64: string; rows: PreviewRow[]; preview: Preview; nominalTotal: number; receivedTotal: number; titleMappings: Record<string, string> }
+interface Analysis { file: File; mode: Mode; base64: string; rows: PreviewRow[]; preview: Preview; nominalTotal: number; receivedTotal: number; titleMappings: Record<string, string>; collectorMappings: Record<string, string>; collectorHints?: ReceivableCollectorHint[]; collectorSummary?: CollectorHintSummary }
 interface ServerPreview { rows: PreviewRow[]; preview: Preview; file_sha256: string }
 const uuid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 const countFields = ['new_count', 'open_count', 'changed_count', 'pending_count', 'validated_in_source_count', 'received_count', 'matched_count', 'correction_count', 'historical_count', 'conflict_count'] as const;
@@ -99,6 +101,7 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
   const pendingCommit = useRef<ReceivableImportRequestBody | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null), [mappings, setMappings] = useState<Record<string, string>>({}), [mappingsDirty, setMappingsDirty] = useState(false);
   const [collectorMappings, setCollectorMappings] = useState<Record<string, string>>({}), [collectors, setCollectors] = useState<Collector[]>([]);
+  const [useFileCollectors, setUseFileCollectors] = useState(true);
   const [collectorsLoading, setCollectorsLoading] = useState(false), [collectorsError, setCollectorsError] = useState('');
   const [bulkCollector, setBulkCollector] = useState(''), [customerSearch, setCustomerSearch] = useState(''), [customerPage, setCustomerPage] = useState(1);
   const [problems, setProblems] = useState<ImportProblem[]>([]), [history, setHistory] = useState<Batch[]>([]);
@@ -150,7 +153,7 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
   function resetAnalysis() { generation.current++; controller.current?.abort(); focusProblems.current = false; focusError.current = false; setAnalysis(null); pendingCommit.current = null; setProblems([]); setPreviousProblems(false); setError(''); setErrorReference(''); setSuccess(''); setBusy(null); }
   function changeMode(next: Mode) {
     if (busy || uncertain || next === mode) return;
-    resetAnalysis(); setMode(next); setFile(null); setComplete(false); setMappings({}); setCollectorMappings({}); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); if (inputRef.current) inputRef.current.value = '';
+    resetAnalysis(); setMode(next); setFile(null); setComplete(false); setMappings({}); setCollectorMappings({}); setUseFileCollectors(true); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); if (inputRef.current) inputRef.current.value = '';
   }
   async function analyze(event?: FormEvent) {
     event?.preventDefault();
@@ -164,15 +167,36 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
       const parsed = mode === 'received' ? await analyzeReceivableReceivedFile(file, abort.signal) : await analyzeReceivableFile(file, abort.signal);
       if (current !== generation.current) return;
       if (parsed.errors.length) { preserveChoices(); focusProblems.current = true; setProblems(parsed.errors); return; }
-      const canonical = await receivableImportRequest<ServerPreview>({ action: 'preview', mode, file_name: file.name, file_base64: parsed.base64, title_mappings: mappings, ...(mode === 'open' ? { collector_mappings: collectorMappings, full_report: fullReport, reference_date: referenceDate } : {}) }, abort.signal);
+      // The first preview identifies official customer wallets before a file can propose a responsible.
+      const selectedCollectors = Object.fromEntries(Object.entries(collectorMappings).filter(([, id]) => id !== ''));
+      const previewRequest = (choices: Record<string, string>) => receivableImportRequest<ServerPreview>({ action: 'preview', mode, file_name: file.name, file_base64: parsed.base64, title_mappings: mappings, ...(mode === 'open' ? { collector_mappings: choices, full_report: fullReport, reference_date: referenceDate } : {}) }, abort.signal);
+      let canonical = await previewRequest(selectedCollectors);
       if (current !== generation.current) return;
-      const totals = officialPreview(canonical, mode, parsed.hash, fullReport, referenceDate);
-      const nextAnalysis: Analysis = { file, mode, base64: parsed.base64, rows: canonical.rows, preview: canonical.preview, titleMappings: { ...mappings }, ...totals };
+      let totals = officialPreview(canonical, mode, parsed.hash, fullReport, referenceDate);
+      let effectiveCollectors = selectedCollectors, collectorSummary: CollectorHintSummary | undefined;
+      let collectorProblems: ImportProblem[] = [];
+      if (mode === 'open' && parsed.collector_hints !== undefined) {
+        const hints = useFileCollectors ? parsed.collector_hints : [];
+        const hintedKeys = new Set(hints.map(item => item.customer_key));
+        const needsCollectorLookup = canonical.preview.customer_collector_assignments!.some(item => item.requires_selection && !item.locked && hintedKeys.has(item.customer_key) && !Object.hasOwn(collectorMappings, item.customer_key));
+        if (needsCollectorLookup && (collectorsLoading || collectorsError)) throw { errors: [{ line: hints[0].line, column: 'COBRADORA', problem: collectorsLoading ? 'Aguarde a consulta das cobradoras e analise o arquivo novamente.' : 'Não foi possível conferir as cobradoras da planilha.', correction: 'Atualize o histórico de CR para consultar as cobradoras e analise o arquivo novamente.' }] };
+        const plan = resolveReceivableCollectorHints({ hints, assignments: canonical.preview.customer_collector_assignments!, collectors, mappings: collectorMappings });
+        effectiveCollectors = plan.mappings; collectorSummary = plan.summary; collectorProblems = plan.problems;
+        const changed = Object.keys(effectiveCollectors).length !== Object.keys(selectedCollectors).length || Object.entries(effectiveCollectors).some(([key, id]) => selectedCollectors[key] !== id);
+        if (changed) {
+          const firstRevision = canonical.preview.financial_revision, firstImport = canonical.preview.previous_import_id;
+          canonical = await previewRequest(effectiveCollectors);
+          if (current !== generation.current) return;
+          totals = officialPreview(canonical, mode, parsed.hash, fullReport, referenceDate);
+          if (canonical.preview.financial_revision !== firstRevision || canonical.preview.previous_import_id !== firstImport) throw { code: '40001' };
+          if (Object.entries(effectiveCollectors).some(([key, id]) => canonical.preview.customer_collector_assignments!.find(item => item.customer_key === key)?.collector_id !== id)) throw makeReceivableFailure({ phase: 'preview', status: 200, code: 'CR_INVALID_PREVIEW' });
+        }
+      }
+      const nextAnalysis: Analysis = { file, mode, base64: parsed.base64, rows: canonical.rows, preview: canonical.preview, titleMappings: { ...mappings }, collectorMappings: { ...effectiveCollectors }, ...(mode === 'open' && parsed.collector_hints !== undefined ? { collectorHints: parsed.collector_hints, collectorSummary } : {}), ...totals };
       setAnalysis(nextAnalysis);
       if (mode === 'received') setUncertain(false);
-      // SQL preview identifies each financial item from 1; the header occupies
-      // Excel row 1. Parser and HTTP 422 errors already use physical rows.
-      const nextProblems = safeProblems(canonical.preview.errors).map(problem => ({ ...problem, line: problem.line > 0 ? problem.line + 1 : problem.line }));
+      // SQL errors use financial row numbers; file hints already carry physical Excel rows.
+      const nextProblems = [...safeProblems(canonical.preview.errors).map(problem => ({ ...problem, line: problem.line > 0 ? problem.line + 1 : problem.line })), ...collectorProblems].slice(0, 100);
       focusProblems.current = nextProblems.length > 0; setProblems(nextProblems); setMappingsDirty(false);
     } catch (failure) { if (current === generation.current && !abort.signal.aborted) {
       preserveChoices(); setErrorReference(receivableFailureReference(failure, 'preview'));
@@ -190,13 +214,13 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
     if (!retry && !window.confirm(message)) return;
     setBusy('saving'); setError(''); setErrorReference(''); setSuccess(''); const current = generation.current;
     try {
-      const body: ReceivableImportRequestBody = retry ? pendingCommit.current! : { action: 'commit', mode: analysis.mode, file_name: analysis.file.name, file_base64: analysis.base64, complete: true, title_mappings: { ...mappings }, previous_import_id: p.previous_import_id, previous_financial_revision: p.financial_revision, ...(analysis.mode === 'received' ? { confirm_corrections: corrections > 0 } : { collector_mappings: { ...collectorMappings }, full_report: p.full_report, reference_date: p.reference_date, request_id: crypto.randomUUID() }) };
+      const body: ReceivableImportRequestBody = retry ? pendingCommit.current! : { action: 'commit', mode: analysis.mode, file_name: analysis.file.name, file_base64: analysis.base64, complete: true, title_mappings: { ...mappings }, previous_import_id: p.previous_import_id, previous_financial_revision: p.financial_revision, ...(analysis.mode === 'received' ? { confirm_corrections: corrections > 0 } : { collector_mappings: { ...analysis.collectorMappings }, full_report: p.full_report, reference_date: p.reference_date, request_id: crypto.randomUUID() }) };
       if (analysis.mode === 'open') pendingCommit.current = body;
       const summary = await receivableImportRequest<{ import_id: string; row_count: number; request_id?: string; full_report?: boolean; reference_date?: string; retired_count?: number; retired_worked_count?: number; retired_unworked_count?: number; reappeared_count?: number }>(body);
       if (current !== generation.current) return;
       if (!summary || typeof summary.import_id !== 'string' || !uuid.test(summary.import_id) || summary.row_count !== p.row_count || analysis.mode === 'open' && (summary.request_id !== body.request_id || summary.full_report !== p.full_report || summary.reference_date !== p.reference_date || summary.retired_count !== p.retired_count || summary.retired_worked_count !== p.retired_worked_count || summary.retired_unworked_count !== p.retired_unworked_count || summary.reappeared_count !== p.reappeared_count)) throw makeReceivableFailure({ phase: 'commit', status: 200, code: 'CR_INVALID_RESPONSE' });
       setSuccess(analysis.mode === 'received' ? `Importação concluída: ${summary.row_count} títulos quitados conferidos. Recebimentos disponíveis no resumo e na base de apuração de comissões; títulos validados fora da carteira ativa.` : `Importação concluída: ${summary.row_count} títulos conferidos. ${summary.retired_count} ausentes retirados da carteira ativa; ${summary.retired_worked_count} pendentes em Comissões, aguardando o relatório de quitados. Nenhum recebimento foi presumido.`);
-      pendingCommit.current = null; setUncertain(false); setAnalysis(null); setComplete(false); setFile(null); setMappings({}); setCollectorMappings({}); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); setProblems([]); setRefresh(value => value + 1); if (inputRef.current) inputRef.current.value = '';
+      pendingCommit.current = null; setUncertain(false); setAnalysis(null); setComplete(false); setFile(null); setMappings({}); setCollectorMappings({}); setUseFileCollectors(true); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); setProblems([]); setRefresh(value => value + 1); if (inputRef.current) inputRef.current.value = '';
     } catch (failure) { if (current === generation.current) {
       const code = failure && typeof failure === 'object' && 'code' in failure ? String(failure.code) : '';
       const known = ['40001', '23505', '23514', '22023', '42501', 'P0023', 'P0024', 'P0030', 'P0047', 'PGRST301', 'PGRST303'].includes(code);
@@ -213,13 +237,15 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
   }
   function mapCollector(key: string, id: string) {
     if (busy || uncertain || !analysis?.preview.customer_collector_assignments?.some(item => item.customer_key === key && item.requires_selection && !item.locked) || id && !collectors.some(item => item.id === id)) return;
-    setCollectorMappings(previous => { const next = { ...previous }; if (id) next[key] = id; else delete next[key]; return next; }); setMappingsDirty(true); setPreviousProblems(true); setError(''); setErrorReference('');
+    setCollectorMappings(previous => ({ ...previous, [key]: id })); setMappingsDirty(true); setPreviousProblems(true); setError(''); setErrorReference('');
   }
   if (!canImport) return <p className="notice">Seu perfil não permite importar bases de Contas a Receber.</p>;
   const mappingRows = analysis?.rows.filter(row => ambiguous(row) || Object.hasOwn(mappings, String(row.line))) ?? [];
   const unresolved = mappingRows.filter(row => ambiguous(row) && !mappings[String(row.line)]);
   const mappingsNotApplied = !!analysis && !mappingsDirty && unappliedTitleMappings(analysis);
   const assignments = analysis?.preview.customer_collector_assignments ?? [];
+  const selectedCollector = (key: string) => Object.hasOwn(collectorMappings, key) ? collectorMappings[key] : useFileCollectors ? analysis?.collectorMappings[key] ?? '' : '';
+  const hintedCustomers = new Set(analysis?.collectorHints?.map(item => item.customer_key) ?? []);
   const filteredCustomers = assignments.filter(item => `${item.client_name} ${item.client_document ?? ''}`.toLocaleLowerCase('pt-BR').includes(customerSearch.toLocaleLowerCase('pt-BR')));
   const pages = Math.max(1, Math.ceil(filteredCustomers.length / 20)), currentPage = Math.min(customerPage, pages);
   return <>
@@ -227,12 +253,12 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
       <div className="panel-header"><div><h2 id="receivable-import-title">Importar Contas a Receber</h2><p className="muted">Atualize a Central com o relatório do sistema de origem. A cópia original, as carteiras e o histórico são preservados.</p></div></div>
       <div className="inline-actions" role="group" aria-label="Tipo de relatório de Contas a Receber"><button type="button" className={`button ${mode === 'open' ? '' : 'secondary'}`} aria-pressed={mode === 'open'} disabled={busy !== null || uncertain} onClick={() => changeMode('open')}>Abertos e vencidos</button><button type="button" className={`button ${mode === 'received' ? '' : 'secondary'}`} aria-pressed={mode === 'received'} disabled={busy !== null || uncertain} onClick={() => changeMode('received')}>Títulos quitados</button></div>
       <p className="notice">{mode === 'open' ? 'No relatório completo, os títulos ausentes saem da carteira ativa e mantêm o histórico. Se houve cobrança, ficam pendentes em Comissões até o relatório de quitados confirmar o recebimento.' : 'Títulos quitados confirmam o recebimento pela data e pelo valor efetivos do relatório, retiram os títulos validados da carteira ativa e alimentam a base de apuração de comissões.'}</p>
-      <p className="help-text">{mode === 'open' ? 'Inclua títulos a vencer e vencidos. Na Cobrança aparecem somente os vencidos. Escolha a cobradora dos clientes sem responsável durante esta importação. Carteiras existentes são preservadas nas atualizações diárias. Alterações de parcelas que gerem dúvida exigem conferir o vínculo antes de concluir.' : 'Este modo exige as colunas Quitação: data do recebimento e Quitação: valor recebido. O vencimento e o valor original continuam separados do recebimento; não substitua essas informações.'}</p>
+      <p className="help-text">{mode === 'open' ? 'Inclua títulos a vencer e vencidos. Na Cobrança aparecem somente os vencidos. Na carga inicial, a coluna COBRADORA preenche as responsáveis dos clientes sem carteira. Nos próximos relatórios, escolha na Central a cobradora dos novos clientes. Carteiras existentes são preservadas nas atualizações diárias. Alterações de parcelas que gerem dúvida exigem conferir o vínculo antes de concluir.' : 'Este modo exige as colunas Quitação: data do recebimento e Quitação: valor recebido. O vencimento e o valor original continuam separados do recebimento; não substitua essas informações.'}</p>
       <p className="help-text">Campos do título: Documento / NF, Cliente / Órgão, Filial, Vencimento e Valor original. Emissão e CNPJ são opcionais; não complete CNPJ ausente automaticamente.</p>
       {error && <div ref={errorRef} tabIndex={-1} className="notice error" role="alert"><p>{error}</p>{errorReference && <p className="help-text">Código para suporte: <code style={{ overflowWrap: 'anywhere' }}>{errorReference}</code></p>}</div>}{success && <p className="notice success" role="status">{success}</p>}
       {uncertain && <div className="notice" role="status"><p>A confirmação está pendente. Mantenha esta tela aberta para conferir o mesmo envio sem duplicar informações.</p>{mode === 'open' ? <button type="button" className="button secondary" disabled={busy !== null} onClick={() => void commit(true)}>Conferir confirmação pendente</button> : <p>Clique em Analisar arquivo para conferir o mesmo envio.</p>}</div>}
       <form className="stack" onSubmit={event => void analyze(event)}>
-        <label className="field" htmlFor="receivable-file">{mode === 'open' ? 'Relatório de abertos e vencidos de Contas a Receber' : 'Relatório de títulos quitados de Contas a Receber'}<input ref={inputRef} id="receivable-file" type="file" accept=".xlsx,.xlsm,.csv,.xls" disabled={busy !== null || uncertain} onChange={event => { resetAnalysis(); setComplete(false); setMappings({}); setCollectorMappings({}); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); setFile(event.target.files?.[0] ?? null); }} /></label>
+        <label className="field" htmlFor="receivable-file">{mode === 'open' ? 'Relatório de abertos e vencidos de Contas a Receber' : 'Relatório de títulos quitados de Contas a Receber'}<input ref={inputRef} id="receivable-file" type="file" accept=".xlsx,.xlsm,.csv,.xls" disabled={busy !== null || uncertain} onChange={event => { resetAnalysis(); setComplete(false); setMappings({}); setCollectorMappings({}); setUseFileCollectors(true); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); setFile(event.target.files?.[0] ?? null); }} /></label>
         <p className="help-text">Até 2 MiB, 5.000 títulos e uma única aba preenchida. Formatos: .xlsx, .xlsm e .csv UTF-8. Para .xls antigo, salve uma cópia como .xlsx. Fórmulas são recusadas; macros nunca são executadas.</p>
         {mode === 'open' && <div className="inline-actions"><label className="field">Abrangência do relatório<select aria-label="Abrangência do relatório" value={fullReport ? 'full' : 'incremental'} disabled={busy !== null || uncertain} onChange={event => { resetAnalysis(); setComplete(false); setFullReport(event.target.value === 'full'); }}><option value="full">Relatório completo — conferir títulos ausentes</option><option value="incremental">Somente inclusão e atualização</option></select></label><label className="field">Data da posição do relatório<input type="date" value={referenceDate} max={officialToday()} required disabled={busy !== null || uncertain} onChange={event => { resetAnalysis(); setComplete(false); setReferenceDate(event.target.value); }} /></label></div>}
         <label className="checkbox-field"><input type="checkbox" checked={complete} disabled={busy !== null || uncertain} onChange={event => { setComplete(event.target.checked); setAnalysis(null); }} />{mode === 'open' ? ` ${fullReport ? 'Confirmo que este é o relatório completo de todos os títulos em aberto, a vencer e vencidos, da mesma origem e de todas as filiais.' : 'Confirmo que este arquivo contém somente inclusões e atualizações. Títulos ausentes serão preservados.'}` : ' Confirmo que todas as linhas deste arquivo são títulos quitados, com data e valor efetivamente recebidos.'}</label>
@@ -253,14 +279,16 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
       </div>}
       {mode === 'open' && analysis && <section className="stack" aria-labelledby="import-collectors-title"><h3 id="import-collectors-title">Cobradoras responsáveis pela carteira</h3>
         <p className="help-text">A responsável é vinculada ao cliente e acompanha seus títulos. Os vínculos existentes ficam preservados. Você também pode reimportar o mesmo arquivo para completar carteiras sem responsável, sem duplicar os títulos.</p>
+        {!!analysis.collectorHints?.length && <label className="checkbox-field"><input type="checkbox" checked={useFileCollectors} disabled={busy !== null || uncertain} onChange={event => { setUseFileCollectors(event.target.checked); setCollectorMappings({}); setMappingsDirty(true); setPreviousProblems(true); setError(''); setErrorReference(''); }} />Usar cobradoras da planilha</label>}
+        {analysis.collectorSummary && useFileCollectors && <p className="notice" role="status">Coluna COBRADORA: {analysis.collectorSummary.file_title_count} título(s) de {analysis.collectorSummary.file_customer_count} cliente(s). {analysis.collectorSummary.assigned_customer_count} carteira(s) sem responsável com escolha sugerida pela planilha; {analysis.collectorSummary.preserved_customer_count} carteira(s) existente(s) preservada(s); {analysis.collectorSummary.manual_customer_count} escolha(s) feita(s) na Central. Confira as responsáveis antes de concluir.</p>}
         {collectorsLoading && <p role="status">Consultando cobradoras…</p>}
         {collectorsError && <p className="notice error" role="alert">{collectorsError}</p>}
         {!collectorsLoading && !collectorsError && collectors.length === 0 && assignments.some(item => item.requires_selection) && <p className="notice" role="status">Nenhuma cobradora ativa está disponível. Peça à Gerência Geral que cadastre ou ative as cobradoras na Administração e atualize o histórico para consultar novamente.</p>}
         {assignments.some(item => item.requires_selection && !item.locked) && <div className="inline-actions"><label className="field">Cobradora para clientes sem responsável<select value={bulkCollector} disabled={busy !== null || uncertain || collectorsLoading || !!collectorsError} onChange={event => setBulkCollector(event.target.value)}><option value="">Selecione a cobradora</option>{collectors.map(item => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label><button type="button" className="button secondary" disabled={busy !== null || uncertain || !bulkCollector || !collectors.some(item => item.id === bulkCollector)} onClick={() => {
-          setCollectorMappings(previous => ({ ...previous, ...Object.fromEntries(assignments.filter(item => item.requires_selection && !item.locked && !previous[item.customer_key]).map(item => [item.customer_key, bulkCollector])) })); setMappingsDirty(true); setPreviousProblems(true); setError(''); setErrorReference('');
+          setCollectorMappings(previous => ({ ...previous, ...Object.fromEntries(assignments.filter(item => item.requires_selection && !item.locked && !(Object.hasOwn(previous, item.customer_key) ? previous[item.customer_key] : useFileCollectors ? analysis.collectorMappings[item.customer_key] : '')).map(item => [item.customer_key, bulkCollector])) })); setMappingsDirty(true); setPreviousProblems(true); setError(''); setErrorReference('');
         }}>Aplicar às carteiras sem responsável</button></div>}
         <label className="field">Buscar cliente na atribuição de cobradoras<input value={customerSearch} onChange={event => { setCustomerSearch(event.target.value); setCustomerPage(1); }} /></label>
-        <div className="table-wrap"><table><caption>{assignments.length} cliente(s) na conferência de carteiras</caption><thead><tr><th>Cliente</th><th>Títulos</th><th>Cobradora responsável</th></tr></thead><tbody>{filteredCustomers.slice((currentPage - 1) * 20, currentPage * 20).map(item => <tr key={item.customer_key}><td>{item.client_name}{item.client_document && <small className="muted"> · {item.client_document}</small>}</td><td>{item.row_count}</td><td>{item.requires_selection && !item.locked ? <label className="field">Cobradora de {item.client_name}<select value={collectorMappings[item.customer_key] ?? ''} disabled={busy !== null || uncertain || collectorsLoading || !!collectorsError} onChange={event => mapCollector(item.customer_key, event.target.value)}><option value="">Selecione a cobradora</option>{collectors.map(collector => <option key={collector.id} value={collector.id}>{collector.display_name}</option>)}</select></label> : <span>{item.collector_name ?? 'Sem atribuição necessária para títulos quitados'}{item.collector_id && <small className="muted"> · Carteira preservada</small>}</span>}</td></tr>)}</tbody></table></div>
+        <div className="table-wrap"><table><caption>{assignments.length} cliente(s) na conferência de carteiras</caption><thead><tr><th>Cliente</th><th>Títulos</th><th>Cobradora responsável</th></tr></thead><tbody>{filteredCustomers.slice((currentPage - 1) * 20, currentPage * 20).map(item => <tr key={item.customer_key}><td>{item.client_name}{item.client_document && <small className="muted"> · {item.client_document}</small>}</td><td>{item.row_count}</td><td>{item.requires_selection && !item.locked ? <label className="field">Cobradora de {item.client_name}<select aria-label={`Cobradora de ${item.client_name}`} value={selectedCollector(item.customer_key)} disabled={busy !== null || uncertain || collectorsLoading || !!collectorsError} onChange={event => mapCollector(item.customer_key, event.target.value)}><option value="">Selecione a cobradora</option>{collectors.map(collector => <option key={collector.id} value={collector.id}>{collector.display_name}</option>)}</select>{useFileCollectors && hintedCustomers.has(item.customer_key) && selectedCollector(item.customer_key) && <small className="help-text">{Object.hasOwn(collectorMappings, item.customer_key) ? 'Definição na Central' : 'Responsável lida da coluna COBRADORA'}</small>}</label> : <span>{item.collector_name ?? 'Sem atribuição necessária para títulos quitados'}{item.collector_id && <small className="muted"> · Carteira preservada</small>}</span>}</td></tr>)}</tbody></table></div>
         {pages > 1 && <div className="inline-actions"><button type="button" className="button secondary" disabled={currentPage === 1} onClick={() => setCustomerPage(currentPage - 1)}>Clientes anteriores</button><span>Página {currentPage} de {pages}</span><button type="button" className="button secondary" disabled={currentPage === pages} onClick={() => setCustomerPage(currentPage + 1)}>Próximos clientes</button></div>}
         {(analysis.preview.missing_collector_count ?? 0) > 0 && !mappingsDirty && <p className="notice" role="status">Escolha a cobradora de {analysis.preview.missing_collector_count} cliente(s) sem responsável e analise o arquivo novamente.</p>}
         {mappingsDirty && <p className="notice" role="status">Responsáveis ou vínculos alterados. Clique em Analisar arquivo novamente para conferir as escolhas antes de concluir.</p>}
