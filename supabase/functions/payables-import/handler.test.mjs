@@ -14,6 +14,7 @@ const ORIGIN = 'https://central.example.invalid';
 const BASE = 'https://project.example.invalid';
 const ANON = 'synthetic-public-key';
 const SERVICE = 'synthetic-server-only-key';
+const PAYMENT_DATE_VERSION = '2026-10-27.1';
 const jwt = claims => `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ sub: USER, session_id: SESSION, ...claims })).toString('base64url')}.verified-only-by-auth`;
 const TOKEN = jwt({});
 const CSV = 'Lançamento;Histórico;Vencimento;Valor;Plano de Contas;Filial;Emissão;Banco;Situação\r\nABC-1;Fornecedor sintético;16/10/2026;1.234,56;INVESTIMENTOS;2 - TESTE;01/10/2026;Banco teste;Pendente\r\n';
@@ -42,9 +43,9 @@ function setup(options = {}) {
     return { matrix, excel1904: Boolean(workbook.properties.date1904) };
   });
   const fetcher = async (url, init) => {
-    const path = new URL(url).pathname;
+    const parsedUrl = new URL(url), path = parsedUrl.pathname;
     const data = init.body ? JSON.parse(init.body) : null;
-    calls.push({ path, data, init });
+    calls.push({ path, data, init, search: parsedUrl.search });
     assert(init.signal instanceof AbortSignal);
     if (options.networkFailure) throw new Error('secret database query and token must never appear');
     if (path === '/auth/v1/user') {
@@ -55,6 +56,16 @@ function setup(options = {}) {
       assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization.startsWith('Bearer '), true);
       if (options.accessError) return json(options.accessError, 403);
       return json({ profile: { id: USER, enabled: options.enabled ?? true, role_key: options.role ?? 'contas_pagar' }, permissions: options.permissions ?? ['import', 'read', 'write'].map(action => ({ resource: 'contas_pagar', action })) });
+    }
+    if (path === '/rest/v1/payable_paid_import_rows') {
+      assert.equal(init.method, 'GET'); assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
+      assert.equal(init.body, undefined); assert.equal(parsedUrl.searchParams.get('select'), 'source_row');
+      assert.equal(parsedUrl.searchParams.get('import_id'), 'eq.' + IMPORT); assert.equal(parsedUrl.searchParams.get('order'), 'title_id.asc');
+      assert.equal(parsedUrl.searchParams.get('limit'), '500');
+      if (options.historyFailure) return json({ message: 'private history SQL, token and bank' }, options.historyFailure);
+      if (Object.hasOwn(options, 'historyPayload')) return json(options.historyPayload);
+      const offset = Number(parsedUrl.searchParams.get('offset'));
+      return json((options.historyRows ?? []).slice(offset, offset + 500));
     }
     if (path === '/rest/v1/rpc/payables_import_capabilities') {
       assert.equal(init.headers.apikey, ANON); assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
@@ -78,7 +89,7 @@ function setup(options = {}) {
     throw new Error('Unexpected upstream path');
   };
   const settings = { ALLOWED_ORIGINS: ORIGIN, SUPABASE_URL: BASE, SUPABASE_ANON_KEY: ANON, SUPABASE_SERVICE_ROLE_KEY: SERVICE, ...options.env };
-  const handle = createPayablesGateway({ env: name => settings[name], fetch: fetcher, loadWorkbook: async value => { workbookCalls++; return loader(value); }, log: message => logs.push(message) });
+  const handle = createPayablesGateway({ env: name => settings[name], fetch: fetcher, loadWorkbook: async value => { workbookCalls++; return loader(value); }, log: message => logs.push(message), now: options.now ?? (() => new Date('2026-10-27T15:00:00Z')) });
   const send = (data = body(), changes = {}) => handle(new Request(`${BASE}/functions/v1/payables-import`, {
     method: 'POST', headers: { Origin: ORIGIN, Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', ...changes.headers },
     body: JSON.stringify(data),
@@ -493,5 +504,219 @@ test('paid commit carries the official preview financial revision and rejects in
   for (const mode of [undefined, 'forecast']) {
     const invalid = setup(); const response = await invalid.send(body('commit', { ...(mode ? { mode } : {}), previous_financial_revision:'17' }));
     assert.equal(response.status, 400); assert.equal(invalid.calls.length, 2);
+  }
+});
+
+const explicitPaidCsv = (paidOn = '27/10/2026 08:45', dueOn = '30/11/2026 23:59') =>
+  'Lançamento;Filial;Emissão: valor do lançamento;Plano cc - Conta: nome;Vencimento: data;Quitação: data do pagamento;Situação\r\n'
+  + `PAGO-SINTETICO;Filial sintética;108,98;Banco sintético;${dueOn};${paidOn};PAGO\r\n`;
+
+test('paid import uses the explicit payment date despite a future original due date and preserves source bytes', async () => {
+  const source = explicitPaidCsv(), app = setup();
+  const previewResponse = await app.send(body('preview', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, file_base64: encode(source) }));
+  assert.equal(previewResponse.status, 200);
+  const preview = await previewResponse.json();
+  assert.equal(preview.payment_date_version, PAYMENT_DATE_VERSION);
+  assert.equal(preview.rows[0].paid_on, '2026-10-27');
+  assert.equal(preview.rows[0].amount_paid_cents, 10898);
+  assert.equal(preview.file_sha256, createHash('sha256').update(source).digest('hex'));
+  assert.equal(app.calls.at(-1).data.p_rows[0].paid_on, '2026-10-27');
+  const request = body('commit', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, file_base64: encode(source) });
+  const committed = await app.send(request);
+  assert.equal(committed.status, 200);
+  assert.equal((await committed.json()).payment_date_version, PAYMENT_DATE_VERSION);
+  const forwarded = app.calls.at(-1).data;
+  assert.equal(forwarded.p_rows[0].paid_on, '2026-10-27');
+  assert.equal(forwarded.p_rows[0].amount_paid_cents, 10898);
+  assert.equal(forwarded.p_file_base64, request.file_base64);
+  assert.equal(forwarded.p_file_sha256, createHash('sha256').update(source).digest('hex'));
+});
+
+test('an explicit future payment date blocks preview and commit before capabilities or financial writes', async () => {
+  for (const action of ['preview', 'commit']) {
+    const app = setup(), response = await app.send(body(action, { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, file_base64: encode(explicitPaidCsv('30/10/2026', '16/10/2026')) }));
+    assert.equal(response.status, 422);
+    const payload = await response.json();
+    assert.equal(payload.code, 'SOURCE_VALIDATION_FAILED');
+    assert.deepEqual(payload.errors.map(row => [row.line, row.column, row.problem]), [[2, 'Quitação: data do pagamento', 'A data do pagamento é futura.']]);
+    assert.match(payload.errors[0].correction, /data efetiva/);
+    assert.equal(app.calls.length, 2); assert(!app.calls.some(call => call.path.includes('commit_')));
+  }
+});
+
+test('a declared payment column cannot fall back to due date when its source cell is missing or invalid', async () => {
+  for (const paidOn of ['', '31/02/2026', '27/10/2026 24:00', '=1+1']) {
+    const app = setup(), response = await app.send(body('commit', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, file_base64: encode(explicitPaidCsv(paidOn, '16/10/2026')) }));
+    assert.equal(response.status, 422, paidOn);
+    const payload = await response.json();
+    assert.equal(payload.code, 'SOURCE_VALIDATION_FAILED');
+    assert(payload.errors.some(row => row.line === 2 && row.column === 'Quitação: data do pagamento'));
+    assert.equal(app.calls.length, 2);
+  }
+});
+
+test('the payment cutoff follows the service day in São Paulo rather than UTC or browser-supplied dates', async () => {
+  const source = encode(explicitPaidCsv('28/10/2026', '16/10/2026'));
+  for (const [instant, expected] of [['2026-10-28T01:30:00Z', 422], ['2026-10-28T03:00:00Z', 200]]) {
+    const app = setup({ now: () => new Date(instant) });
+    const response = await app.send(body('preview', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, file_base64: source }));
+    assert.equal(response.status, expected, instant);
+    if (expected === 422) { assert.equal((await response.json()).errors[0].problem, 'A data do pagamento é futura.'); assert.equal(app.calls.length, 2); }
+    else assert.equal((await response.json()).rows[0].paid_on, '2026-10-28');
+  }
+  for (const extra of [{ today: '2099-12-31' }, { current_date: '2099-12-31' }, { paid_on: '2026-10-27' }]) {
+    const app = setup(), response = await app.send(body('preview', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, file_base64: source, ...extra }));
+    assert.equal(response.status, 400); assert.equal(app.calls.length, 2);
+  }
+});
+
+test('legacy paid reports still use their declared due-date payment field but reject genuinely future payments', async () => {
+  const input = PAID_CSV.replace('17/10/2026 23:59', '30/10/2026 23:59');
+  const app = setup(), response = await app.send(body('preview', { mode: 'payments', file_base64: encode(input) }));
+  assert.equal(response.status, 422); const payload = await response.json();
+  assert.equal(payload.code, 'SOURCE_VALIDATION_FAILED');
+  assert.equal(payload.errors[0].problem, 'A data do pagamento é futura.');
+  assert.equal(app.calls.length, 2);
+  const forecast = setup({ now: () => { throw new Error('Clock must not affect forecasts'); } });
+  const futureForecast = CSV.replace('16/10/2026', '30/11/2026');
+  const preview = await forecast.send(body('preview', { mode: 'forecast', file_base64: encode(futureForecast) }));
+  assert.equal(preview.status, 200);
+  assert.equal((await preview.json()).rows[0].due_date, '2026-11-30');
+});
+
+test('source-validation failures stay typed and do not expose raw workbook errors or receive unsupported date overrides', async () => {
+  const source = await xlsx();
+  const app = setup({ loadWorkbook: () => { throw new Error('private database, account and token detail'); } });
+  const response = await app.send(body('preview', { mode: 'payments', file_name: 'source.xlsx', file_base64: encode(source) }));
+  assert.equal(response.status, 422);
+  const payload = await response.json();
+  assert.equal(payload.code, 'SOURCE_VALIDATION_FAILED'); assert(!JSON.stringify(payload).includes('private'));
+  assert.equal(app.calls.length, 2);
+});
+
+test('XLSX dates preserve explicit payment precedence and report a real future date at its physical source row', async () => {
+  for (const [sourceRow, paidOn, expected] of [[2, '2026-10-27T08:45:00Z', 200], [379, '2026-10-30T08:45:00Z', 422]]) {
+    const workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet('Pagamentos');
+    sheet.addRow(['Lançamento', 'Filial', 'Emissão: valor do lançamento', 'Plano cc - Conta: nome', 'Vencimento: data', 'Quitação: data do pagamento', 'Situação']);
+    sheet.getRow(sourceRow).values = ['PAGO-SINTETICO', 'Filial sintética', 108.98, 'Banco sintético', new Date('2026-11-30T00:00:00Z'), new Date(paidOn), 'PAGO'];
+    for (const column of [5, 6]) sheet.getRow(sourceRow).getCell(column).numFmt = 'dd/mm/yyyy hh:mm';
+    const source = await workbook.xlsx.writeBuffer(), app = setup();
+    const response = await app.send(body('preview', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, file_name: 'pagamentos.xlsx', file_base64: encode(source) }));
+    assert.equal(response.status, expected);
+    const payload = await response.json();
+    if (expected === 200) {
+      assert.equal(payload.rows[0].paid_on, '2026-10-27'); assert.equal(payload.rows[0].amount_paid_cents, 10898);
+      assert.equal(payload.file_sha256, createHash('sha256').update(source).digest('hex'));
+    } else {
+      assert.deepEqual(payload.errors.map(row => [row.line, row.column, row.problem]), [[379, 'Quitação: data do pagamento', 'A data do pagamento é futura.']]);
+      assert.equal(payload.code, 'SOURCE_VALIDATION_FAILED'); assert.equal(app.calls.length, 2);
+    }
+  }
+});
+
+test('payment date protocol accepts only the known paid-only version before parsing the source', async () => {
+  for (const extra of [
+    { mode: 'forecast', payment_date_version: PAYMENT_DATE_VERSION },
+    { payment_date_version: PAYMENT_DATE_VERSION },
+    { mode: 'payments', payment_date_version: 'old' },
+    { mode: 'payments', payment_date_version: null },
+    { mode: 'payments', payment_date_version: true },
+    { mode: 'payments', payment_date_version: {} },
+  ]) {
+    const app = setup(), response = await app.send(body('preview', extra));
+    assert.equal(response.status, 400); assert.equal(app.calls.length, 2); assert.equal(app.workbookCalls(), 0);
+  }
+});
+
+test('old frozen paid confirmations preserve the due-date-derived payment even when an explicit source date differs', async () => {
+  const source = explicitPaidCsv('20/10/2026 08:45', '17/10/2026 23:59'), app = setup();
+  const previewResponse = await app.send(body('preview', { mode: 'payments', file_base64: encode(source) }));
+  assert.equal(previewResponse.status, 200); const preview = await previewResponse.json();
+  assert.equal(preview.rows[0].paid_on, '2026-10-17');
+  assert.equal(Object.hasOwn(preview, 'payment_date_version'), false);
+  const frozen = body('commit', { mode: 'payments', file_base64: encode(source), confirm_corrections: true });
+  const response = await app.send(frozen);
+  assert.equal(response.status, 200); assert.equal(Object.hasOwn(await response.json(), 'payment_date_version'), false);
+  const first = app.calls.at(-1).data;
+  assert.equal(first.p_rows[0].paid_on, '2026-10-17');
+  const replay = await app.send(frozen);
+  assert.equal(replay.status, 200); assert.deepEqual(app.calls.at(-1).data, first);
+  const modern = setup(), newResponse = await modern.send(body('preview', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, file_base64: encode(source) }));
+  assert.equal(newResponse.status, 200); const current = await newResponse.json();
+  assert.equal(current.payment_date_version, PAYMENT_DATE_VERSION); assert.equal(current.rows[0].paid_on, '2026-10-20');
+});
+
+test('an idempotent same-source result never claims that newly interpreted payment dates were corrected', async () => {
+  const source = explicitPaidCsv('20/10/2026', '17/10/2026');
+  for (const [version, correction, status] of [[PAYMENT_DATE_VERSION, true, 409], [PAYMENT_DATE_VERSION, false, 200], [undefined, true, 200]]) {
+    const app = setup({ commitPayload: { import_id: IMPORT, row_count: 1, mode: 'payments', new_count: 0, open_count: 0, settled_count: 0, idempotent: true },
+      historyRows: [{ source_row: { branch: 'Filial sintética', entry_number: 'PAGO-SINTETICO', paid_on: '2026-10-17', line: 1 } }] });
+    const response = await app.send(body('commit', { mode: 'payments', file_base64: encode(source), confirm_corrections: correction, ...(version ? { payment_date_version: version } : {}) }));
+    assert.equal(response.status, status); const payload = await response.json();
+    if (status === 409) {
+      assert.equal(payload.code, 'PAYMENT_DATE_REVIEW_REQUIRED'); assert.equal(payload.payment_date_version, PAYMENT_DATE_VERSION);
+      assert.match(payload.error, /datas não foram corrigidas/); assert.equal(Object.hasOwn(payload, 'import_id'), false);
+    } else {
+      assert.equal(payload.idempotent, true); assert.equal(payload.payment_date_version, version);
+    }
+    assert.equal(app.calls.filter(call => call.path.includes('/commit_')).length, 1);
+  }
+});
+
+test('a lost successful correction is confirmed from immutable imported dates without consulting a fresh preview or active bank', async () => {
+  const source = explicitPaidCsv('20/10/2026', '17/10/2026'), requestId = SESSION;
+  const app = setup({
+    // A fresh preview would now fail (for example after disabling the bank).
+    previewPayload: { private: 'unavailable live bank' },
+    commitPayload: { import_id: IMPORT, row_count: 1, mode: 'payments', settled_count: 0, correction_count: 1, idempotent: true, reconciliation_version: '043', request_id: requestId },
+    historyRows: [{ source_row: { branch: 'Filial sintética', entry_number: 'PAGO-SINTETICO', paid_on: '2026-10-20', line: 1 } }],
+  });
+  const frozen = body('commit', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, file_base64: encode(source), confirm_corrections: true,
+    reconciliation_version: '043', full_report: false, resolution_choices: {}, request_id: requestId });
+  let forwarded;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await app.send(frozen);
+    assert.equal(response.status, 200); const payload = await response.json();
+    assert.equal(payload.idempotent, true); assert.equal(payload.request_id, requestId); assert.equal(payload.payment_date_version, PAYMENT_DATE_VERSION);
+    const current = app.calls.findLast(call => call.path.includes('/commit_')).data;
+    if (forwarded) assert.deepEqual(current, forwarded); else forwarded = current;
+    assert.equal(current.p_rows[0].paid_on, '2026-10-20');
+  }
+  assert(!app.calls.some(call => call.path.includes('/preview_') || call.path.includes('bank_accounts')));
+  assert.equal(app.calls.filter(call => call.path === '/rest/v1/payable_paid_import_rows').length, 2);
+});
+
+test('inaccessible, missing or malformed immutable payment history preserves an unknown result without another financial write', async () => {
+  const source = explicitPaidCsv('20/10/2026', '17/10/2026');
+  const valid = { source_row: { branch: 'Filial sintética', entry_number: 'PAGO-SINTETICO', paid_on: '2026-10-20', line: 1 } };
+  for (const history of [
+    { historyFailure: 403 }, { historyFailure: 500 }, { historyPayload: { message: 'private history source' } }, { historyRows: [] },
+    { historyRows: [valid, valid] }, { historyRows: [{ source_row: null }] },
+    { historyRows: [{ source_row: { ...valid.source_row, paid_on: '2026-99-99' } }] },
+    { historyRows: [{ source_row: { ...valid.source_row, line: 0 } }] },
+    { historyRows: [{ source_row: { ...valid.source_row, branch: 'Another source' } }] },
+  ]) {
+    const app = setup({ ...history, commitPayload: { import_id: IMPORT, row_count: 1, mode: 'payments', settled_count: 0, idempotent: true } });
+    const response = await app.send(body('commit', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, file_base64: encode(source), confirm_corrections: true }));
+    assert.equal(response.status, 503); const payload = await response.json();
+    assert.equal(Object.hasOwn(payload, 'code'), false); assert(!JSON.stringify(payload).includes('private'));
+    assert.equal(app.calls.filter(call => call.path.includes('/commit_')).length, 1);
+    assert(!app.calls.some(call => call.path.includes('/preview_')));
+  }
+});
+
+test('immutable replay proof reads complete bounded pages and excludes individually confirmed one-cent writeoffs', async () => {
+  for (const count of [500, 501]) {
+    const source = 'Lançamento;Filial;Emissão: valor do lançamento;Plano cc - Conta: nome;Vencimento: data;Quitação: data do pagamento;Situação\r\n'
+      + Array.from({ length: count }, (_, index) => `SYN-${index};Filial sintética;1,00;Banco sintético;17/10/2026;20/10/2026;PAGO\r\n`).join('')
+      + 'CENT-SYN;Filial sintética;0,01;Banco sintético;17/10/2026;20/10/2026;PAGO\r\n';
+    const historyRows = Array.from({ length: count }, (_, index) => ({ source_row: { branch: 'Filial sintética', entry_number: 'SYN-' + index, paid_on: '2026-10-20', line: index + 1 } }));
+    const app = setup({ historyRows, commitPayload: { import_id: IMPORT, row_count: count + 1, mode: 'payments', settled_count: 0, idempotent: true } });
+    const response = await app.send(body('commit', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, file_base64: encode(source), confirm_corrections: true }));
+    assert.equal(response.status, 200); assert.equal((await response.json()).idempotent, true);
+    const reads = app.calls.filter(call => call.path === '/rest/v1/payable_paid_import_rows');
+    assert.deepEqual(reads.map(call => Number(new URLSearchParams(call.search).get('offset'))), [0, 500]);
+    assert(reads.every(call => Number(new URLSearchParams(call.search).get('offset')) <= count));
+    assert(reads.every(call => call.init.headers.apikey === ANON && call.init.headers.Authorization === `Bearer ${TOKEN}`));
   }
 });

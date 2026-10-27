@@ -23,9 +23,9 @@ interface PaidPreview {
   reconciliation_version: '043'; reconciliation_items: ReconciliationItem[]; resolution_errors?: ImportProblem[];
   writeoff_count: number; new_writeoff_count?: number; matched_writeoff_count?: number;
 }
-interface CanonicalPaid { rows: PaidRow[]; preview: PaidPreview; file_sha256: string }
+interface CanonicalPaid { rows: PaidRow[]; preview: PaidPreview; file_sha256: string; payment_date_version?: '2026-10-27.1' }
 interface PaidAnalysis extends CanonicalPaid { file: File; base64: string; choices: Record<string, ResolutionChoice> }
-interface PaidResult { import_id: string; request_id: string; row_count: number; new_payment_count: number; matched_payment_count: number; reviewed_count: number; correction_count?: number; writeoff_count: number; idempotent: boolean }
+interface PaidResult { import_id: string; request_id: string; row_count: number; new_payment_count: number; matched_payment_count: number; reviewed_count: number; correction_count?: number; writeoff_count: number; idempotent: boolean; payment_date_version?: '2026-10-27.1' }
 type PaidRequest = Parameters<typeof payableImportRequest>[0] & { reconciliation_version: '043'; resolution_choices: Record<string, ResolutionChoice>; request_id?: string };
 interface FrozenPaid { body: PaidRequest; rowCount: number; correctionCount: number }
 const outcomes: Record<string, string> = { NEW_PAYMENT: 'Novo pagamento', MATCHED: 'Pagamento já registrado', CORRECTION: 'Correção de importação anterior', CONFLICT: 'Divergência — conferir', UNKNOWN_TITLE: 'Título não encontrado', UNMAPPED_BANK: 'Vincular banco / conta', WRITE_OFF_PENDING: 'Confirmar baixa sem pagamento', WRITE_OFF: 'Somente baixado — sem pagamento' };
@@ -38,6 +38,8 @@ function paidError(failure: unknown, fallback: string) {
   if (['PGRST202', '42P01', '42883', 'P0021'].includes(code) || code === 'P0043' && failure && typeof failure === 'object' && 'activation_required' in failure && failure.activation_required === true) return 'Ative a atualização 043 no banco e na função payables-import para conciliar as escolhas junto com o arquivo.';
   if (code === 'P0043') return payableError(failure, fallback);
   if (code === 'P0042') return 'Este título possui pagamento ou baixa anterior que precisa de conferência. Reanalise o arquivo e confira a situação antes de conciliar.';
+  if (code === 'SOURCE_VALIDATION_FAILED') return 'Confira as linhas indicadas abaixo. As datas de pagamento e os demais dados do arquivo precisam ser válidos antes de importar.';
+  if (code === 'PAYMENT_DATE_REVIEW_REQUIRED') return 'Este arquivo já tem uma importação registrada e as correções de data não foram aplicadas. Confira os pagamentos no histórico antes de importar novamente.';
   if (code === '40001') return 'A base ou os pagamentos mudaram desde a análise. Nenhum dado desta tentativa foi alterado. Reanalise o mesmo arquivo antes de concluir.';
   if (['22023', '23514', 'P0016'].includes(code)) return 'Importação recusada. Confira o valor integral pago, a data real, o banco e a correspondência de cada título. Nenhum dado foi alterado.';
   return fallback;
@@ -47,7 +49,7 @@ function problemsOf(value: unknown): ImportProblem[] {
   return value.errors.slice(0, 100).filter((item): item is ImportProblem => !!item && typeof item === 'object' && Number.isSafeInteger(item.line) && typeof item.column === 'string' && typeof item.problem === 'string' && typeof item.correction === 'string');
 }
 function validCanonical(value: CanonicalPaid, expectedHash: string) {
-  if (!value || !Array.isArray(value.rows) || !value.rows.length || value.rows.length > 5000 || value.file_sha256 !== expectedHash || !/^[a-f0-9]{64}$/.test(value.file_sha256)) return false;
+  if (!value || value.payment_date_version !== '2026-10-27.1' || !Array.isArray(value.rows) || !value.rows.length || value.rows.length > 5000 || value.file_sha256 !== expectedHash || !/^[a-f0-9]{64}$/.test(value.file_sha256)) return false;
   const p = value.preview;
   if (!p || p.reconciliation_version !== '043' || p.mode !== 'payments' || p.row_count !== value.rows.length || !(p.previous_import_id === null || uuid(p.previous_import_id)) || typeof p.can_commit !== 'boolean' || !validReconciliationItems(p.reconciliation_items)) return false;
   if (!Number.isSafeInteger(p.writeoff_count) || p.writeoff_count < 0 || p.writeoff_count > p.row_count) return false;
@@ -101,10 +103,10 @@ export default function PayablePaidImport({ canImport, onBusyChange }: { canImpo
     const selectedChoices = previous ? resolutionChoices(previous.preview.reconciliation_items, drafts, previous.preview.bank_options, officialToday()).choices : {};
     try {
       // Reanálises usam os mesmos bytes já conferidos, inclusive após resposta incerta.
-      const parsed = previous && previous.file === file ? { base64: previous.base64, hash: previous.file_sha256, errors: [] as ImportProblem[] } : await analyzePayablePaymentsFile(file, abort.signal);
+      const parsed = previous && previous.file === file ? { base64: previous.base64, hash: previous.file_sha256, errors: [] as ImportProblem[] } : await analyzePayablePaymentsFile(file, abort.signal, officialToday());
       if (current !== generation.current || abort.signal.aborted) return;
       if (parsed.errors.length) { setAnalysis(null); setProblems(parsed.errors); setNeedsReview(true); return; }
-      const canonical = await payableImportRequest<CanonicalPaid>({ action: 'preview', mode: 'payments', reconciliation_version: '043', resolution_choices: selectedChoices, file_name: file.name, file_base64: parsed.base64, bank_mappings: selectedMappings, mappings: selectedPlans } as PaidRequest, abort.signal);
+      const canonical = await payableImportRequest<CanonicalPaid>({ action: 'preview', mode: 'payments', payment_date_version: '2026-10-27.1', reconciliation_version: '043', resolution_choices: selectedChoices, file_name: file.name, file_base64: parsed.base64, bank_mappings: selectedMappings, mappings: selectedPlans } as PaidRequest, abort.signal);
       if (current !== generation.current || abort.signal.aborted) return;
       if (canonical?.preview?.reconciliation_version !== '043') throw { code: 'P0043', activation_required: true };
       if (!validCanonical(canonical, parsed.hash) || canonical.preview.reconciliation_items.some(item => selectedChoices[item.key] && item.selected_action !== selectedChoices[item.key].action)) throw new Error('invalid-preview');
@@ -126,13 +128,13 @@ export default function PayablePaidImport({ canImport, onBusyChange }: { canImpo
     try {
       const result = await payableImportRequest<PaidResult>(request.body);
       if (current !== generation.current) return;
-      if (!result || !uuid(result.import_id) || result.request_id !== request.body.request_id || result.row_count !== request.rowCount || ['new_payment_count', 'matched_payment_count', 'reviewed_count', 'writeoff_count'].some(key => !Number.isSafeInteger(result[key as keyof PaidResult]) || Number(result[key as keyof PaidResult]) < 0 || Number(result[key as keyof PaidResult]) > result.row_count) || typeof result.idempotent !== 'boolean') throw new Error('unconfirmed');
+      if (!result || result.payment_date_version !== request.body.payment_date_version || !uuid(result.import_id) || result.request_id !== request.body.request_id || result.row_count !== request.rowCount || ['new_payment_count', 'matched_payment_count', 'reviewed_count', 'writeoff_count'].some(key => !Number.isSafeInteger(result[key as keyof PaidResult]) || Number(result[key as keyof PaidResult]) < 0 || Number(result[key as keyof PaidResult]) > result.row_count) || typeof result.idempotent !== 'boolean') throw new Error('unconfirmed');
       pendingRef.current = null; setPendingRequest(null);
       setSuccess(result.idempotent ? `Este envio já estava registrado. ${result.row_count} título(s) conferido(s), sem duplicar pagamentos ou baixas.` : `Importação concluída: ${result.new_payment_count} novo(s) pagamento(s), ${result.matched_payment_count} já registrado(s), ${result.reviewed_count} conciliado(s) e ${result.writeoff_count} baixa(s) sem pagamento.${request.correctionCount ? ` ${request.correctionCount} correção(ões) com histórico preservado.` : ''}`);
       setAnalysis(null); setFile(null); setDeclaredPaid(false); setMappings({}); setPlanMappings({}); setDrafts({}); setMappingDirty(false); setNeedsReview(false); setWriteUncertain(false); setProblems([]); if (fileInput.current) fileInput.current.value = '';
     } catch (failure) {
       if (current !== generation.current) return;
-      const known = ['42501', 'PGRST301', 'PGRST303', 'PGRST202', '42P01', '42883', 'P0021', 'P0042', 'P0043', '40001', '22023', '23514', 'P0016'].includes(codeOf(failure));
+      const known = ['42501', 'PGRST301', 'PGRST303', 'PGRST202', '42P01', '42883', 'P0021', 'P0042', 'P0043', '40001', '22023', '23514', 'P0016', 'SOURCE_VALIDATION_FAILED', 'PAYMENT_DATE_REVIEW_REQUIRED'].includes(codeOf(failure));
       setNeedsReview(true); setWriteUncertain(!known);
       if (known) { pendingRef.current = null; setPendingRequest(null); } else setPendingRequest(request);
       const found = problemsOf(failure); if (found.length) setProblems(found);
@@ -143,14 +145,14 @@ export default function PayablePaidImport({ canImport, onBusyChange }: { canImpo
     if (!canCommit || !analysis || pendingRef.current) return;
     const frozen = analysis;
     if (!window.confirm(`Importar e conciliar este arquivo em uma única confirmação?\n\nArquivo: ${frozen.file.name}\nTítulos: ${frozen.preview.row_count}\nNovos pagamentos: ${frozen.preview.new_payment_count}\nJá registrados: ${frozen.preview.matched_payment_count}\nBaixas sem pagamento confirmadas: ${frozen.preview.writeoff_count}\nCorreções anteriores: ${frozen.preview.correction_count}\n\nOs pagamentos usarão data, valor e conta efetivos do relatório e serão conciliados. Cada baixa de R$ 0,01 confirmada ficará no histórico, fora dos totais financeiros, sem criar pagamento ou realizado. Nenhum título ausente será baixado por este arquivo.${frozen.preview.correction_count ? '\n\nCorreções preservam o histórico do registro anterior.' : ''}`)) return;
-    const request: FrozenPaid = { rowCount: frozen.preview.row_count, correctionCount: frozen.preview.correction_count, body: { action: 'commit', mode: 'payments', reconciliation_version: '043', resolution_choices: frozen.choices, request_id: crypto.randomUUID(), file_name: frozen.file.name, file_base64: frozen.base64, complete: true, previous_import_id: frozen.preview.previous_import_id, previous_financial_revision: frozen.preview.financial_revision, bank_mappings: { ...mappings }, mappings: { ...planMappings }, confirm_corrections: frozen.preview.correction_count > 0 } };
+    const request: FrozenPaid = { rowCount: frozen.preview.row_count, correctionCount: frozen.preview.correction_count, body: { action: 'commit', mode: 'payments', payment_date_version: '2026-10-27.1', reconciliation_version: '043', resolution_choices: frozen.choices, request_id: crypto.randomUUID(), file_name: frozen.file.name, file_base64: frozen.base64, complete: true, previous_import_id: frozen.preview.previous_import_id, previous_financial_revision: frozen.preview.financial_revision, bank_mappings: { ...mappings }, mappings: { ...planMappings }, confirm_corrections: frozen.preview.correction_count > 0 } };
     void executeFrozen(request);
   }
   if (!canImport) return <p className="notice">Seu perfil não permite importar títulos pagos de Contas a Pagar.</p>;
   return <section className="panel payable-paid-import" aria-labelledby="payable-paid-import-title">
     <div className="panel-header"><div><h2 id="payable-paid-import-title">Importar títulos pagos</h2><p className="muted">Pagamentos efetivos do relatório do sistema · conciliação automática dos títulos conferidos.</p></div></div>
     <p className="notice">Use o relatório dos pagamentos integrais do período. Cada marcador de <strong>R$ 0,01</strong> exige sua confirmação individual como Somente baixado: fica no histórico, fora dos valores financeiros e sem criar pagamento. Títulos ausentes permanecem na base.</p>
-    <details className="import-format-help"><summary>Como preparar o relatório de pagamentos</summary><p className="help-text">Neste relatório, “Vencimento: data” corresponde à data real do pagamento, “Emissão: valor do lançamento” ao valor integral pago e “Plano cc - Conta: nome” à conta que realizou o pagamento. O valor integral pago atualiza o valor do título conforme o ERP, com histórico, e o vencimento original da previsão será preservado. Situação: PAGO. Títulos sem correspondência ou com pagamento manual divergente exigem conferência.</p></details>
+    <details className="import-format-help"><summary>Como preparar o relatório de pagamentos</summary><p className="help-text">A data efetiva vem de “Quitação: data do pagamento”, quando essa coluna existe. Nos relatórios antigos sem essa coluna, “Vencimento: data” continua representando a data real do pagamento, conforme o modelo da origem. Uma data de quitação vazia, inválida ou futura será indicada pela linha para conferência. “Emissão: valor do lançamento” informa o valor integral pago e “Plano cc - Conta: nome” a conta que realizou o pagamento. O valor integral pago atualiza o valor do título conforme o ERP, com histórico, e o vencimento original da previsão será preservado. Situação: PAGO. Títulos sem correspondência ou com pagamento manual divergente exigem conferência.</p></details>
     {error && <p className="notice error" role="alert">{error}</p>}{success && <p className="notice success" role="status">{success}</p>}{pendingRequest && <div className="notice" role="status"><p>A confirmação está pendente. O arquivo e as escolhas estão congelados para conferir este mesmo envio.</p><button type="button" className="button secondary" disabled={!!busy} onClick={() => void executeFrozen(pendingRequest)}>Repetir confirmação pendente</button></div>}
     <form className="stack" onSubmit={event => void analyze(event)}>
       <label className="field">Relatório de títulos pagos<input ref={fileInput} aria-label="Relatório de títulos pagos" type="file" accept=".xlsx,.xlsm,.csv,.xls" disabled={!!busy || writeUncertain} onChange={event => { if (pendingRef.current) return; reset(); setDeclaredPaid(false); setFile(event.target.files?.[0] ?? null); }} /></label>

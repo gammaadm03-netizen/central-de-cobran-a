@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.5**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.6**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Data efetiva nos pagamentos de Contas a Pagar — 0.18.6
+
+O relatório de pagamentos utiliza **Quitação: data do pagamento** quando presente, preservando o vencimento da previsão. Relatórios antigos sem essa coluna mantêm a leitura anterior. Quitação vazia, inválida ou futura é identificada pela linha, antes de consultar ou gravar dados financeiros, com validação independente no servidor pelo dia de São Paulo. O arquivo original e as regras de baixa individual de R$ 0,01 são preservados. [Atualizar a função payables-import e conferir o relatório](docs/pagamentos-data-quitacao.md). Não exige SQL novo.
 
 ## Estatísticas da conferência de contatos — 0.18.5
 

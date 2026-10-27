@@ -19,6 +19,11 @@ const headerMap = new Map(Object.entries(ALIASES).flatMap(([key, aliases]) => al
 // This ERP exports civil dates with a clock component. Only these explicit CP
 // columns permit times; the shared date-only parser used by CR remains strict.
 const ERP_TIMESTAMP_HEADERS = new Set(['EMISSAODATA', 'VENCIMENTODATA']);
+// Paid-only ERP reports can include both the original maturity date and the
+// actual payment date. These aliases apply only to the paid validator below.
+const PAID_DATE_HEADERS = new Set(['QUITACAODATADOPAGAMENTO', 'DATADOPAGAMENTO', 'DATAPAGAMENTO', 'PAGAMENTODATA']);
+const PAID_TIMESTAMP_HEADERS = new Set(['QUITACAODATADOPAGAMENTO', 'PAGAMENTODATA']);
+const PAID_COLUMN_LABELS = { ...COLUMN_LABELS, paid_on: 'Quitação: data do pagamento' };
 
 // Date-only values stay civil dates. No UTC/local conversion is applied to user input.
 export function parseCivilDate(value, excel1904 = false) {
@@ -267,25 +272,31 @@ export function validatePayableRows(matrix, { excel1904 = false } = {}) {
 }
 
 // This validator is selected only after the operator explicitly declares a
-// paid-only report. In that report the ERP's Vencimento column is the actual
-// payment date and Plano CC is the actual paying bank, as confirmed by the user.
+// paid-only report. An explicit payment-date column takes precedence. Only
+// legacy reports without it use Vencimento as the user-confirmed payment date.
+// Plano CC is the actual paying bank, as confirmed by the user.
 // It never creates financial titles or derives payment facts from disappearance.
-export function validatePayablePaidRows(matrix, { excel1904 = false } = {}) {
+export function validatePayablePaidRows(matrix, { excel1904 = false, today, useExplicitPaymentDate = true } = {}) {
   const errors = [], rows = [];
+  if (today !== undefined) {
+    try { if (typeof today !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(today) || parseCivilDate(today) !== today) throw new Error('invalid-today'); }
+    catch { return { rows, errors: [{ line: 0, column: 'Arquivo', problem: 'A data de referência da conferência é inválida.', correction: 'Atualize a página antes de analisar novamente.' }] }; }
+  }
   if (!matrix.length) return { rows, errors: [{ line: 1, column: 'Arquivo', problem: 'Arquivo vazio.', correction: 'Exporte o relatório de pagamentos com os cabeçalhos.' }] };
   const columns = new Map(), timestampColumns = new Set();
   matrix[0].forEach((value, index) => {
     let key;
     try {
       const normalizedHeader = normalize(scalar(value));
-      key = headerMap.get(normalizedHeader);
-      if (ERP_TIMESTAMP_HEADERS.has(normalizedHeader)) timestampColumns.add(index);
+      key = useExplicitPaymentDate !== false && PAID_DATE_HEADERS.has(normalizedHeader) ? 'paid_on' : headerMap.get(normalizedHeader);
+      if (ERP_TIMESTAMP_HEADERS.has(normalizedHeader) || useExplicitPaymentDate !== false && PAID_TIMESTAMP_HEADERS.has(normalizedHeader)) timestampColumns.add(index);
     } catch { errors.push({ line: 1, column: 'Cabeçalho', problem: 'Cabeçalho inválido.', correction: 'Use nomes de colunas sem fórmulas.' }); return; }
-    if (key && columns.has(key)) errors.push({ line: 1, column: COLUMN_LABELS[key], problem: 'Coluna duplicada ou ambígua.', correction: 'Mantenha uma única coluna para este campo.' });
+    if (key && columns.has(key)) errors.push({ line: 1, column: PAID_COLUMN_LABELS[key], problem: 'Coluna duplicada ou ambígua.', correction: 'Mantenha uma única coluna para este campo.' });
     else if (key) columns.set(key, index);
   });
-  const required = ['entry_number', 'branch', 'due_date', 'amount_cents', 'bank_account'];
-  for (const key of required) if (!columns.has(key)) errors.push({ line: 1, column: COLUMN_LABELS[key], problem: 'Coluna obrigatória ausente.', correction: `Inclua a coluna ${COLUMN_LABELS[key]}; não é possível deduzir dados do pagamento.` });
+  const paymentDateKey = columns.has('paid_on') ? 'paid_on' : 'due_date';
+  const required = ['entry_number', 'branch', paymentDateKey, 'amount_cents', 'bank_account'];
+  for (const key of required) if (!columns.has(key)) errors.push({ line: 1, column: PAID_COLUMN_LABELS[key], problem: 'Coluna obrigatória ausente.', correction: `Inclua a coluna ${PAID_COLUMN_LABELS[key]}; não é possível deduzir dados do pagamento.` });
   if (errors.length) return { rows, errors };
   const used = new Set([...required, 'source_status', 'cheque_number', 'description', 'plan', 'issued_on']);
   const usedColumns = new Set([...columns].filter(([key]) => used.has(key)).map(([, column]) => column));
@@ -306,8 +317,10 @@ export function validatePayablePaidRows(matrix, { excel1904 = false } = {}) {
         if (key === 'amount_cents') {
           row.amount_paid_cents = parseMoneyCents(value);
           if (row.amount_paid_cents <= 0) throw new Error('O valor pago deve ser maior que zero.');
-        } else if (key === 'due_date') row.paid_on = timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904);
-        else if (key === 'cheque_number') row.cheque_number = parseChequeNumber(value);
+        } else if (key === paymentDateKey) {
+          row.paid_on = timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904);
+          if (today !== undefined && row.paid_on > today) throw new Error('A data do pagamento é futura.');
+        } else if (key === 'cheque_number') row.cheque_number = parseChequeNumber(value);
         else if (key === 'issued_on') row.issued_on = String(value).trim() ? (timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904)) : null;
         else {
           const text = String(value ?? '').trim().replace(/\s+/g, ' ');
@@ -327,7 +340,7 @@ export function validatePayablePaidRows(matrix, { excel1904 = false } = {}) {
             else row[key] = text;
           }
         }
-      } catch (error) { errors.push({ line: index + 1, column: COLUMN_LABELS[key], problem: error.message, correction: 'Confira o comprovante e corrija o relatório de pagamentos; não use datas ou bancos previstos.' }); }
+      } catch (error) { errors.push({ line: index + 1, column: PAID_COLUMN_LABELS[key], problem: error.message, correction: error.message === 'A data do pagamento é futura.' ? 'Confira a data efetiva no sistema de origem; pagamentos agendados não confirmam pagamento realizado.' : 'Confira o comprovante e corrija o relatório de pagamentos; não use datas ou bancos previstos.' }); }
     }
     // One integral payment per stable title identity. Sorting, payment date,
     // amount and bank never create a second title identity in this report.

@@ -10,4 +10,4 @@ export function readPayableChequeCell(value: unknown, numFmt?: string): string;
 export function inspectWorkbookZip(buffer: ArrayBuffer): { start: number; compressed: number; uncompressed: number; method: number }[];
 export function validateWorkbookExpandedSize(buffer: ArrayBuffer): Promise<void>;
 export function validatePayableRows(matrix: unknown[][], options?: { excel1904?: boolean }): { rows: PayableImportRow[]; errors: ImportProblem[] };
-export function validatePayablePaidRows(matrix: unknown[][], options?: { excel1904?: boolean }): { rows: PayablePaidRow[]; errors: ImportProblem[] };
+export function validatePayablePaidRows(matrix: unknown[][], options?: { excel1904?: boolean; today?: string; useExplicitPaymentDate?: boolean }): { rows: PayablePaidRow[]; errors: ImportProblem[] };

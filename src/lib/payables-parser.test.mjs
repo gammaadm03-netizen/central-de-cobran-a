@@ -325,3 +325,98 @@ test('metadados opcionais de pagamento rejeitam datas inválidas, fórmulas e te
   const genericDate = validatePayablePaidRows([[...paidHeader, 'Emissão'], [...paidRow, '15/10/2026 23:59']]);
   assert.deepEqual(genericDate.rows, []);
 });
+
+test('coluna explícita de quitação prevalece sobre o vencimento e não altera o relatório de previsões', () => {
+  for (const paymentHeader of ['Quitação: data do pagamento', 'Data do pagamento', 'Data pagamento', 'Pagamento: data']) {
+    const sourceHeader = [...paidHeader, paymentHeader];
+    const sourceRow = [...paidRow.slice(0, 4), '23/01/2043 00:00', '26/10/2026'];
+    const original = [...sourceRow];
+    const result = validatePayablePaidRows([sourceHeader, sourceRow], { today: '2026-10-27' });
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.rows[0].paid_on, '2026-10-26');
+    assert.equal(Object.hasOwn(result.rows[0], 'due_date'), false);
+    assert.deepEqual(sourceRow, original);
+  }
+  const forecast = validatePayableRows([[...erpHeader, 'Quitação: data do pagamento'], [...erpRow, '01/10/2026']]);
+  assert.deepEqual(forecast.errors, []);
+  assert.equal(forecast.rows[0].due_date, '2026-10-20');
+  assert.equal(Object.hasOwn(forecast.rows[0], 'paid_on'), false);
+});
+
+test('data de quitação explícita dispensa vencimento mas não permite fallback vazio, inválido ou ambíguo', () => {
+  const explicitHeader = [...paidHeader.slice(0, 4), 'Quitação: data do pagamento'];
+  const explicitRow = [...paidRow.slice(0, 4), '26/10/2026'];
+  assert.equal(validatePayablePaidRows([explicitHeader, explicitRow]).rows[0].paid_on, '2026-10-26');
+  for (const invalid of ['', null, '31/02/2026', { formula: '1+1', result: 2 }]) {
+    const result = validatePayablePaidRows([[...paidHeader, 'Quitação: data do pagamento'], [...paidRow, invalid]]);
+    assert.deepEqual(result.rows, []);
+    assert.ok(result.errors.some(error => error.line === 2 && error.column === 'Quitação: data do pagamento'));
+  }
+  const duplicated = validatePayablePaidRows([[...paidHeader, 'Quitação: data do pagamento', 'Data pagamento'], [...paidRow, '26/10/2026', '27/10/2026']]);
+  assert.deepEqual(duplicated.rows, []);
+  assert.ok(duplicated.errors.some(error => error.line === 1 && error.column === 'Quitação: data do pagamento' && /duplicada/.test(error.problem)));
+});
+
+test('quitação ERP preserva a data civil em Date, serial Excel e horário explícito sem relaxar o parser compartilhado', () => {
+  const explicitHeader = [...paidHeader, 'Quitação: data do pagamento'];
+  const date = new Date('2026-10-26T23:59:59Z');
+  const result = validatePayablePaidRows([explicitHeader, [...paidRow, date]], { today: '2026-10-27' });
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.rows[0].paid_on, '2026-10-26');
+  assert.throws(() => parseCivilDate(date), /horário/);
+  const serial = validatePayablePaidRows([explicitHeader, [...paidRow, 1.5]], { excel1904: true });
+  assert.equal(serial.rows[0].paid_on, '1904-01-02');
+  const text = validatePayablePaidRows([explicitHeader, [...paidRow, '26/10/2026 23:59:59']]);
+  assert.equal(text.rows[0].paid_on, '2026-10-26');
+  const generic = validatePayablePaidRows([[...paidHeader, 'Data pagamento'], [...paidRow, date]]);
+  assert.deepEqual(generic.rows, []);
+});
+
+test('data oficial limita o pagamento e mostra a linha física e a coluna usada sem inventar uma data', () => {
+  const explicitHeader = [...paidHeader, 'Quitação: data do pagamento'];
+  const matrix = [explicitHeader, [...paidRow, '26/10/2026'], [], ['outro', ...paidRow.slice(1), '30/10/2026']];
+  const result = validatePayablePaidRows(matrix, { today: '2026-10-27' });
+  assert.deepEqual(result.rows, []);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].line, 4);
+  assert.equal(result.errors[0].column, 'Quitação: data do pagamento');
+  assert.equal(result.errors[0].problem, 'A data do pagamento é futura.');
+  assert.match(result.errors[0].correction, /agendados/);
+  assert.equal(matrix[3].at(-1), '30/10/2026');
+  const legacy = validatePayablePaidRows([paidHeader, [...paidRow.slice(0, 4), '30/10/2026']], { today: '2026-10-27' });
+  assert.equal(legacy.errors[0].column, 'Vencimento');
+  assert.equal(legacy.errors[0].problem, 'A data do pagamento é futura.');
+  const today = validatePayablePaidRows([explicitHeader, [...paidRow, '27/10/2026']], { today: '2026-10-27' });
+  assert.deepEqual(today.errors, []);
+  assert.equal(today.rows[0].paid_on, '2026-10-27');
+  assert.equal(validatePayablePaidRows(matrix).rows.length, 2);
+});
+
+test('referência de hoje inválida bloqueia a conferência e a data de emissão não substitui a quitação', () => {
+  for (const today of [null, '', '27/10/2026', '2026-02-31', 20261027]) {
+    const result = validatePayablePaidRows([paidHeader, paidRow], { today });
+    assert.deepEqual(result.rows, []);
+    assert.equal(result.errors[0].problem, 'A data de referência da conferência é inválida.');
+  }
+  const result = validatePayablePaidRows([[...paidHeader, 'Emissão: data', 'Quitação: data do pagamento'], [...paidRow, '28/10/2026 13:00', '26/10/2026']], { today: '2026-10-27' });
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.rows[0].paid_on, '2026-10-26');
+  assert.equal(result.rows[0].issued_on, '2026-10-28');
+});
+
+test('repetição do contrato antigo conserva Vencimento mesmo com uma coluna explícita no arquivo original', () => {
+  const matrix = [[...paidHeader, 'Quitação: data do pagamento'], [...paidRow, '26/10/2026']];
+  const legacy = validatePayablePaidRows(matrix, { today: '2026-10-27', useExplicitPaymentDate: false });
+  const current = validatePayablePaidRows(matrix, { today: '2026-10-27' });
+  assert.deepEqual(legacy.errors, []);
+  assert.deepEqual(current.errors, []);
+  assert.equal(legacy.rows[0].paid_on, '2026-10-17');
+  assert.equal(current.rows[0].paid_on, '2026-10-26');
+  const future = validatePayablePaidRows([[...paidHeader, 'Quitação: data do pagamento'], [...paidRow.slice(0, 4), '30/10/2026', '26/10/2026']], { today: '2026-10-27', useExplicitPaymentDate: false });
+  assert.deepEqual(future.rows, []);
+  assert.equal(future.errors[0].column, 'Vencimento');
+  assert.equal(future.errors[0].problem, 'A data do pagamento é futura.');
+  const duplicateIgnored = validatePayablePaidRows([[...paidHeader, 'Quitação: data do pagamento', 'Data pagamento'], [...paidRow, '', '26/10/2026']], { useExplicitPaymentDate: false });
+  assert.deepEqual(duplicateIgnored.errors, []);
+  assert.equal(duplicateIgnored.rows[0].paid_on, '2026-10-17');
+});

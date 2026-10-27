@@ -1,5 +1,5 @@
 import {
-  MAX_FILE_BYTES, MAX_ROWS, parseCsv, validateWorkbookExpandedSize, validatePayableRows, validatePayablePaidRows,
+  MAX_FILE_BYTES, MAX_ROWS, parseCivilDate, parseCsv, validateWorkbookExpandedSize, validatePayableRows, validatePayablePaidRows,
 } from '../../../src/lib/payables-parser.mjs';
 import { validReconciliationPreview, validResolutionChoices } from './reconciliation.mjs';
 
@@ -10,6 +10,7 @@ const SERVICE_FAILURE = 'Não foi possível confirmar a operação. Atualize o h
 const INVALID_REQUEST = 'Solicitação inválida. Selecione novamente o relatório completo.';
 const PARSE_FAILURE = 'Não foi possível analisar o arquivo. Salve uma cópia somente com valores e confira os cabeçalhos.';
 const CORRECTION = 'Confira o formato e os cabeçalhos, salve uma cópia somente com valores e tente novamente.';
+const PAYMENT_DATE_VERSION = '2026-10-27.1';
 const SAFE_MESSAGES = new Set([
   'Arquivo vazio.', 'Cabeçalho inválido.', 'Coluna duplicada ou ambígua.', 'Coluna obrigatória ausente.',
   'Mais de 5.000 linhas.', 'Há valores fora das colunas do cabeçalho.', 'Chave de título duplicada na mesma base.',
@@ -35,10 +36,17 @@ const SAFE_MESSAGES = new Set([
   'Número de cheque inválido. Use texto ou número inteiro não negativo, sem notação científica.',
   'Formato da célula do cheque não suportado. No Excel, formate o número do cheque como Texto ou use somente zeros, como 000000.',
   'O valor pago deve ser maior que zero.',
+  'A data do pagamento é futura.', 'A data de referência da conferência é inválida.',
   'O relatório de pagamentos contém situação incompatível com pagamento confirmado.',
   'Lançamento repetido no relatório de pagamentos.',
 ]);
 const safeMessage = message => SAFE_MESSAGES.has(message) || /^Limite de (?:150|300|1500) caracteres excedido\.$/.test(message) ? message : PARSE_FAILURE;
+
+function officialToday(value) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(value);
+  const part = type => parts.find(item => item.type === type).value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
 
 function originsFrom(raw) {
   const values = String(raw || '').split(',').map(value => value.trim()).filter(Boolean);
@@ -103,7 +111,7 @@ function problemsFor(errors) {
 }
 
 /** Parse the preserved bytes on the server; no financial rows or identities are accepted from a browser. */
-export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWorkbook, log = () => {} }) {
+export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWorkbook, log = () => {}, now = () => new Date() }) {
   return async function handle(request) {
     let origins;
     try { origins = originsFrom(env('ALLOWED_ORIGINS')); }
@@ -181,9 +189,11 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
       try { body = await readBody(request); }
       catch { return respond(400, { error: INVALID_REQUEST }); }
       const reconciled = body.reconciliation_version === '043';
-      if (Object.keys(body).some(key => !['action', 'file_name', 'file_base64', 'mappings', 'complete', 'previous_import_id', 'mode', 'bank_mappings', 'confirm_corrections', 'previous_financial_revision', 'reconciliation_version', 'full_report', 'resolution_choices', 'request_id'].includes(key))
+      const useExplicitPaymentDate = body.payment_date_version === PAYMENT_DATE_VERSION;
+      if (Object.keys(body).some(key => !['action', 'file_name', 'file_base64', 'mappings', 'complete', 'previous_import_id', 'mode', 'bank_mappings', 'confirm_corrections', 'previous_financial_revision', 'reconciliation_version', 'full_report', 'resolution_choices', 'request_id', 'payment_date_version'].includes(key))
         || !['preview', 'commit'].includes(body.action)
         || (Object.hasOwn(body, 'mode') && !['forecast', 'payments'].includes(body.mode))
+        || (Object.hasOwn(body, 'payment_date_version') && (body.mode !== 'payments' || !useExplicitPaymentDate))
         || (Object.hasOwn(body, 'reconciliation_version') && !reconciled)
         || (Object.hasOwn(body, 'request_id') && (typeof body.request_id !== 'string' || !UUID.test(body.request_id)))
         || (!reconciled && ['full_report', 'resolution_choices', 'request_id'].some(key => Object.hasOwn(body, key)))
@@ -230,11 +240,13 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
         if (!Array.isArray(matrix) || matrix.length > MAX_ROWS + 1 || matrix.some(row => !Array.isArray(row) || row.length > 100)) {
           throw new Error('Planilha excede 5.000 linhas ou 100 colunas.');
         }
-        parsed = body.mode === 'payments' ? validatePayablePaidRows(matrix, { excel1904 }) : validatePayableRows(matrix, { excel1904 });
+        // The service supplies the reference day. Browser clocks and the
+        // forecast due date cannot establish that a payment already happened.
+        parsed = body.mode === 'payments' ? validatePayablePaidRows(matrix, { excel1904, today: officialToday(now()), useExplicitPaymentDate }) : validatePayableRows(matrix, { excel1904 });
       } catch (error) {
-        return respond(422, { error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: [{ line: 0, column: 'Arquivo', problem: safeMessage(error instanceof Error ? error.message : ''), correction: CORRECTION }] });
+        return respond(422, { code: 'SOURCE_VALIDATION_FAILED', error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: [{ line: 0, column: 'Arquivo', problem: safeMessage(error instanceof Error ? error.message : ''), correction: CORRECTION }] });
       }
-      if (parsed.errors.length) return respond(422, { error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: problemsFor(parsed.errors) });
+      if (parsed.errors.length) return respond(422, { code: 'SOURCE_VALIDATION_FAILED', error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: problemsFor(parsed.errors) });
       if (reconciled && !validResolutionChoices(body.resolution_choices ?? {}, parsed.rows.length)) return respond(400, { error: INVALID_REQUEST });
       // Older clients without an explicit mode retain their reviewed import
       // contract. New modes must never fall back to disappearance settlement.
@@ -284,7 +296,8 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
             || !Array.isArray(preview.payload.unmapped_banks) || !Array.isArray(preview.payload.bank_options) || !Array.isArray(preview.payload.unclassified_plans)) throw new Error('invalid_preview');
         } else if (!Number.isSafeInteger(preview.payload.new_count) || !Number.isSafeInteger(preview.payload.open_count) || !Number.isSafeInteger(preview.payload.settled_count)
           || (body.mode === 'forecast' && (preview.payload.mode !== 'forecast' || preview.payload.settled_count !== 0))) throw new Error('invalid_preview');
-        return respond(200, { rows: body.mode === 'payments' ? preview.payload.rows : parsed.rows, preview: preview.payload, file_sha256: hash });
+        return respond(200, { rows: body.mode === 'payments' ? preview.payload.rows : parsed.rows, preview: preview.payload, file_sha256: hash,
+          ...(useExplicitPaymentDate ? { payment_date_version: PAYMENT_DATE_VERSION } : {}) });
       }
       const path = body.mode === 'payments' ? reconciled ? 'commit_payables_paid_import_v2_from_gateway' : 'commit_payables_paid_import_from_gateway' : body.mode === 'forecast' ? reconciled ? 'commit_payables_forecast_import_v2_from_gateway' : 'commit_payables_forecast_import_from_gateway' : 'commit_payables_import_from_gateway';
       const committed = await call(`/rest/v1/rpc/${path}`, { service: true, data: {
@@ -301,7 +314,39 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
         || !UUID.test(committed.payload.import_id)
         || (reconciled && (committed.payload.reconciliation_version !== '043' || committed.payload.request_id !== body.request_id))
         || (body.mode && (committed.payload.mode !== body.mode || committed.payload.settled_count !== 0))) throw new Error('invalid_commit_response');
-      return respond(200, committed.payload);
+      if (useExplicitPaymentDate && body.confirm_corrections === true && committed.payload.idempotent === true) {
+        // A lost successful correction and an older same-hash import can both
+        // return an idempotent result. Prove the dates against immutable import
+        // rows using the caller's existing SELECT grant; current bank status or
+        // another live preview must not decide whether this replay succeeded.
+        const expected = new Map(parsed.rows.filter(row => row.amount_paid_cents !== 1)
+          .map(row => [JSON.stringify([row.branch, row.entry_number]), row.paid_on]));
+        const recorded = new Map();
+        for (let offset = 0; offset <= expected.size; offset += 500) {
+          const query = new URLSearchParams({ select: 'source_row', import_id: 'eq.' + committed.payload.import_id, order: 'title_id.asc', limit: '500', offset: String(offset) });
+          const history = await call('/rest/v1/payable_paid_import_rows?' + query, { method: 'GET' });
+          if (!history.ok || !Array.isArray(history.payload) || history.payload.length > 500
+            || recorded.size + history.payload.length > expected.size) throw new Error('payment_date_history_unavailable');
+          for (const item of history.payload) {
+            const row = item?.source_row;
+            if (!row || typeof row !== 'object' || Array.isArray(row)
+              || ['branch', 'entry_number'].some(key => typeof row[key] !== 'string' || !row[key] || row[key].length > 150 || row[key] !== row[key].trim().replace(/\s+/g, ' '))
+              || typeof row.paid_on !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.paid_on)
+              || Object.hasOwn(row, 'line') && (!Number.isSafeInteger(row.line) || row.line < 1 || row.line > MAX_ROWS)) throw new Error('payment_date_history_invalid');
+            parseCivilDate(row.paid_on);
+            const key = JSON.stringify([row.branch, row.entry_number]);
+            if (!expected.has(key) || recorded.has(key)) throw new Error('payment_date_history_incomplete');
+            recorded.set(key, row.paid_on);
+          }
+          if (history.payload.length < 500) break;
+        }
+        if (recorded.size !== expected.size) throw new Error('payment_date_history_incomplete');
+        if ([...expected].some(([key, date]) => recorded.get(key) !== date)) {
+          return respond(409, { code: 'PAYMENT_DATE_REVIEW_REQUIRED', payment_date_version: PAYMENT_DATE_VERSION,
+            error: 'Este arquivo já possui uma importação registrada. As datas não foram corrigidas por este envio. Confira o histórico dos pagamentos antes de continuar.' });
+        }
+      }
+      return respond(200, { ...committed.payload, ...(useExplicitPaymentDate ? { payment_date_version: PAYMENT_DATE_VERSION } : {}) });
     } catch {
       // Fixed identifiers only. Never log a file, token, credentials, financial
       // row, environment variable, raw exception, or upstream response.

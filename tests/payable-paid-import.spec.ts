@@ -5,22 +5,23 @@ import { isChequeNumberHeader, parseCsv, readPayableChequeCell, validatePayableP
 
 const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const now = new Date('2026-10-18T15:00:00Z');
+const paymentDateVersion = '2026-10-27.1';
 const uuid = (value: number) => `76000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const bankLabels = ['BRADESCO ECOPLAST', 'BRADESCO LIMPE FACIL', 'BRADESCO GAMMA IND', 'BRADESCO F2G', 'BRADESCO FAST CLEAN', 'BRADESCO EASY CLEAN', 'BANCO DO BRASIL FAST CLEAN', 'BANCO DO BRASIL EASY CLEAN', 'BANCO DO BRASIL ECOPLAST', 'BANCO CORA LIMPE FACIL', 'BANCO CORA MY CLEAN', 'BANCO CORA ECO PLAST', 'CAIXA ECOPLAST', 'CAIXA LIMPE FACIL', 'CAIXA GAMMA', 'CAIXA FAST CLEAN', 'CAIXA EASY CLEAN'];
 const headers = ['Filial', 'Lançamento', 'Situação', 'Vencimento: data', 'Emissão: valor do lançamento', 'Plano cc - Conta: nome', 'Cheque: número', 'Histórico', 'Plano cp - Conta: nome', 'Emissão: data'];
 const csv = `${headers.join(';')}\r\n3;14;PAGO;17/10/2026 23:59:59;200,00;BANCO ERP PAGO;000123;Fornecedor pago sintético;ENERGIA;01/10/2026 10:15:00`;
-interface Options { director?: boolean; knownBank?: boolean; newPlan?: boolean; conflict?: boolean; correction?: boolean; stale?: boolean; uncertain?: boolean; commitBeforeError?: boolean; badHash?: boolean; financialRevision?: unknown; unknownCent?: boolean; staleChoice?: boolean; oldProtocol?: boolean; holdPreview?: () => Promise<void> }
+interface Options { director?: boolean; knownBank?: boolean; newPlan?: boolean; conflict?: boolean; correction?: boolean; stale?: boolean; uncertain?: boolean; commitBeforeError?: boolean; badHash?: boolean; financialRevision?: unknown; unknownCent?: boolean; staleChoice?: boolean; oldProtocol?: boolean; holdPreview?: () => Promise<void>; serverToday?: string; missingPaymentDateVersion?: boolean; dateReviewRequired?: boolean }
 
-async function parseOriginal(body: any) {
+async function parseOriginal(body: any, today = '2026-10-18') {
   const bytes = Buffer.from(body.file_base64, 'base64'); let matrix: unknown[][];
   if (body.file_name.endsWith('.csv')) matrix = parseCsv(bytes.toString('utf8'));
   else {
     const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(bytes);
     const sheet = workbook.worksheets[0]; const chequeColumns: number[] = [];
     sheet.getRow(1).eachCell((cell, column) => { if (isChequeNumberHeader(cell.value)) chequeColumns.push(column); });
-    matrix = []; sheet.eachRow((row, index) => { const values = (row.values as unknown[]).slice(1); if (index > 1) for (const column of chequeColumns) values[column - 1] = readPayableChequeCell(row.getCell(column).value, row.getCell(column).numFmt); matrix.push(values); });
+    matrix = []; for (let index=1;index<=sheet.rowCount;index++) { const row=sheet.getRow(index),values=(row.values as unknown[]).slice(1); if (index > 1) for (const column of chequeColumns) values[column - 1] = readPayableChequeCell(row.getCell(column).value, row.getCell(column).numFmt); matrix.push(values); }
   }
-  const parsed = validatePayablePaidRows(matrix, { excel1904: false });
+  const parsed = validatePayablePaidRows(matrix, { excel1904: false, today });
   return { ...parsed, hash: createHash('sha256').update(bytes).digest('hex') };
 }
 async function setup(page: Page, options: Options = {}) {
@@ -52,8 +53,8 @@ async function setup(page: Page, options: Options = {}) {
     if (['payable_review_titles', 'payable_financial_titles'].includes(name)) return reply({ code: 'PGRST205' }, 404);
     if (name === 'get_payable_payment_accounts') return reply(accounts);
     if (name === 'payables-import') {
-      expect(body.mode).toBe('payments');
-      const parsed = await parseOriginal(body); if (parsed.errors.length) return reply({ code: 'INVALID_FILE', errors: parsed.errors }, 422);
+      expect(body.mode).toBe('payments'); expect(body.payment_date_version).toBe(paymentDateVersion);
+      const parsed = await parseOriginal(body,options.serverToday); if (parsed.errors.length) return reply({ code: parsed.errors.some(error=>error.problem==='A data do pagamento é futura.')?'SOURCE_VALIDATION_FAILED':'INVALID_FILE', errors: parsed.errors }, 422);
       expect(body.reconciliation_version).toBe('043'); expect(body.resolution_choices).toBeDefined();
       const rows: any[] = [], banks: any[] = [], plans: any[] = [], errors: any[] = [], items: any[] = [], resolutionErrors: any[] = [];
       let newCount = 0, matched = 0, corrections = 0, conflicts = 0, writeoffs = 0;
@@ -87,14 +88,15 @@ async function setup(page: Page, options: Options = {}) {
         financial_revision: 'financialRevision' in options ? options.financialRevision : committed ? '1:1' : '0:0', previous_import_id: committed ? uuid(30) : uuid(20),
         row_count: rows.length, new_payment_count: newCount, matched_payment_count: matched, correction_count: corrections, conflict_count: conflicts + resolutionErrors.length,
         errors, unmapped_banks: banks, bank_accounts: accounts, bank_options: accounts, unclassified_plans: plans, macros: ['FIXO', 'VARIÁVEL'], can_commit: !errors.length && !banks.length && !conflicts };
-      if (body.action === 'preview') { previews.push(body); await options.holdPreview?.(); return reply({ rows, preview, file_sha256: options.badHash ? 'a'.repeat(64) : parsed.hash }); }
+      if (body.action === 'preview') { previews.push(body); await options.holdPreview?.(); return reply({ rows, preview, file_sha256: options.badHash ? 'a'.repeat(64) : parsed.hash, ...(options.missingPaymentDateVersion?{}:{payment_date_version:paymentDateVersion}) }); }
       commits.push(body); expect(body.request_id).toMatch(/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i);
       const saved = paidRequests.get(body.request_id);
       if (saved) { expect(body).toEqual(saved.body); return reply({ ...saved.result, idempotent: true }); }
       if (options.stale) return reply({ code: '40001', message: 'private SQL query secret' }, 409);
+      if (options.dateReviewRequired) return reply({ code: 'PAYMENT_DATE_REVIEW_REQUIRED', message: 'private SQL query secret' }, 409);
       if (!preview.can_commit || !body.complete || (corrections && !body.confirm_corrections)) return reply({ code: '22023', message: 'private SQL query secret' }, 400);
       const existed = committed;
-      const result = { import_id: uuid(30), request_id: body.request_id, reconciliation_version: '043', reconciled_at: now.toISOString(), row_count: rows.length,
+      const result = { import_id: uuid(30), request_id: body.request_id, reconciliation_version: '043', payment_date_version: paymentDateVersion, reconciled_at: now.toISOString(), row_count: rows.length,
         new_payment_count: existed ? 0 : newCount, matched_payment_count: existed ? rows.length - writeoffs : matched, correction_count: existed ? 0 : corrections,
         reviewed_count: rows.length - writeoffs, writeoff_count: writeoffs, idempotent: existed };
       if (!options.uncertain || options.commitBeforeError || existed) {
@@ -160,7 +162,7 @@ test('a stale import preserves the file and requires reanalysis instead of repea
 test('an uncertain committed result freezes the file and safely recognizes it on retry without duplicating payments', async ({ page }) => {
   const options: Options = { knownBank: true, uncertain: true, commitBeforeError: true }; const { commits, ledgerCount } = await setup(page, options); await selectCsv(page); await analyze(page); page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true }).click();
   await expect(panel(page).getByRole('alert')).toContainText('Não foi possível confirmar o resultado'); await expect(page.getByLabel('Relatório de títulos pagos', { exact: true })).toBeDisabled(); await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Reanalisar mesmo arquivo', exact: true })).toBeDisabled(); await page.getByRole('button', { name: 'Repetir confirmação pendente', exact: true }).click(); await expect(panel(page).getByRole('status')).toContainText('sem duplicar pagamentos'); expect(commits[0]).toEqual(commits[1]); expect(commits[0].file_base64).toBe(commits[1].file_base64); expect(ledgerCount()).toBe(1); await expect(page.getByLabel('Relatório de títulos pagos', { exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Reanalisar mesmo arquivo', exact: true })).toBeDisabled(); await page.getByRole('button', { name: 'Repetir confirmação pendente', exact: true }).click(); await expect(panel(page).getByRole('status')).toContainText('sem duplicar pagamentos'); expect(commits[0]).toEqual(commits[1]); expect(commits[0].payment_date_version).toBe(paymentDateVersion); expect(commits[0].file_base64).toBe(commits[1].file_base64); expect(ledgerCount()).toBe(1); await expect(page.getByLabel('Relatório de títulos pagos', { exact: true })).toBeEnabled();
 });
 
 test('a mismatched server file hash cannot authorize an import', async ({ page }) => {
@@ -262,4 +264,70 @@ test('an older paid-import service cannot silently bypass reconciliation choices
   const { commits } = await setup(page, { knownBank: true, oldProtocol: true }); await selectCsv(page); await analyze(page);
   await expect(panel(page).getByRole('alert')).toContainText('Ative a atualização 043'); await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toHaveCount(0);
   expect(commits).toHaveLength(0);
+});
+
+
+// Modelo sintético com Quitação na coluna H, independente do vencimento da origem.
+const explicitPaidDateHeaders=['Lançamento','Histórico','Plano cp - Conta: nome','Plano cc - Conta: nome','Emissão: valor do lançamento','Emissão: data','Vencimento: data','Quitação: data do pagamento','Filial','Situação'];
+async function selectExplicitPaidDate(page:Page,paidDate:ExcelJS.CellValue,physicalLine=2) {
+  const workbook=new ExcelJS.Workbook(),sheet=workbook.addWorksheet('Pagamentos sintéticos');sheet.addRow(explicitPaidDateHeaders);
+  sheet.getRow(physicalLine).values=['14','Fornecedor pago sintético','ENERGIA','BANCO ERP PAGO',200,new Date('2026-10-01T10:15:00Z'),new Date('2043-06-30T12:00:00Z'),paidDate,'3','PAGO'];
+  const original=Buffer.from(await workbook.xlsx.writeBuffer());
+  await page.getByLabel('Relatório de títulos pagos',{exact:true}).setInputFiles({name:'pagos-com-quitacao.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:original});
+  await page.getByRole('checkbox',{name:/Confirmo que este é o relatório de pagamentos do período/}).check();await analyze(page);return original;
+}
+
+test('explicit Quitação date overrides a distant Vencimento while preserving the forecast and original bytes',async({page})=>{
+  const {previews,commits}=await setup(page,{knownBank:true});const original=await selectExplicitPaidDate(page,new Date('2026-10-17T23:59:59Z'));
+  const preview=page.getByRole('table',{name:/Prévia dos pagamentos/});await expect(preview.locator('tbody tr')).toHaveCount(1);
+  await expect(preview.getByRole('cell',{name:'17/10/2026',exact:true})).toBeVisible();await expect(preview.getByRole('cell',{name:'25/10/2026',exact:true})).toBeVisible();await expect(preview).not.toContainText('30/06/2043');
+  expect(previews).toHaveLength(1);expect(previews[0].payment_date_version).toBe(paymentDateVersion);expect(Buffer.from(previews[0].file_base64,'base64')).toEqual(original);expect(previews[0]).not.toHaveProperty('rows');
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true}).click();await expect(panel(page).getByRole('status')).toContainText('Importação concluída');
+  expect(commits).toHaveLength(1);expect(commits[0].payment_date_version).toBe(paymentDateVersion);expect(Buffer.from(commits[0].file_base64,'base64')).toEqual(original);expect(commits[0].file_base64).toBe(previews[0].file_base64);
+  const preserved=new ExcelJS.Workbook();await preserved.xlsx.load(Buffer.from(commits[0].file_base64,'base64'));expect(preserved.worksheets[0].getCell('G2').value).toEqual(new Date('2043-06-30T12:00:00Z'));expect(preserved.worksheets[0].getCell('H2').value).toEqual(new Date('2026-10-17T23:59:59Z'));
+});
+
+test('an empty or malformed explicit Quitação date never falls back to Vencimento',async({page})=>{
+  const {previews,commits,calls}=await setup(page,{knownBank:true});
+  for(const paidDate of [null,'data inválida']as const)await test.step(paidDate===null?'blank explicit date':'invalid explicit date',async()=>{
+    await selectExplicitPaidDate(page,paidDate);
+    const problems=page.getByRole('table',{name:'Problemas dos pagamentos · até 100 linhas',exact:true});await expect(problems.locator('tbody tr')).toHaveCount(1);
+    await expect(problems.getByRole('cell',{name:'Quitação: data do pagamento',exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'Conferência dos pagamentos',exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toHaveCount(0);
+    expect(previews).toHaveLength(0);expect(commits).toHaveLength(0);expect(calls.filter(call=>call.name==='payables-import')).toHaveLength(0);
+  });
+});
+
+test('a future explicit Quitação date identifies its physical row and column before any canonical request',async({page})=>{
+  const {previews,commits,calls}=await setup(page,{knownBank:true});await selectExplicitPaidDate(page,new Date('2026-10-19T00:00:00Z'),4);
+  const problems=page.getByRole('table',{name:'Problemas dos pagamentos · até 100 linhas',exact:true}),row=problems.locator('tbody tr').filter({hasText:'A data do pagamento é futura.'});
+  await expect(row).toHaveCount(1);await expect(row.getByRole('cell',{name:'4',exact:true})).toBeVisible();await expect(row.getByRole('cell',{name:'Quitação: data do pagamento',exact:true})).toBeVisible();await expect(row).toContainText('pagamentos agendados não confirmam pagamento realizado');
+  await expect(page.getByRole('heading',{name:'Conferência dos pagamentos',exact:true})).toHaveCount(0);expect(previews).toHaveLength(0);expect(commits).toHaveLength(0);expect(calls.filter(call=>call.name==='payables-import')).toHaveLength(0);
+  expect(await page.getByLabel('Relatório de títulos pagos',{exact:true}).evaluate(input=>(input as HTMLInputElement).files?.[0]?.name)).toBe('pagos-com-quitacao.xlsx');
+  await expect(page.getByRole('checkbox',{name:/Confirmo que este é o relatório de pagamentos do período/})).toBeChecked();await expect(page.getByRole('button',{name:'Reanalisar mesmo arquivo',exact:true})).toBeEnabled();
+});
+
+test('authoritative server date validation keeps detailed source errors and the selected original for another analysis',async({page})=>{
+  const {calls,previews,commits}=await setup(page,{knownBank:true,serverToday:'2026-10-16'});const original=await selectExplicitPaidDate(page,new Date('2026-10-17T00:00:00Z'),4);
+  const problems=page.getByRole('table',{name:'Problemas dos pagamentos · até 100 linhas',exact:true}),row=problems.locator('tbody tr').filter({hasText:'A data do pagamento é futura.'});
+  await expect(row).toHaveCount(1);await expect(row.getByRole('cell',{name:'4',exact:true})).toBeVisible();await expect(row.getByRole('cell',{name:'Quitação: data do pagamento',exact:true})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Conferência dos pagamentos',exact:true})).toHaveCount(0);expect(previews).toHaveLength(0);expect(commits).toHaveLength(0);
+  const requests=calls.filter(call=>call.name==='payables-import');expect(requests).toHaveLength(1);expect(requests[0].body.action).toBe('preview');expect(Buffer.from(requests[0].body.file_base64,'base64')).toEqual(original);expect(requests[0].body).not.toHaveProperty('today');
+  await expect(page.getByLabel('Relatório de títulos pagos',{exact:true})).toBeEnabled();expect(await page.getByLabel('Relatório de títulos pagos',{exact:true}).evaluate(input=>(input as HTMLInputElement).files?.[0]?.name)).toBe('pagos-com-quitacao.xlsx');
+  await expect(page.getByRole('button',{name:'Reanalisar mesmo arquivo',exact:true})).toBeEnabled();await expect(panel(page)).not.toContainText('private SQL query secret');
+});
+
+
+test('an older service that does not acknowledge the explicit payment-date contract cannot authorize confirmation',async({page})=>{
+  const {previews,commits}=await setup(page,{knownBank:true,missingPaymentDateVersion:true});await selectExplicitPaidDate(page,new Date('2026-10-17T00:00:00Z'));
+  await expect(panel(page).getByRole('alert')).toBeVisible();await expect(page.getByRole('heading',{name:'Conferência dos pagamentos',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toHaveCount(0);expect(previews).toHaveLength(1);expect(previews[0].payment_date_version).toBe(paymentDateVersion);expect(commits).toHaveLength(0);
+});
+
+test('an older recorded import that still needs payment-date review never becomes a false success or an uncertain retry',async({page})=>{
+  const {commits,ledgerCount}=await setup(page,{knownBank:true,dateReviewRequired:true});await selectExplicitPaidDate(page,new Date('2026-10-17T00:00:00Z'));
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true}).click();
+  await expect(panel(page).getByRole('alert')).toContainText('histórico');await expect(panel(page)).not.toContainText('Importação concluída');await expect(panel(page)).not.toContainText('private SQL query secret');
+  await expect(page.getByRole('button',{name:'Repetir confirmação pendente',exact:true})).toHaveCount(0);await expect(page.getByLabel('Relatório de títulos pagos',{exact:true})).toBeEnabled();await expect(page.getByRole('button',{name:'Reanalisar mesmo arquivo',exact:true})).toBeEnabled();
+  await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toBeDisabled();expect(commits).toHaveLength(1);expect(commits[0].payment_date_version).toBe(paymentDateVersion);expect(ledgerCount()).toBe(0);
 });

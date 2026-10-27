@@ -60,6 +60,7 @@ export interface PayableImportRequest {
   mode?: 'forecast' | 'payments'; bank_mappings?: Record<string,string>; confirm_corrections?: boolean;
   previous_financial_revision?: string | null; reconciliation_version?: '043'; full_report?: boolean;
   resolution_choices?: Record<string, PayableResolutionChoice>; request_id?: string;
+  payment_date_version?: '2026-10-27.1';
 }
 export async function payableImportRequest<T>(body: PayableImportRequest, signal?: AbortSignal): Promise<T> {
   const client = supabase;
@@ -136,7 +137,7 @@ export async function readPayablesRevision(signal?: AbortSignal): Promise<Payabl
   return result.data as PayablesRevision;
 }
 
-async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | undefined, mode: 'forecast' | 'payments'): Promise<{ rows: Row[]; errors: ImportProblem[]; hash: string; base64: string }> {
+async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | undefined, mode: 'forecast' | 'payments', today?: string): Promise<{ rows: Row[]; errors: ImportProblem[]; hash: string; base64: string }> {
   if (!file.size || file.size > 2 * 1024 * 1024) throw new Error('Selecione um arquivo não vazio de até 2 MiB.');
   if (!/\.(xlsx|xlsm|csv|xls)$/i.test(file.name)) throw new Error('Selecione .xlsx, .xlsm ou .csv. Para .xls, salve uma cópia como .xlsx.');
   const original = await file.arrayBuffer();
@@ -152,7 +153,7 @@ async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | u
     worker.onmessage = event => { cleanup(); resolve(event.data); };
     worker.onerror = () => { cleanup(); reject(new Error('Não foi possível processar a cópia do arquivo. Nenhum dado foi alterado.')); };
     const copy = original.slice(0);
-    worker.postMessage({ buffer: copy, name: file.name, mode }, [copy]);
+    worker.postMessage({ buffer: copy, name: file.name, mode, ...(mode === 'payments' && today !== undefined ? { today } : {}) }, [copy]);
   });
   const bytes = new Uint8Array(original);
   let binary = '';
@@ -161,7 +162,7 @@ async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | u
 }
 
 export function analyzePayableFile(file: File, signal?: AbortSignal) { return analyzePayableImportFile<PayableImportRow>(file, signal, 'forecast'); }
-export function analyzePayablePaymentsFile(file: File, signal?: AbortSignal) { return analyzePayableImportFile<PayablePaidRow>(file, signal, 'payments'); }
+export function analyzePayablePaymentsFile(file: File, signal?: AbortSignal, today?: string) { return analyzePayableImportFile<PayablePaidRow>(file, signal, 'payments', today); }
 
 export function downloadCsv(rows: PayableTitle[], name: string) {
   const headers = ['Centro de Custo Macro','Nº Lançamento','Histórico/Favorecido','Plano de Contas','Filial','Banco/Conta','Emissão','Vencimento','Semana Financeira','Valor','Status','Situação','Origem','Data baixa automática'];

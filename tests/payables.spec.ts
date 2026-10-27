@@ -257,7 +257,7 @@ test('resposta incerta congela bytes, tipo, escolhas e protocolo e repete exatam
   await expect(page.getByRole('button', { name: 'Validar escolhas da importação', exact: true })).toBeDisabled();
   const request = seen.commits[0]; expect(request.request_id).toMatch(/^[a-f\d-]{36}$/i); expect(seen.writeoffs).toEqual(['row:1']);
   await page.getByRole('button', { name: 'Repetir confirmação pendente', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Importação concluída');
+  await expect(page.getByRole('status').filter({ hasText: 'Importação concluída' })).toBeVisible();
   expect(seen.commits).toHaveLength(2); expect(seen.commits[1]).toEqual(request); expect(seen.writeoffs).toEqual(['row:1']); expect(seen.ledger).toEqual([]);
   await expect(page.getByLabel('Relatório de previsões de Contas a Pagar', { exact: true })).toBeEnabled();
 });
