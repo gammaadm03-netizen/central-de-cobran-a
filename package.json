@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.18.3",
+  "version": "0.18.4",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -84,7 +84,9 @@
     "training:build": "node scripts/build-training.mjs",
     "training:pdf": "node scripts/render-training-pdf.mjs && python scripts/finalize-training-pdf.py",
     "training:capture": "node scripts/capture-training.mjs",
-    "test:base-reset-sql": "node scripts/test-reset-bases-sql.mjs"
+    "test:base-reset-sql": "node scripts/test-reset-bases-sql.mjs",
+    "bundle:collection-reference-analysis": "node scripts/bundle-collection-reference-analysis.mjs",
+    "test:collection-reference-analysis-sql": "node scripts/bundle-collection-reference-analysis.mjs && node scripts/test-collection-reference-analysis-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

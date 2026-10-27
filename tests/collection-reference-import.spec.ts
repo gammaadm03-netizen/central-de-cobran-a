@@ -28,7 +28,11 @@ async function workbook(mode: Mode = 'contacts', quantity = 3) {
   for (const [name, bytes] of Object.entries(parts)) zip.file(name, bytes);
   return zip.generateAsync({ type: 'nodebuffer', compression: 'STORE' });
 }
-interface Options { role?: string; missingWrite?: boolean; warning?: boolean; lostStageAck?: boolean; holdFirstStage?: boolean; lostPublishAck?: boolean; stalePublish?: boolean; existingPublished?: boolean; existingUnverified?: boolean; badSource?: boolean; activationMissing?: boolean }
+interface Options {
+  role?: string; missingWrite?: boolean; warning?: boolean; lostStageAck?: boolean; holdFirstStage?: boolean;
+  lostPublishAck?: boolean; stalePublish?: boolean; existingPublished?: boolean; existingUnverified?: boolean;
+  badSource?: boolean; activationMissing?: boolean; previewFailureOnce?: '57014' | '55P03'; previewFailureOnAttempt?: number; malformedPreviewOnce?: boolean;
+}
 async function setup(page: Page, options: Options = {}) {
   await page.clock.setFixedTime(fixed);
   const role = options.role ?? 'contas_receber';
@@ -38,6 +42,7 @@ async function setup(page: Page, options: Options = {}) {
   const calls: { action: string; body: any; url: string; authorization: string }[] = [], uploads: { url: string; headers: Record<string, string> }[] = [];
   const staged = new Map<number, { hash: string; count: number }>(), published = new Map<string, any>();
   let job: any = null, originalStored = !!options.existingUnverified, stageFailure = !!options.lostStageAck, publishFailure = !!options.lostPublishAck, stale = !!options.stalePublish;
+  let previewFailure = options.previewFailureOnce, previewAttempts = 0, malformedPreview = !!options.malformedPreviewOnce;
   let release!: () => void; const stageHold = new Promise<void>(resolve => { release = resolve; }); let stageWasHeld = false;
   const preview = () => ({
     job_id: job.job_id, mode: job.mode, status: job.status, financial_revision: stale ? 'financial-1' : 'financial-2', context_revision: 'reference-1',
@@ -85,7 +90,15 @@ async function setup(page: Page, options: Options = {}) {
       return reply({ job_id: job.job_id, chunk_index: body.chunk_index, row_count: rows, duplicate: !!previous, staged_rows: job.staged_rows, staged_chunks: job.staged_chunks });
     }
     if (body.action === 'finish_prepare') { expect(body.expected_chunks).toBe(staged.size); job.status = 'PREPARED'; job.manifest_sha256 = 'b'.repeat(64); return reply(job); }
-    if (body.action === 'preview') return reply(preview());
+    if (body.action === 'preview') {
+      previewAttempts++;
+      if (previewFailure && previewAttempts === (options.previewFailureOnAttempt ?? 1)) {
+        const code = previewFailure; previewFailure = undefined;
+        return reply({ code, error: 'private SQL details must never reach the screen', schema_version: 'collection-reference-import/2026-10-27.1', diagnostic: { request_id: id(90), phase: 'preview' } }, code === '57014' ? 504 : 409);
+      }
+      if (malformedPreview) { malformedPreview = false; return reply({ ...preview(), row_count: String(job.staged_rows) }); }
+      return reply(preview());
+    }
     if (body.action === 'publish') {
       if (published.has(body.request_id)) return reply(published.get(body.request_id));
       if (stale) { stale = false; return reply({ code: '40001', error: 'private SQL revision details' }, 409); }
@@ -142,6 +155,8 @@ test('keeps a lost publication request frozen and repeats its exact protocol unt
   const seen = await setup(page, { lostPublishAck: true }); await openReferences(page); await prepare(page); await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toBeVisible();
   page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Conferir confirmação pendente', exact: true })).toBeVisible(); await expect(page.locator('#collection-reference-file')).toBeDisabled();
+  await expect(page.getByRole('alert')).toContainText('O resultado da conclusão ainda precisa ser confirmado'); await expect(page.getByRole('alert')).toContainText('CONCLUSÃO · HTTP503 · REF_SERVICE_UNAVAILABLE');
+  await expect(page.getByText('private response lost', { exact: false })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Descrições dos títulos/ })).toBeDisabled(); await page.getByRole('button', { name: 'Conferir confirmação pendente', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Importação concluída'); const requests = seen.calls.filter(call => call.action === 'publish'); expect(requests).toHaveLength(2); expect(requests[0].body).toEqual(requests[1].body); expect(seen.published.size).toBe(1);
 });
@@ -175,6 +190,69 @@ test('explains the open-titles-first order and preserves future descriptions exc
   await expect(page.getByText('Primeiro: importe os abertos e vencidos de Contas a Receber.', { exact: true })).toBeVisible(); await expect(page.getByText('As descrições não são exibidas em Contas a Receber ou Comissões.', { exact: false })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toBeVisible(); expect(seen.calls.find(call => call.action === 'begin')?.body.mode).toBe('descriptions'); expect(seen.calls.some(call => call.url.includes('receivables-import'))).toBe(false);
 });
+
+for (const mode of ['contacts', 'descriptions'] as const) {
+  for (const code of ['57014', '55P03'] as const) {
+    test(mode + ' preserves a prepared job after ' + code + ' and rechecks it without reuploading or publishing', async ({ page }) => {
+      const seen = await setup(page, { previewFailureOnce: code }); await openReferences(page); await prepare(page, mode);
+      const alert = page.getByRole('alert'), http = code === '57014' ? 504 : 409;
+      await expect(alert).toContainText(code === '57014' ? 'O banco interrompeu a conferência' : 'A preparação está ocupada por outra operação');
+      await expect(alert).toContainText('não é necessário enviá-lo novamente');
+      await expect(alert).toContainText('Código para suporte:');
+      await expect(alert).toContainText('CONFERÊNCIA · HTTP' + http + ' · ' + code);
+      await expect(alert).toContainText('collection-reference-import/2026-10-27.1 · ETAPA preview · ID ' + id(90));
+      await expect(page.getByText('private SQL details must never reach the screen', { exact: false })).toHaveCount(0);
+      await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true })).toHaveCount(0);
+      const sourceName = mode === 'contacts' ? 'contatos-sinteticos.xlsx' : 'descricoes-sinteticas.xlsx';
+      await expect(page.getByRole('row').filter({ has: page.getByRole('button', { name: 'Conferir arquivo ' + sourceName, exact: true }) })).toContainText('Pronto para conferência');
+      expect(seen.job().status).toBe('PREPARED'); expect(seen.uploads).toHaveLength(1); expect(seen.staged.size).toBe(1); expect(seen.published.size).toBe(0);
+
+      await page.getByRole('button', { name: 'Reanalisar arquivo preparado', exact: true }).click();
+      await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true })).toBeEnabled();
+      await expect(page.getByRole('alert')).toHaveCount(0); await expect(page.locator('#collection-reference-file')).toHaveValue('');
+      const previews = seen.calls.filter(call => call.action === 'preview');
+      expect(previews).toHaveLength(2); expect(previews.map(call => call.body.job_id)).toEqual([id(10), id(10)]);
+      for (const action of ['begin', 'stage', 'finish_prepare']) expect(seen.calls.filter(call => call.action === action)).toHaveLength(1);
+      expect(seen.uploads).toHaveLength(1); expect(seen.calls.some(call => call.action === 'publish')).toBe(false); expect(seen.job().status).toBe('PREPARED');
+    });
+  }
+
+  test(mode + ' retries a timed-out history preview after changing tabs with the original job intact', async ({ page }) => {
+    const seen = await setup(page, { previewFailureOnce: '57014', previewFailureOnAttempt: 2 }); await openReferences(page); await prepare(page, mode);
+    await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toBeVisible();
+    await page.getByRole('tab', { name: 'Contas a Receber', exact: true }).click(); await openReferences(page);
+    const sourceName = mode === 'contacts' ? 'contatos-sinteticos.xlsx' : 'descricoes-sinteticas.xlsx';
+    await page.getByRole('button', { name: 'Conferir arquivo ' + sourceName, exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('HTTP504 · 57014');
+    await expect(page.getByRole('alert')).toContainText('As etapas já recebidas permanecem preservadas');
+    await expect(page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true })).toHaveCount(0);
+    expect(seen.job().status).toBe('PREPARED'); expect(seen.uploads).toHaveLength(1); expect(seen.calls.some(call => call.action === 'publish')).toBe(false);
+    await page.getByRole('button', { name: 'Conferir arquivo ' + sourceName, exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true })).toBeEnabled();
+    await expect(page.locator('#collection-reference-file')).toHaveValue('');
+    expect(seen.calls.filter(call => call.action === 'preview').map(call => call.body.job_id)).toEqual([id(10), id(10), id(10)]);
+    expect(seen.calls.filter(call => call.action === 'status').map(call => call.body.job_id)).toEqual([id(10), id(10)]);
+    expect(seen.calls.filter(call => call.action === 'begin')).toHaveLength(1); expect(seen.calls.filter(call => call.action === 'finish_prepare')).toHaveLength(1);
+    expect(seen.job().mode).toBe(mode.toUpperCase()); expect(seen.job().status).toBe('PREPARED'); expect(seen.uploads).toHaveLength(1); expect(seen.staged.size).toBe(1); expect(seen.calls.some(call => call.action === 'publish')).toBe(false);
+  });
+
+  test(mode + ' blocks a malformed successful preview and allows rechecking the preserved preparation', async ({ page }) => {
+    const seen = await setup(page, { malformedPreviewOnce: true }); await openReferences(page); await prepare(page, mode);
+    await expect(page.getByRole('alert')).toContainText('conferência incompleta ou incompatível');
+    await expect(page.getByRole('alert')).toContainText('HTTP200 · REF_INVALID_PREVIEW');
+    await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true })).toHaveCount(0);
+    expect(seen.job().status).toBe('PREPARED'); expect(seen.calls.some(call => call.action === 'publish')).toBe(false);
+    await page.getByRole('button', { name: 'Reanalisar arquivo preparado', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true })).toBeEnabled();
+    expect(seen.calls.filter(call => call.action === 'preview').map(call => call.body.job_id)).toEqual([id(10), id(10)]);
+    expect(seen.uploads).toHaveLength(1); expect(seen.staged.size).toBe(1); expect(seen.calls.some(call => call.action === 'publish')).toBe(false);
+  });
+}
 
 for (const role of ['diretor', 'contas_pagar', 'rh_dp', 'cobradora_1']) {
   test('reference import is hidden from role ' + role + ' even when financial permissions are present', async ({ page }) => {

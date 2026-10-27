@@ -2,6 +2,8 @@ import { parseReferenceCsv } from '../../../src/lib/collection-reference-parser.
 
 // This gateway deliberately does not load an XLSX library. The original is
 // preserved privately; only bounded CSV conversion artifacts are parsed here.
+export const COLLECTION_REFERENCE_GATEWAY_SCHEMA = 'collection-reference-import/2026-10-27.1';
+export const REFERENCE_REQUEST_BUDGET_MS = 50000;
 const MAX_ORIGINAL_BYTES = 16 * 1024 * 1024;
 const MAX_CHUNK_BYTES = 256 * 1024;
 const MAX_BODY_BYTES = 768 * 1024;
@@ -132,13 +134,16 @@ function validJob(job, userId, jobId) {
 
 export function createCollectionReferenceGateway({ env, fetch: fetcher = globalThis.fetch, parseCsv = parseReferenceCsv, log = () => {} }) {
   return async function handle(request) {
+    const requestId = crypto.randomUUID();
+    let phase = 'configuration';
+    const diagnostic = payload => ({ ...payload, schema_version: COLLECTION_REFERENCE_GATEWAY_SCHEMA, diagnostic: { request_id: requestId, phase } });
     let origins;
     try { origins = originsFrom(env('ALLOWED_ORIGINS')); }
-    catch { return new Response(JSON.stringify({ error: FAILURE }), { status: 503, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } }); }
+    catch { return new Response(JSON.stringify(diagnostic({ code: 'REF_SERVICE_UNAVAILABLE', error: FAILURE })), { status: 503, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } }); }
     const origin = request.headers.get('origin');
     if (!origin || !origins.has(origin)) return new Response(JSON.stringify({ error: 'Origem não autorizada.' }), { status: 403, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', Vary: 'Origin' } });
     const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': origin, Vary: 'Origin' };
-    const respond = (status, payload, extra = {}) => new Response(JSON.stringify(payload), { status, headers: { ...headers, ...extra } });
+    const respond = (status, payload, extra = {}) => new Response(JSON.stringify(status >= 400 ? diagnostic({ ...payload, code: payload.code ?? (status === 401 ? 'PGRST301' : status === 403 ? '42501' : status === 400 ? 'REF_REQUEST_INVALID' : 'REF_SERVICE_UNAVAILABLE') }) : payload), { status, headers: { ...headers, ...extra } });
     if (request.method === 'OPTIONS') {
       const requested = (request.headers.get('access-control-request-headers') || '').toLowerCase().split(',').map(value => value.trim()).filter(Boolean);
       if (request.headers.get('access-control-request-method') !== 'POST' || requested.some(value => !['authorization', 'content-type', 'apikey', 'x-client-info'].includes(value))) return respond(403, { error: 'Solicitação não permitida.' });
@@ -154,45 +159,55 @@ export function createCollectionReferenceGateway({ env, fetch: fetcher = globalT
       if (!serviceKey || !anonKey || url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('invalid_environment');
       base = url.origin;
     } catch { return respond(503, { error: FAILURE }); }
-    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(30000)]);
+    const deadline = AbortSignal.timeout(REFERENCE_REQUEST_BUDGET_MS);
+    const signal = AbortSignal.any([request.signal, deadline]);
     async function call(path, { service = false, method = 'POST', data } = {}) {
       const result = await fetcher(`${base}${path}`, { method, redirect: 'error', headers: { apikey: service ? serviceKey : anonKey, Authorization: `Bearer ${service ? serviceKey : token}`, 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data), signal });
       let payload = null;
       try { payload = await result.json(); } catch { /* Never return raw provider responses. */ }
+      if (result.ok && (!payload || typeof payload !== 'object' || Array.isArray(payload))) throw new Error('invalid_response');
       return { ok: result.ok, status: result.status, payload };
     }
     function failure(result) {
       const code = result.payload?.code;
-      if (['PGRST202', '42883'].includes(code)) return respond(409, { code: 'P0028', activation_required: true, error: 'Ative a importação de referências da cobrança no banco de dados antes de continuar.' });
+      if (['PGRST202', 'PGRST205', '42883', '42P01'].includes(code)) return respond(409, { code: 'P0028', activation_required: true, error: 'Ative a importação de referências da cobrança no banco de dados antes de continuar.' });
+      if (code === '57014') return respond(504, { code, error: 'O banco interrompeu a conferência por limite de tempo. A preparação foi preservada.' });
+      if (code === '55P03') return respond(409, { code, error: 'Outra operação está utilizando a base. Confira novamente a mesma preparação em instantes.' });
+      if (result.status === 408 || result.status === 504) return respond(504, { code: 'REF_UPSTREAM_TIMEOUT', error: 'O serviço de dados excedeu o tempo de resposta. A preparação foi preservada.' });
+      if (result.status === 429) return respond(429, { code: 'REF_RATE_LIMITED', error: 'O serviço recebeu muitas solicitações. Aguarde um pouco e confira a mesma preparação.' });
       if (code === '42501') return respond(403, { code, error: 'Seu perfil não tem permissão para esta operação.' });
       if (code === 'P0002') return respond(404, { code, error: 'Preparação não disponível. Selecione novamente o arquivo.' });
       if (['40001', '23505', 'P0027', 'P0028'].includes(code)) return respond(409, { code, error: 'A preparação precisa ser conferida. Atualize a análise antes de confirmar.' });
       if (['22023', '23514', '54000'].includes(code)) return respond(400, { code, error: 'A referência foi recusada. Confira o arquivo, os lotes e a análise antes de continuar.' });
       if (result.status === 401) return respond(401, { error: 'Sua sessão expirou. Entre novamente.' });
-      log('upstream_unavailable'); return respond(503, { error: FAILURE });
+      log('upstream_unavailable'); return respond(503, { code: 'REF_SERVICE_UNAVAILABLE', error: FAILURE });
     }
     try {
       // Authenticate and authorize before reading bodies, downloading originals,
       // decoding chunks, or parsing any personally identifiable reference data.
+      phase = 'auth';
       const auth = await call('/auth/v1/user', { method: 'GET' });
       if (!auth.ok) return [401, 403].includes(auth.status) ? respond(401, { error: 'Sua sessão expirou. Entre novamente.' }) : failure(auth);
       if (typeof auth.payload?.id !== 'string' || !UUID.test(auth.payload.id)) throw new Error('invalid_identity');
       let sessionId;
       try { sessionId = sessionFromVerifiedToken(token, auth.payload.id); }
       catch { return respond(401, { error: 'Sua sessão expirou. Entre novamente.' }); }
+      phase = 'access';
       const access = await call('/rest/v1/rpc/current_access', { data: {} });
       if (!access.ok) return failure(access);
       const allowed = (resource, action) => access.payload?.permissions?.some(permission => permission?.resource === resource && permission.action === action);
       if (access.payload?.profile?.id !== auth.payload.id || access.payload.profile.enabled !== true
         || !['gerente_geral', 'contas_receber'].includes(access.payload.profile.role_key) || !Array.isArray(access.payload.permissions)
         || !['read', 'write', 'import'].every(action => allowed('contas_receber', action)) || !allowed('importar_bases', 'read')) return respond(403, { code: '42501', error: 'Seu perfil não tem permissão para esta operação.' });
+      phase = 'body';
       let body;
       try { body = await readBody(request, signal); }
-      catch { return respond(signal.aborted ? 503 : 400, { error: signal.aborted ? FAILURE : INVALID }); }
+      catch { return respond(signal.aborted ? 504 : 400, { code: signal.aborted ? 'REF_REQUEST_TIMEOUT' : 'REF_REQUEST_INVALID', error: signal.aborted ? FAILURE : INVALID }); }
       if (!validBody(body)) return respond(400, { error: INVALID });
       const actor = { p_user_id: auth.payload.id, p_session_id: sessionId };
       const rpc = (name, data) => call(`/rest/v1/rpc/${RPC_NAMES[name]}`, { service: true, data: { ...actor, ...data } });
       if (body.action === 'history') {
+        phase = 'history';
         const result = await rpc('history', { p_offset: body.offset ?? 0, p_limit: body.limit ?? 25 });
         if (!result.ok) return failure(result);
         if (!result.payload || !Array.isArray(result.payload.rows) || result.payload.rows.length > (body.limit ?? 25)
@@ -201,6 +216,7 @@ export function createCollectionReferenceGateway({ env, fetch: fetcher = globalT
         return respond(200, result.payload);
       }
       if (body.action === 'begin') {
+        phase = 'begin';
         const result = await rpc('begin', { p_mode: body.mode.toUpperCase(), p_file_name: body.file_name, p_file_size: body.file_size, p_file_sha256: body.file_sha256 });
         if (!result.ok) return failure(result);
         if (!validJob(result.payload, auth.payload.id, result.payload?.job_id) || result.payload.mode !== body.mode.toUpperCase()
@@ -209,17 +225,19 @@ export function createCollectionReferenceGateway({ env, fetch: fetcher = globalT
       }
       // SQL checks actor, approved session, permission and job ownership on every
       // call. Never let request-supplied storage paths reach service credentials.
+      phase = 'job';
       const jobResult = await rpc('get', { p_job_id: body.job_id });
       if (!jobResult.ok) return failure(jobResult);
       const job = jobResult.payload;
       if (!validJob(job, auth.payload.id, body.job_id)) throw new Error('invalid_job_response');
       if (body.action === 'status') return respond(200, job);
       if (body.action === 'verify_original') {
+        phase = 'storage';
         const original = await fetcher(`${base}/storage/v1/object/authenticated/${BUCKET}/${job.storage_path}`, { method: 'GET', redirect: 'error', headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` }, signal });
         if (!original.ok) return respond(original.status === 404 ? 409 : 503, { ...(original.status === 404 ? { code: 'ORIGINAL_MISSING' } : {}), error: original.status === 404 ? 'Envie o arquivo original antes de verificar a preparação.' : FAILURE });
         let bytes;
         try { bytes = await readBytes(original, MAX_ORIGINAL_BYTES, signal); }
-        catch { return respond(signal.aborted ? 503 : 413, { error: signal.aborted ? FAILURE : 'O arquivo original excede 16 MiB ou não pôde ser lido por completo.' }); }
+        catch { return respond(signal.aborted ? 504 : 413, { code: signal.aborted ? 'REF_REQUEST_TIMEOUT' : 'REF_REQUEST_INVALID', error: signal.aborted ? FAILURE : 'O arquivo original excede 16 MiB ou não pôde ser lido por completo.' }); }
         if (bytes.length !== job.source_size) return respond(409, { error: 'O tamanho do original enviado não confere. Selecione novamente o arquivo.' });
         const hash = await hashBytes(bytes);
         if (hash !== job.source_sha256) return respond(409, { error: 'O original enviado não corresponde ao arquivo selecionado. Selecione novamente o arquivo.' });
@@ -229,6 +247,7 @@ export function createCollectionReferenceGateway({ env, fetch: fetcher = globalT
       }
       if (job.original_verified !== true) return respond(409, { error: 'Envie e verifique o arquivo original antes de preparar os lotes.' });
       if (body.action === 'stage') {
+        phase = 'stage';
         let bytes;
         try { bytes = decodeChunk(body.chunk_base64); }
         catch { return respond(400, { error: 'Lote CSV vazio, inválido ou maior que 256 KiB.' }); }
@@ -245,14 +264,18 @@ export function createCollectionReferenceGateway({ env, fetch: fetcher = globalT
         return result.ok ? respond(200, result.payload) : failure(result);
       }
       const name = body.action === 'finish_prepare' ? 'finish' : body.action;
+      phase = name;
       const data = { p_job_id: body.job_id,
         ...(body.action === 'finish_prepare' ? { p_expected_chunks: body.expected_chunks } : {}),
         ...(body.action === 'publish' ? { p_previous_financial_revision: body.previous_financial_revision, p_confirm_quarantine: body.confirm_quarantine ?? false, p_request_id: body.request_id } : {}),
       };
       const result = await rpc(name, data);
       return result.ok ? respond(200, result.payload) : failure(result);
-    } catch {
-      log('request_unavailable'); return respond(503, { error: FAILURE });
+    } catch (error) {
+      log(signal.aborted ? 'request_timeout' : 'request_unavailable');
+      if (signal.aborted) return respond(504, { code: 'REF_REQUEST_TIMEOUT', error: 'O tempo de resposta foi excedido. Confira a mesma preparação, sem reenviar o arquivo.' });
+      const invalid = error instanceof Error && /^invalid_(?:identity|job_response|parser_result|response)$/.test(error.message);
+      return respond(503, { code: invalid ? 'REF_INVALID_RESPONSE' : 'REF_SERVICE_UNAVAILABLE', error: FAILURE });
     }
   };
 }

@@ -143,6 +143,8 @@ for (let i = 0; i < 256; i++) {
 }
 
 // supabase/functions/collection-reference-import/handler.mjs
+var COLLECTION_REFERENCE_GATEWAY_SCHEMA = "collection-reference-import/2026-10-27.1";
+var REFERENCE_REQUEST_BUDGET_MS = 5e4;
 var MAX_ORIGINAL_BYTES = 16 * 1024 * 1024;
 var MAX_CHUNK_BYTES = 256 * 1024;
 var MAX_BODY_BYTES = 768 * 1024;
@@ -270,16 +272,19 @@ function validJob(job, userId, jobId) {
 function createCollectionReferenceGateway({ env, fetch: fetcher = globalThis.fetch, parseCsv = parseReferenceCsv, log = () => {
 } }) {
   return async function handle(request) {
+    const requestId = crypto.randomUUID();
+    let phase = "configuration";
+    const diagnostic = (payload) => ({ ...payload, schema_version: COLLECTION_REFERENCE_GATEWAY_SCHEMA, diagnostic: { request_id: requestId, phase } });
     let origins;
     try {
       origins = originsFrom(env("ALLOWED_ORIGINS"));
     } catch {
-      return new Response(JSON.stringify({ error: FAILURE }), { status: 503, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
+      return new Response(JSON.stringify(diagnostic({ code: "REF_SERVICE_UNAVAILABLE", error: FAILURE })), { status: 503, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
     }
     const origin = request.headers.get("origin");
     if (!origin || !origins.has(origin)) return new Response(JSON.stringify({ error: "Origem n\xE3o autorizada." }), { status: 403, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", Vary: "Origin" } });
     const headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Access-Control-Allow-Origin": origin, Vary: "Origin" };
-    const respond = (status, payload, extra = {}) => new Response(JSON.stringify(payload), { status, headers: { ...headers, ...extra } });
+    const respond = (status, payload, extra = {}) => new Response(JSON.stringify(status >= 400 ? diagnostic({ ...payload, code: payload.code ?? (status === 401 ? "PGRST301" : status === 403 ? "42501" : status === 400 ? "REF_REQUEST_INVALID" : "REF_SERVICE_UNAVAILABLE") }) : payload), { status, headers: { ...headers, ...extra } });
     if (request.method === "OPTIONS") {
       const requested = (request.headers.get("access-control-request-headers") || "").toLowerCase().split(",").map((value) => value.trim()).filter(Boolean);
       if (request.headers.get("access-control-request-method") !== "POST" || requested.some((value) => !["authorization", "content-type", "apikey", "x-client-info"].includes(value))) return respond(403, { error: "Solicita\xE7\xE3o n\xE3o permitida." });
@@ -298,7 +303,8 @@ function createCollectionReferenceGateway({ env, fetch: fetcher = globalThis.fet
     } catch {
       return respond(503, { error: FAILURE });
     }
-    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(3e4)]);
+    const deadline = AbortSignal.timeout(REFERENCE_REQUEST_BUDGET_MS);
+    const signal = AbortSignal.any([request.signal, deadline]);
     async function call(path, { service = false, method = "POST", data } = {}) {
       const result = await fetcher(`${base}${path}`, { method, redirect: "error", headers: { apikey: service ? serviceKey : anonKey, Authorization: `Bearer ${service ? serviceKey : token}`, "Content-Type": "application/json" }, body: data === void 0 ? void 0 : JSON.stringify(data), signal });
       let payload = null;
@@ -306,20 +312,26 @@ function createCollectionReferenceGateway({ env, fetch: fetcher = globalThis.fet
         payload = await result.json();
       } catch {
       }
+      if (result.ok && (!payload || typeof payload !== "object" || Array.isArray(payload))) throw new Error("invalid_response");
       return { ok: result.ok, status: result.status, payload };
     }
     function failure(result) {
       const code = result.payload?.code;
-      if (["PGRST202", "42883"].includes(code)) return respond(409, { code: "P0028", activation_required: true, error: "Ative a importa\xE7\xE3o de refer\xEAncias da cobran\xE7a no banco de dados antes de continuar." });
+      if (["PGRST202", "PGRST205", "42883", "42P01"].includes(code)) return respond(409, { code: "P0028", activation_required: true, error: "Ative a importa\xE7\xE3o de refer\xEAncias da cobran\xE7a no banco de dados antes de continuar." });
+      if (code === "57014") return respond(504, { code, error: "O banco interrompeu a confer\xEAncia por limite de tempo. A prepara\xE7\xE3o foi preservada." });
+      if (code === "55P03") return respond(409, { code, error: "Outra opera\xE7\xE3o est\xE1 utilizando a base. Confira novamente a mesma prepara\xE7\xE3o em instantes." });
+      if (result.status === 408 || result.status === 504) return respond(504, { code: "REF_UPSTREAM_TIMEOUT", error: "O servi\xE7o de dados excedeu o tempo de resposta. A prepara\xE7\xE3o foi preservada." });
+      if (result.status === 429) return respond(429, { code: "REF_RATE_LIMITED", error: "O servi\xE7o recebeu muitas solicita\xE7\xF5es. Aguarde um pouco e confira a mesma prepara\xE7\xE3o." });
       if (code === "42501") return respond(403, { code, error: "Seu perfil n\xE3o tem permiss\xE3o para esta opera\xE7\xE3o." });
       if (code === "P0002") return respond(404, { code, error: "Prepara\xE7\xE3o n\xE3o dispon\xEDvel. Selecione novamente o arquivo." });
       if (["40001", "23505", "P0027", "P0028"].includes(code)) return respond(409, { code, error: "A prepara\xE7\xE3o precisa ser conferida. Atualize a an\xE1lise antes de confirmar." });
       if (["22023", "23514", "54000"].includes(code)) return respond(400, { code, error: "A refer\xEAncia foi recusada. Confira o arquivo, os lotes e a an\xE1lise antes de continuar." });
       if (result.status === 401) return respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." });
       log("upstream_unavailable");
-      return respond(503, { error: FAILURE });
+      return respond(503, { code: "REF_SERVICE_UNAVAILABLE", error: FAILURE });
     }
     try {
+      phase = "auth";
       const auth = await call("/auth/v1/user", { method: "GET" });
       if (!auth.ok) return [401, 403].includes(auth.status) ? respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." }) : failure(auth);
       if (typeof auth.payload?.id !== "string" || !UUID.test(auth.payload.id)) throw new Error("invalid_identity");
@@ -329,44 +341,50 @@ function createCollectionReferenceGateway({ env, fetch: fetcher = globalThis.fet
       } catch {
         return respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." });
       }
+      phase = "access";
       const access = await call("/rest/v1/rpc/current_access", { data: {} });
       if (!access.ok) return failure(access);
       const allowed = (resource, action) => access.payload?.permissions?.some((permission) => permission?.resource === resource && permission.action === action);
       if (access.payload?.profile?.id !== auth.payload.id || access.payload.profile.enabled !== true || !["gerente_geral", "contas_receber"].includes(access.payload.profile.role_key) || !Array.isArray(access.payload.permissions) || !["read", "write", "import"].every((action) => allowed("contas_receber", action)) || !allowed("importar_bases", "read")) return respond(403, { code: "42501", error: "Seu perfil n\xE3o tem permiss\xE3o para esta opera\xE7\xE3o." });
+      phase = "body";
       let body;
       try {
         body = await readBody(request, signal);
       } catch {
-        return respond(signal.aborted ? 503 : 400, { error: signal.aborted ? FAILURE : INVALID });
+        return respond(signal.aborted ? 504 : 400, { code: signal.aborted ? "REF_REQUEST_TIMEOUT" : "REF_REQUEST_INVALID", error: signal.aborted ? FAILURE : INVALID });
       }
       if (!validBody(body)) return respond(400, { error: INVALID });
       const actor = { p_user_id: auth.payload.id, p_session_id: sessionId };
       const rpc = (name2, data2) => call(`/rest/v1/rpc/${RPC_NAMES[name2]}`, { service: true, data: { ...actor, ...data2 } });
       if (body.action === "history") {
+        phase = "history";
         const result2 = await rpc("history", { p_offset: body.offset ?? 0, p_limit: body.limit ?? 25 });
         if (!result2.ok) return failure(result2);
         if (!result2.payload || !Array.isArray(result2.payload.rows) || result2.payload.rows.length > (body.limit ?? 25) || !Number.isSafeInteger(result2.payload.count) || result2.payload.count < 0 || result2.payload.rows.some((job2) => !validJob(job2, auth.payload.id, job2?.job_id))) throw new Error("invalid_job_response");
         return respond(200, result2.payload);
       }
       if (body.action === "begin") {
+        phase = "begin";
         const result2 = await rpc("begin", { p_mode: body.mode.toUpperCase(), p_file_name: body.file_name, p_file_size: body.file_size, p_file_sha256: body.file_sha256 });
         if (!result2.ok) return failure(result2);
         if (!validJob(result2.payload, auth.payload.id, result2.payload?.job_id) || result2.payload.mode !== body.mode.toUpperCase() || result2.payload.source_sha256 !== body.file_sha256 || result2.payload.source_size !== body.file_size) throw new Error("invalid_job_response");
         return respond(200, result2.payload);
       }
+      phase = "job";
       const jobResult = await rpc("get", { p_job_id: body.job_id });
       if (!jobResult.ok) return failure(jobResult);
       const job = jobResult.payload;
       if (!validJob(job, auth.payload.id, body.job_id)) throw new Error("invalid_job_response");
       if (body.action === "status") return respond(200, job);
       if (body.action === "verify_original") {
+        phase = "storage";
         const original = await fetcher(`${base}/storage/v1/object/authenticated/${BUCKET}/${job.storage_path}`, { method: "GET", redirect: "error", headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` }, signal });
         if (!original.ok) return respond(original.status === 404 ? 409 : 503, { ...original.status === 404 ? { code: "ORIGINAL_MISSING" } : {}, error: original.status === 404 ? "Envie o arquivo original antes de verificar a prepara\xE7\xE3o." : FAILURE });
         let bytes;
         try {
           bytes = await readBytes(original, MAX_ORIGINAL_BYTES, signal);
         } catch {
-          return respond(signal.aborted ? 503 : 413, { error: signal.aborted ? FAILURE : "O arquivo original excede 16 MiB ou n\xE3o p\xF4de ser lido por completo." });
+          return respond(signal.aborted ? 504 : 413, { code: signal.aborted ? "REF_REQUEST_TIMEOUT" : "REF_REQUEST_INVALID", error: signal.aborted ? FAILURE : "O arquivo original excede 16 MiB ou n\xE3o p\xF4de ser lido por completo." });
         }
         if (bytes.length !== job.source_size) return respond(409, { error: "O tamanho do original enviado n\xE3o confere. Selecione novamente o arquivo." });
         const hash = await hashBytes(bytes);
@@ -377,6 +395,7 @@ function createCollectionReferenceGateway({ env, fetch: fetcher = globalThis.fet
       }
       if (job.original_verified !== true) return respond(409, { error: "Envie e verifique o arquivo original antes de preparar os lotes." });
       if (body.action === "stage") {
+        phase = "stage";
         let bytes;
         try {
           bytes = decodeChunk(body.chunk_base64);
@@ -397,6 +416,7 @@ function createCollectionReferenceGateway({ env, fetch: fetcher = globalThis.fet
         return result2.ok ? respond(200, result2.payload) : failure(result2);
       }
       const name = body.action === "finish_prepare" ? "finish" : body.action;
+      phase = name;
       const data = {
         p_job_id: body.job_id,
         ...body.action === "finish_prepare" ? { p_expected_chunks: body.expected_chunks } : {},
@@ -404,9 +424,11 @@ function createCollectionReferenceGateway({ env, fetch: fetcher = globalThis.fet
       };
       const result = await rpc(name, data);
       return result.ok ? respond(200, result.payload) : failure(result);
-    } catch {
-      log("request_unavailable");
-      return respond(503, { error: FAILURE });
+    } catch (error) {
+      log(signal.aborted ? "request_timeout" : "request_unavailable");
+      if (signal.aborted) return respond(504, { code: "REF_REQUEST_TIMEOUT", error: "O tempo de resposta foi excedido. Confira a mesma prepara\xE7\xE3o, sem reenviar o arquivo." });
+      const invalid = error instanceof Error && /^invalid_(?:identity|job_response|parser_result|response)$/.test(error.message);
+      return respond(503, { code: invalid ? "REF_INVALID_RESPONSE" : "REF_SERVICE_UNAVAILABLE", error: FAILURE });
     }
   };
 }

@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.3**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.4**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Conferência de contatos e descrições — 0.18.4
+
+A análise usa as chaves já preparadas, elimina consultas repetidas dos canais de contato e reaproveita a classificação enquanto as revisões financeira e de contatos permanecem iguais. Os arquivos preparados continuam disponíveis pelo histórico. O gateway aguarda até 50 segundos, o site até 60 segundos, e falhas mostram um código seguro para suporte. Uma confirmação incerta mantém o mesmo protocolo; a conferência oficial continua obrigatória antes de publicar. [Ativar o SQL 048, atualizar a função collection-reference-import e retomar os arquivos](docs/conferencia-contatos-descricoes.md). A publicação no Git não instala o SQL ou a função no Supabase.
 
 ## Fechamento: dashboards e menu lateral recolhível — 0.18.2
 

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { createCollectionReferenceGateway } from './handler.mjs';
+import { createCollectionReferenceGateway, COLLECTION_REFERENCE_GATEWAY_SCHEMA, REFERENCE_REQUEST_BUDGET_MS } from './handler.mjs';
 
 const USER = '10000000-0000-4000-8000-000000000001';
 const OTHER = '10000000-0000-4000-8000-000000000002';
@@ -340,7 +340,7 @@ test('request cancellation aborts a pending original stream without verifying or
     queueMicrotask(() => controller.abort());
     return new Response(new ReadableStream({ cancel() { canceled = true; } }));
   } });
-  assert.equal((await app.send({ action: 'verify_original', job_id: JOB }, { signal: controller.signal })).status, 503);
+  assert.equal((await app.send({ action: 'verify_original', job_id: JOB }, { signal: controller.signal })).status, 504);
   assert.equal(canceled, true); assert.equal(app.calls.length, 4);
 });
 
@@ -355,4 +355,42 @@ test('CORS and HTTP methods are exact and fail before authentication or content 
   assert.equal(rejected.status, 403);
   assert.equal((await app.handle(new Request(BASE, { headers: { Origin: ORIGIN } }))).status, 405);
   const bad = setup({ env: { ALLOWED_ORIGINS: 'https://example.invalid/path' } }); assert.equal((await bad.send()).status, 503); assert.equal(bad.calls.length, 0);
+});
+
+test('preview preserves bounded SQL timeout, lock and upstream error diagnostics without exposing provider data', async () => {
+  const cases = [
+    [{ code: '57014', message: `private SQL ${SERVICE}` }, 500, 504, '57014'],
+    [{ code: '55P03', detail: `private lock ${TOKEN}` }, 500, 409, '55P03'],
+    [{ error: `private proxy ${SERVICE}` }, 504, 504, 'REF_UPSTREAM_TIMEOUT'],
+    [{ error: `private throttling ${TOKEN}` }, 429, 429, 'REF_RATE_LIMITED'],
+  ];
+  for (const [rpcError, rpcStatus, expectedStatus, code] of cases) {
+    const app = setup({ rpcError, rpcStatus, errorAt: 'preview_collection_reference_import_from_gateway' });
+    const response = await app.send({ action: 'preview', job_id: JOB }), payload = await response.json();
+    assert.equal(response.status, expectedStatus); assert.equal(payload.code, code);
+    assert.equal(payload.schema_version, COLLECTION_REFERENCE_GATEWAY_SCHEMA);
+    assert.equal(payload.diagnostic.phase, 'preview'); assert.match(payload.diagnostic.request_id, /^[0-9a-f-]{36}$/i);
+    assert(!JSON.stringify(payload).includes(SERVICE)); assert(!JSON.stringify(payload).includes(TOKEN)); assert(!JSON.stringify(payload).includes('private'));
+    assert(!app.calls.some(call => call.path.includes('publish_collection_reference')));
+  }
+});
+
+test('a timed out prepared-job preview uses its exact bounded phase and never retries or publishes', async t => {
+  const deadline = new AbortController(), budgets = [];
+  t.mock.method(AbortSignal, 'timeout', milliseconds => { budgets.push(milliseconds); return deadline.signal; });
+  const app = setup({ rpcHandler: async rpc => {
+    if (rpc === 'preview_collection_reference_import_from_gateway') { deadline.abort(); throw new Error(`private cancellation ${SERVICE}`); }
+  } });
+  const response = await app.send({ action: 'preview', job_id: JOB }), payload = await response.json();
+  assert.equal(response.status, 504); assert.equal(payload.code, 'REF_REQUEST_TIMEOUT');
+  assert.equal(payload.diagnostic.phase, 'preview'); assert.deepEqual(budgets, [REFERENCE_REQUEST_BUDGET_MS]); assert.equal(budgets[0], 50000);
+  assert.equal(app.calls.filter(call => call.path.endsWith('preview_collection_reference_import_from_gateway')).length, 1);
+  assert(!app.calls.some(call => call.path.includes('publish_collection_reference')));
+});
+
+test('malformed successful RPC data receives a safe response error with a reference instead of private provider content', async () => {
+  const app = setup({ rpcHandler: async rpc => rpc === 'get_collection_reference_job_from_gateway' ? new Response(`private HTML ${SERVICE}`, { status: 200 }) : null });
+  const response = await app.send({ action: 'status', job_id: JOB }), payload = await response.json();
+  assert.equal(response.status, 503); assert.equal(payload.code, 'REF_INVALID_RESPONSE'); assert.equal(payload.diagnostic.phase, 'job');
+  assert(!JSON.stringify(payload).includes('private')); assert(!JSON.stringify(payload).includes(SERVICE));
 });

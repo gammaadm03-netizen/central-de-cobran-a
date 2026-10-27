@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { publishableKey, supabase, supabaseUrl } from '../lib/supabase';
 import { dateLabel } from '../lib/payables';
 import { analyzeCollectionReferenceFile, hashCollectionReferenceFile, type CollectionReferenceMode, type CollectionReferenceStats } from '../lib/collection-reference-import';
+import { makeCollectionReferenceFailure, collectionReferenceFailureMessage, collectionReferenceFailureReference, type CollectionReferenceAction } from '../lib/collection-reference-errors.mjs';
 import '../collection-reference-import.css';
 
 type Mode = CollectionReferenceMode;
@@ -48,7 +49,7 @@ function referenceError(error: unknown, fallback: string) {
   if (code === '23514' || code === '22023' || code === '23505') return 'A preparação foi recusada. Confira o arquivo, seus cabeçalhos e as pendências antes de tentar novamente.';
   if (code === 'SOURCE_MISMATCH') return 'A cópia recebida não corresponde ao arquivo selecionado. A preparação foi interrompida para conferência.';
   if (error instanceof Error && /^(?:Selecione |Salve uma cópia|Cabeçalho |A planilha |A linha \d|A referência |O cache |Este navegador |Arquivo de apoio |Estrutura XLSX |Integridade |XML |Relação da planilha |Caminho da planilha |Parte obrigatória |Tamanho expandido |Metadados XLSX |Elemento XML |Entidade XML |Caractere XML |Linhas físicas XLSX |Células XLSX |Índice sharedStrings |Tipo de célula XLSX |A leitura do arquivo )/.test(error.message)) return error.message.slice(0, 600);
-  return fallback;
+  return collectionReferenceFailureMessage(error, fallback);
 }
 function assertJob(value: unknown, expectedHash?: string): asserts value is Job {
   const job = value as Job;
@@ -77,16 +78,32 @@ function assertPublish(value: unknown, jobId: string): asserts value is PublishR
     || result.done !== (result.status === 'PUBLISHED') || result.done && result.remaining_rows !== 0) throw new Error('unknown_publication');
 }
 async function referenceRequest<T>(body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
-  if (!supabase) throw { code: 'PGRST301' };
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) throw { code: 'PGRST301' };
-  const abort = new AbortController(), cancel = () => abort.abort();
+  const action = body.action as CollectionReferenceAction;
+  if (signal?.aborted) throw new DOMException('Conferência cancelada.', 'AbortError');
+  if (!supabase) throw makeCollectionReferenceFailure({ action, code: 'PGRST301' });
+  let session;
+  try { ({ data: { session } } = await supabase.auth.getSession()); }
+  catch { throw makeCollectionReferenceFailure({ action, code: 'REF_AUTH_UNAVAILABLE' }); }
+  if (!session?.access_token) throw makeCollectionReferenceFailure({ action, code: 'PGRST301' });
+  const abort = new AbortController(); let timedOut = false;
+  const cancel = () => abort.abort();
   signal?.addEventListener('abort', cancel, { once: true }); if (signal?.aborted) cancel();
-  const timer = window.setTimeout(cancel, body.action === 'publish' ? 180000 : 90000);
+  const timer = window.setTimeout(() => { timedOut = true; abort.abort(); }, 60000);
   try {
-    const response = await fetch(supabaseUrl + '/functions/v1/collection-reference-import', { method: 'POST', headers: { apikey: publishableKey, Authorization: 'Bearer ' + session.access_token, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: abort.signal, credentials: 'omit', cache: 'no-store' });
-    const result: unknown = await response.json();
-    if (!response.ok) throw { code: result && typeof result === 'object' && 'code' in result && typeof result.code === 'string' ? result.code : response.status === 401 ? 'PGRST301' : response.status === 403 ? '42501' : '', status: response.status };
+    let response: Response;
+    try { response = await fetch(supabaseUrl + '/functions/v1/collection-reference-import', { method: 'POST', headers: { apikey: publishableKey, Authorization: 'Bearer ' + session.access_token, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: abort.signal, credentials: 'omit', cache: 'no-store' }); }
+    catch {
+      if (signal?.aborted) throw new DOMException('Conferência cancelada.', 'AbortError');
+      throw makeCollectionReferenceFailure({ action, code: timedOut ? 'REF_REQUEST_TIMEOUT' : 'REF_NETWORK_ERROR' });
+    }
+    let result: unknown;
+    try { result = await response.json(); }
+    catch {
+      if (signal?.aborted) throw new DOMException('Conferência cancelada.', 'AbortError');
+      throw makeCollectionReferenceFailure({ action, status: response.status, ...(timedOut ? { code: 'REF_REQUEST_TIMEOUT' } : response.ok ? { code: 'REF_INVALID_RESPONSE' } : {}) });
+    }
+    if (!response.ok) throw makeCollectionReferenceFailure({ action, status: response.status, payload: result });
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw makeCollectionReferenceFailure({ action, status: response.status, code: 'REF_INVALID_RESPONSE' });
     return result as T;
   } finally { window.clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
 }
@@ -97,23 +114,28 @@ export default function CollectionReferenceImport({ canImport }: { canImport: bo
   const [preview, setPreview] = useState<Preview | null>(null), [stats, setStats] = useState<CollectionReferenceStats | null>(null);
   const [phase, setPhase] = useState<Phase | null>(null), [preparedRows, setPreparedRows] = useState(0), [preparedChunks, setPreparedChunks] = useState(0);
   const [acknowledged, setAcknowledged] = useState(false), [canceling, setCanceling] = useState(false), [pending, setPending] = useState<PublishRequest | null>(null);
-  const [error, setError] = useState(''), [notice, setNotice] = useState(''), [success, setSuccess] = useState(''), [publishProgress, setPublishProgress] = useState(0);
-  const [history, setHistory] = useState<History>({ count: 0, rows: [] }), [historyLoading, setHistoryLoading] = useState(true), [historyError, setHistoryError] = useState(''), [historyRevision, setHistoryRevision] = useState(0);
+  const [error, setError] = useState(''), [errorReference, setErrorReference] = useState(''), [notice, setNotice] = useState(''), [success, setSuccess] = useState(''), [publishProgress, setPublishProgress] = useState(0);
+  const [history, setHistory] = useState<History>({ count: 0, rows: [] }), [historyLoading, setHistoryLoading] = useState(true), [historyError, setHistoryError] = useState(''), [historyErrorReference, setHistoryErrorReference] = useState(''), [historyRevision, setHistoryRevision] = useState(0);
   const controller = useRef<AbortController | null>(null), generation = useRef(0), cancelRequested = useRef(false), chunkPending = useRef(false), input = useRef<HTMLInputElement | null>(null);
   const pendingRequest = useRef<PublishRequest | null>(null);
   useEffect(() => () => { generation.current++; controller.current?.abort(); }, []);
   useEffect(() => {
     if (!canImport) { setHistoryLoading(false); return; }
-    const abort = new AbortController(); setHistoryLoading(true); setHistoryError('');
+    const abort = new AbortController(); setHistoryLoading(true); setHistoryError(''); setHistoryErrorReference('');
     void referenceRequest<History>({ action: 'history', offset: 0, limit: 20 }, abort.signal).then(result => {
       if (!safeCount(result?.count) || !Array.isArray(result.rows) || result.rows.length > 20 || result.rows.length > result.count) throw new Error('invalid_history');
       result.rows.forEach(row => assertJob(row));
       if (!abort.signal.aborted) setHistory(result);
-    }).catch(failure => { if (!abort.signal.aborted) setHistoryError(referenceError(failure, 'Não foi possível consultar o histórico de importações. A seleção do arquivo continua disponível.')); }).finally(() => { if (!abort.signal.aborted) setHistoryLoading(false); });
+    }).catch(failure => { if (!abort.signal.aborted) { setHistoryError(referenceError(failure, 'Não foi possível consultar o histórico de importações. A seleção do arquivo continua disponível.')); setHistoryErrorReference(collectionReferenceFailureReference(failure, 'history')); } }).finally(() => { if (!abort.signal.aborted) setHistoryLoading(false); });
     return () => abort.abort();
   }, [canImport, historyRevision]);
   const busy = phase !== null, preparing = busy && phase !== 'publish', locked = busy || pending !== null;
-  function clearMessages() { setError(''); setNotice(''); setSuccess(''); }
+  function clearMessages() { setError(''); setErrorReference(''); setNotice(''); setSuccess(''); }
+  function showFailure(failure: unknown, fallback: string, action: CollectionReferenceAction = 'preview') {
+    const safeFailure = failure instanceof Error && /^(?:invalid_|unknown_|unverified_original$)/.test(failure.message)
+      ? makeCollectionReferenceFailure({ action, code: failure.message === 'invalid_preview' ? 'REF_INVALID_PREVIEW' : 'REF_INVALID_RESPONSE', status: 200 }) : failure;
+    setError(referenceError(safeFailure, fallback)); setErrorReference(collectionReferenceFailureReference(safeFailure, action));
+  }
   function reset() {
     generation.current++; controller.current?.abort(); setPreview(null); setJob(null); setStats(null); setAcknowledged(false); setPreparedRows(0); setPreparedChunks(0); clearMessages();
   }
@@ -137,7 +159,7 @@ export default function CollectionReferenceImport({ canImport }: { canImport: bo
   }
   async function analyze(event: FormEvent) {
     event.preventDefault(); if (!file || !canImport || locked) return;
-    if (!file.size || file.size > maxBytes || !/\.(xlsx|xlsm)$/i.test(file.name)) { setError('Selecione um arquivo .xlsx ou .xlsm não vazio, de até 16 MB.'); return; }
+    if (!file.size || file.size > maxBytes || !/\.(xlsx|xlsm)$/i.test(file.name)) { setError('Selecione um arquivo .xlsx ou .xlsm não vazio, de até 16 MB.'); setErrorReference(''); return; }
     const current = ++generation.current, source = file, selectedMode = mode, abort = new AbortController(); controller.current?.abort(); controller.current = abort;
     cancelRequested.current = false; chunkPending.current = false; setCanceling(false); clearMessages(); setPreview(null); setJob(null); setStats(null); setAcknowledged(false); setPreparedRows(0); setPreparedChunks(0); setPhase('hash');
     try {
@@ -188,7 +210,7 @@ export default function CollectionReferenceImport({ canImport }: { canImport: bo
       if (current !== generation.current) return;
       setPreview(null);
       if (cancelRequested.current || abort.signal.aborted) setNotice('Preparação interrompida. A cópia original e os lotes já recebidos permanecem preservados. Selecione novamente o mesmo arquivo para continuar; nenhuma conclusão foi iniciada.');
-      else setError(referenceError(failure, 'Não foi possível concluir a preparação. Mantenha o mesmo arquivo para tentar novamente e recuperar os lotes já recebidos.'));
+      else showFailure(failure, 'Não foi possível concluir a preparação. Mantenha o mesmo arquivo para tentar novamente e recuperar os lotes já recebidos.', 'begin');
       setHistoryRevision(value => value + 1);
     } finally { if (current === generation.current) { setPhase(null); setCanceling(false); chunkPending.current = false; } }
   }
@@ -203,7 +225,7 @@ export default function CollectionReferenceImport({ canImport }: { canImport: bo
       if (currentJob.status === 'PUBLISHED') { setSuccess('Esta importação já foi concluída. Os registros e as alterações manuais permanecem preservados.'); return; }
       if (!['PREPARED', 'PUBLISHING'].includes(currentJob.status)) { setNotice('Esta preparação ainda está incompleta. Selecione o mesmo arquivo original para continuar de onde parou.'); return; }
       await loadPreview(currentJob, current);
-    } catch (failure) { if (current === generation.current) { if (cancelRequested.current) setNotice('Conferência interrompida. O arquivo preparado permanece disponível no histórico.'); else if (!abort.signal.aborted) setError(referenceError(failure, 'Não foi possível conferir esta preparação. Tente atualizar novamente.')); } }
+    } catch (failure) { if (current === generation.current) { if (cancelRequested.current) setNotice('Conferência interrompida. O arquivo preparado permanece disponível no histórico.'); else if (!abort.signal.aborted) showFailure(failure, 'Não foi possível conferir esta preparação. Tente atualizar novamente.'); } }
     finally { if (current === generation.current) { setPhase(null); setCanceling(false); } }
   }
   async function publish(frozen?: PublishRequest) {
@@ -231,7 +253,7 @@ export default function CollectionReferenceImport({ canImport }: { canImport: bo
     } catch (failure) {
       if (current !== generation.current) return;
       if (knownFailure(failure)) { pendingRequest.current = null; setPending(null); setPreview(null); setAcknowledged(false); }
-      setError(referenceError(failure, 'A confirmação ainda não chegou. O arquivo e a conferência foram preservados. Confira o mesmo envio antes de iniciar outra importação.'));
+      showFailure(failure, 'A confirmação ainda não chegou. O arquivo e a conferência foram preservados. Confira o mesmo envio antes de iniciar outra importação.', 'publish');
       setHistoryRevision(value => value + 1);
     } finally { if (current === generation.current) setPhase(null); }
   }
@@ -246,7 +268,7 @@ export default function CollectionReferenceImport({ canImport }: { canImport: bo
         <div className="collection-reference-controls"><button type="submit" className="button" disabled={!file || locked}>Preparar e conferir arquivo</button>{preparing && <button type="button" className="button secondary" disabled={canceling} onClick={cancelPreparation}>{canceling ? 'Interrompendo após a etapa atual…' : 'Interromper preparação'}</button>}{job && !preview && !locked && ['PREPARED', 'PUBLISHING'].includes(job.status) && <button type="button" className="button secondary" onClick={() => void reanalyze()}>Reanalisar arquivo preparado</button>}</div>
       </form>
       {phase && <div className="collection-reference-progress" aria-live="polite"><div className="collection-reference-progress-header"><strong>{phaseLabels[phase]}</strong><span>{canceling ? 'A etapa em andamento será preservada.' : modeLabel(mode)}</span></div><progress aria-label="Progresso da preparação" /><p>{phase === 'publish' ? publishProgress ? count(publishProgress) + ' registros conferidos para conclusão.' : 'Aguarde a confirmação da conclusão. Você poderá conferir o mesmo envio se a conexão for interrompida.' : count(preparedRows) + ' linhas recebidas · ' + count(preparedChunks) + ' lotes confirmados'}</p></div>}
-      {error && <p className="notice error" role="alert">{error}</p>}{notice && <p className="notice" role="status">{notice}</p>}{success && <p className="notice success" role="status">{success}</p>}
+      {error && <div className="notice error" role="alert"><p>{error}</p>{errorReference && <p className="help-text">Código para suporte: <code style={{ overflowWrap: 'anywhere' }}>{errorReference}</code></p>}</div>}{notice && <p className="notice" role="status">{notice}</p>}{success && <p className="notice success" role="status">{success}</p>}
       {pending && !busy && <div className="notice collection-reference-pending"><p>A confirmação deste arquivo está pendente. O mesmo envio será conferido sem criar uma segunda importação.</p><button type="button" className="button secondary" onClick={() => void publish(pending)}>Conferir confirmação pendente</button></div>}
       <p className="collection-reference-privacy"><span aria-hidden="true">●</span><span>O original e as pendências ficam protegidos na Central. Cada cobradora consulta apenas os contatos e as informações permitidos em sua carteira.</span></p>
     </section>
@@ -260,7 +282,7 @@ export default function CollectionReferenceImport({ canImport }: { canImport: bo
       <button type="button" className="button" disabled={locked || !preview.can_publish || needsAck && !acknowledged} onClick={() => void publish()}>Concluir importação deste arquivo</button><p className="collection-reference-preview-note">A conclusão atualiza somente os dados de apoio seguros. Os valores, os pagamentos e o histórico financeiro são preservados.</p>
     </section>}
     <section className="panel collection-reference-history" aria-labelledby="collection-reference-history-title"><div className="panel-header"><div><h3 id="collection-reference-history-title">Histórico dos seus arquivos</h3><p className="muted">Preparações e conclusões ficam registradas para consulta e retomada.</p></div><button type="button" className="button secondary" disabled={historyLoading || locked} onClick={() => setHistoryRevision(value => value + 1)}>Atualizar histórico</button></div>
-      {historyError && <p className="notice error" role="alert">{historyError}</p>}{historyLoading ? <p className="help-text">Consultando os arquivos…</p> : !history.rows.length ? <p className="help-text">Nenhum arquivo registrado neste acesso.</p> : <div className="table-wrap"><table className="data-table"><caption className="sr-only">Histórico privado de contatos e descrições</caption><thead><tr><th>Arquivo</th><th>Base</th><th>Registros preparados</th><th>Situação</th><th>Conferir</th></tr></thead><tbody>{history.rows.map(row => <tr key={row.job_id}><td><strong>{row.source_name}</strong><div>{sizeLabel(row.source_size)}{row.created_at ? ' · ' + dateLabel(row.created_at) : ''}</div></td><td>{modeLabel(row.mode)}</td><td>{count(row.staged_rows)}</td><td><span className={'collection-reference-status' + (row.status === 'PUBLISHED' ? '' : ' pending')}>{statuses[row.status]}</span></td><td><button type="button" className="button secondary" disabled={locked} onClick={() => void reanalyze(row)} aria-label={'Conferir arquivo ' + row.source_name}>Conferir</button></td></tr>)}</tbody></table></div>}
+      {historyError && <div className="notice error" role="alert"><p>{historyError}</p>{historyErrorReference && <p className="help-text">Código para suporte: <code style={{ overflowWrap: 'anywhere' }}>{historyErrorReference}</code></p>}</div>}{historyLoading ? <p className="help-text">Consultando os arquivos…</p> : !history.rows.length ? <p className="help-text">Nenhum arquivo registrado neste acesso.</p> : <div className="table-wrap"><table className="data-table"><caption className="sr-only">Histórico privado de contatos e descrições</caption><thead><tr><th>Arquivo</th><th>Base</th><th>Registros preparados</th><th>Situação</th><th>Conferir</th></tr></thead><tbody>{history.rows.map(row => <tr key={row.job_id}><td><strong>{row.source_name}</strong><div>{sizeLabel(row.source_size)}{row.created_at ? ' · ' + dateLabel(row.created_at) : ''}</div></td><td>{modeLabel(row.mode)}</td><td>{count(row.staged_rows)}</td><td><span className={'collection-reference-status' + (row.status === 'PUBLISHED' ? '' : ' pending')}>{statuses[row.status]}</span></td><td><button type="button" className="button secondary" disabled={locked} onClick={() => void reanalyze(row)} aria-label={'Conferir arquivo ' + row.source_name}>Conferir</button></td></tr>)}</tbody></table></div>}
     </section>
   </div>;
 }
