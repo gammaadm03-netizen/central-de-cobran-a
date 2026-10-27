@@ -98,7 +98,7 @@ function ForecastImport({ canImport, onBusyChange }: { canImport: boolean; onBus
       if (!Array.isArray(canonical.rows) || canonical.rows.length < 1 || canonical.rows.length > 5000 || canonical.file_sha256 !== parsed.hash
         || preview.full_report !== (reportKind === 'FULL') || preview.row_count !== canonical.rows.length
         || !(preview.previous_import_id === null || payableUuid(preview.previous_import_id)) || typeof preview.financial_revision !== 'string' || !preview.financial_revision.trim() || preview.financial_revision.length > 256
-        || typeof preview.can_commit !== 'boolean' || !validReconciliationItems(preview.reconciliation_items) || !Array.isArray(preview.resolution_errors)
+        || typeof preview.can_commit !== 'boolean' || !validReconciliationItems(preview.reconciliation_items) || preview.reconciliation_items.some(item => item.kind === 'INTERNAL_CASH') || !Array.isArray(preview.resolution_errors)
         || !Array.isArray(banks) || banks.some(bank => !payableUuid(bank.id) || typeof bank.display_name !== 'string')
         || ['new_count', 'open_count', 'settled_count'].some(key => !Number.isSafeInteger(preview[key as keyof ImportPreview]) || Number(preview[key as keyof ImportPreview]) < 0)
         || preview.reconciliation_items.some(item => chosen[item.key] && item.selected_action !== chosen[item.key].action)) throw new Error('invalid-preview');

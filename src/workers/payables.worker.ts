@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
 import { MAX_FILE_BYTES, MAX_ROWS, parseCsv, validateWorkbookExpandedSize, validatePayableRows, validatePayablePaidRows, isChequeNumberHeader, readPayableChequeCell } from '../lib/payables-parser.mjs';
 
-self.onmessage = async (event: MessageEvent<{ buffer: ArrayBuffer; name: string; mode?: 'forecast' | 'payments'; today?: string }>) => {
+self.onmessage = async (event: MessageEvent<{ buffer: ArrayBuffer; name: string; mode?: 'forecast' | 'payments'; today?: string; allowInternalCashWriteoff?: boolean }>) => {
   try {
-    const { buffer, name, mode = 'forecast', today } = event.data;
+    const { buffer, name, mode = 'forecast', today, allowInternalCashWriteoff } = event.data;
     if (mode !== 'forecast' && mode !== 'payments') throw new Error('Modo de importação inválido. Selecione previsão ou pagamentos realizados.');
     if (buffer.byteLength > MAX_FILE_BYTES) throw new Error('O arquivo excede 2 MiB.');
     const extension = name.toLowerCase().split('.').pop();
@@ -35,7 +35,7 @@ self.onmessage = async (event: MessageEvent<{ buffer: ArrayBuffer; name: string;
     } else if (extension === 'xls') {
       throw new Error('O formato .xls antigo ainda não é aceito. No Excel, salve uma cópia como .xlsx e selecione essa cópia.');
     } else throw new Error('Selecione um arquivo .xlsx, .xlsm ou .csv.');
-    self.postMessage(mode === 'payments' ? validatePayablePaidRows(matrix, { excel1904, ...(today !== undefined ? { today } : {}) }) : validatePayableRows(matrix, { excel1904 }));
+    self.postMessage(mode === 'payments' ? validatePayablePaidRows(matrix, { excel1904, ...(today !== undefined ? { today } : {}), ...(allowInternalCashWriteoff === true ? { allowInternalCashWriteoff: true } : {}) }) : validatePayableRows(matrix, { excel1904 }));
   } catch (error) {
     self.postMessage({ rows: [], errors: [{ line: 0, column: 'Arquivo', problem: error instanceof Error ? error.message : 'Não foi possível analisar o arquivo.', correction: 'Confira o formato, salve uma cópia com valores e tente novamente.' }] });
   }

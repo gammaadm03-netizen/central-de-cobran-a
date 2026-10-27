@@ -104,6 +104,7 @@ DECLARE
   'public.payable_forecast_plan_bindings',
   'public.payable_paid_bank_mappings',
   'public.commission_rule_versions',
+  'cf_private.payable_paid_bank_aliases',
   'cf_private.login_buckets',
   'cf_private.login_attempts',
   'cf_private.revoked_sessions',

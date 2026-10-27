@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.6**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.7**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Bancos de pagamentos e Caixa Interno — 0.18.7
+
+Correspondências privadas entre a descrição bancária do relatório e uma conta oficial ativa permitem preencher o banco automaticamente em qualquer filial. Os identificadores conferidos são preservados até a confirmação. Caixa Interno, com qualquer valor, exige baixa administrativa individual e não gera pagamento ou realizado; o marcador de R$ 0,01 mantém sua confirmação própria. Arquivo, valor nominal, vencimento e histórico permanecem preservados. [Ativação do SQL 050 configurado e da função payables-import](docs/pagamentos-bancos-caixa-interno.md). Números reais das contas ficam fora do código público.
 
 ## Data efetiva nos pagamentos de Contas a Pagar — 0.18.6
 

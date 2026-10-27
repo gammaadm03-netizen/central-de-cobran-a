@@ -1,3 +1,5 @@
+import { isInternalCashBank } from './payable-bank-rules.mjs';
+
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const MAX_ROWS = 5000;
 const REQUIRED = ['entry_number', 'description', 'due_date', 'amount_cents', 'plan', 'branch'];
@@ -276,7 +278,7 @@ export function validatePayableRows(matrix, { excel1904 = false } = {}) {
 // legacy reports without it use Vencimento as the user-confirmed payment date.
 // Plano CC is the actual paying bank, as confirmed by the user.
 // It never creates financial titles or derives payment facts from disappearance.
-export function validatePayablePaidRows(matrix, { excel1904 = false, today, useExplicitPaymentDate = true } = {}) {
+export function validatePayablePaidRows(matrix, { excel1904 = false, today, useExplicitPaymentDate = true, allowInternalCashWriteoff = false } = {}) {
   const errors = [], rows = [];
   if (today !== undefined) {
     try { if (typeof today !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(today) || parseCivilDate(today) !== today) throw new Error('invalid-today'); }
@@ -306,7 +308,14 @@ export function validatePayablePaidRows(matrix, { excel1904 = false, today, useE
     if (source.every(value => value === null || value === undefined || String(value).trim() === '')) continue;
     nonempty++;
     if (nonempty > MAX_ROWS) { errors.push({ line: index + 1, column: 'Arquivo', problem: 'Mais de 5.000 linhas.', correction: 'Exporte uma origem completa dentro do limite.' }); break; }
-    const row = { branch: '', entry_number: '', source_status: 'PAGO', paid_on: '', amount_paid_cents: 0, paid_bank: '' };
+    // The bank can occur after the date column. Classify its source value
+    // independently of header order; the regular loop still validates it.
+    let internalCash = false;
+    if (allowInternalCashWriteoff === true) {
+      try { internalCash = isInternalCashBank(scalar(source[columns.get('bank_account')])); }
+      catch { /* The bank validation below reports unsupported content. */ }
+    }
+    const row = { branch: '', entry_number: '', source_status: 'PAGO', paid_on: internalCash ? null : '', amount_paid_cents: 0, paid_bank: '' };
     const before = errors.length;
     if (source.length > matrix[0].length && source.slice(matrix[0].length).some(value => value !== null && value !== undefined && String(value).trim())) errors.push({ line: index + 1, column: 'Arquivo', problem: 'Há valores fora das colunas do cabeçalho.', correction: 'Confira delimitadores e cabeçalhos; valores com vírgula em CSV devem estar entre aspas.' });
     source.forEach((value, column) => { if (!usedColumns.has(column)) { try { scalar(value); } catch (error) { errors.push({ line: index + 1, column: `Coluna ${column + 1}`, problem: error.message, correction: 'Salve uma cópia somente com valores, sem fórmulas.' }); } } });
@@ -318,8 +327,11 @@ export function validatePayablePaidRows(matrix, { excel1904 = false, today, useE
           row.amount_paid_cents = parseMoneyCents(value);
           if (row.amount_paid_cents <= 0) throw new Error('O valor pago deve ser maior que zero.');
         } else if (key === paymentDateKey) {
-          row.paid_on = timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904);
-          if (today !== undefined && row.paid_on > today) throw new Error('A data do pagamento é futura.');
+          if (internalCash) row.paid_on = null;
+          else {
+            row.paid_on = timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904);
+            if (today !== undefined && row.paid_on > today) throw new Error('A data do pagamento é futura.');
+          }
         } else if (key === 'cheque_number') row.cheque_number = parseChequeNumber(value);
         else if (key === 'issued_on') row.issued_on = String(value).trim() ? (timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904)) : null;
         else {

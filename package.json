@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.18.6",
+  "version": "0.18.7",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -88,7 +88,9 @@
     "bundle:collection-reference-analysis": "node scripts/bundle-collection-reference-analysis.mjs",
     "test:collection-reference-analysis-sql": "node scripts/bundle-collection-reference-analysis.mjs && node scripts/test-collection-reference-analysis-sql.mjs",
     "bundle:collection-reference-mode-analysis": "node scripts/bundle-collection-reference-mode-analysis.mjs",
-    "test:collection-reference-mode-analysis-sql": "node scripts/bundle-collection-reference-mode-analysis.mjs && node scripts/test-collection-reference-preview-work-sql.mjs"
+    "test:collection-reference-mode-analysis-sql": "node scripts/bundle-collection-reference-mode-analysis.mjs && node scripts/test-collection-reference-preview-work-sql.mjs",
+    "bundle:paid-bank-rules": "node scripts/bundle-paid-bank-rules.mjs",
+    "test:paid-bank-rules-sql": "node scripts/bundle-paid-bank-rules.mjs && node scripts/test-paid-bank-rules-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

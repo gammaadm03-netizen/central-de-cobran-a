@@ -72,3 +72,68 @@ test('approval metadata cannot shift rows, invent missing titles in incremental 
   }
   assert(!validReconciliationPreview(preview({ reconciliation_items:[] }), { ...centOptions,resolutionChoices:{} }));
 });
+
+const cashSource = changes => ({ branch: 'Filial sintética', entry_number: 'TESTE-1', source_status: 'PAGO',
+  paid_bank: 'CAIXA INTERNO', paid_on: null, amount_paid_cents: 84599, ...changes });
+const cashItem = changes => item({ key: 'row:1', line: 1, kind: 'INTERNAL_CASH', source_amount_cents: 84599,
+  allowed_actions: ['WRITE_OFF'], selected_action: 'WRITE_OFF', ...changes });
+const cashPreview = changes => preview({ mode: 'payments', full_report: false,
+  reconciliation_items: [cashItem()], ...changes });
+const cashOptions = changes => ({ rowCount: 1, mode: 'payments', fullReport: false, bankRulesVersion: '050',
+  sourceRows: [cashSource()], resolutionChoices: { 'row:1': { action: 'WRITE_OFF', reason: 'Baixa administrativa individual confirmada.' } }, ...changes });
+
+test('050 internal cash needs its own individual writeoff decision and cannot become a payment', () => {
+  assert(validReconciliationPreview(cashPreview(), cashOptions()));
+  const pending = cashPreview({ can_commit: false, reconciliation_items: [cashItem({ selected_action: null })] });
+  assert(validReconciliationPreview(pending, cashOptions({ resolutionChoices: {} })));
+  assert(!validReconciliationPreview(cashPreview({ reconciliation_items: [cashItem({ selected_action: null })] }), cashOptions({ resolutionChoices: {} })));
+  assert(!validReconciliationPreview(cashPreview({ reconciliation_items: [cashItem({ selected_action: null, requires_resolution: false })] }), cashOptions({ resolutionChoices: {} })));
+  for (const changes of [
+    { allowed_actions: ['PAID'], selected_action: 'PAID' },
+    { allowed_actions: ['WRITE_OFF', 'PAID'] },
+    { allowed_actions: ['WRITE_OFF', 'REOPEN'] },
+    { selected_action: 'REOPEN' },
+  ]) assert(!validReconciliationPreview(cashPreview({ reconciliation_items: [cashItem(changes)] }), cashOptions()));
+});
+
+test('internal-cash classification requires the new paid-only contract and an authoritative cash source row', () => {
+  assert(validReconciliationPreview(cashPreview(), cashOptions({ sourceRows: [cashSource({ paid_bank: 'cÁiXa iNtErNo' })] })));
+  assert(!validReconciliationPreview(cashPreview(), cashOptions({ bankRulesVersion: undefined })));
+  assert(!validReconciliationPreview(cashPreview(), cashOptions({ bankRulesVersion: '049' })));
+  assert(!validReconciliationPreview(cashPreview({ mode: 'forecast', full_report: true }), cashOptions({ mode: 'forecast', fullReport: true })));
+  assert(!validReconciliationPreview(cashPreview(), cashOptions({ sourceRows: undefined })));
+  for (const bank of ['Banco sintético', 'CAIXA', 'CAIXA INTERNO 2', 'CAIXA INTERNO - FILIAL', 'OUTRO CAIXA INTERNO']) {
+    assert(!validReconciliationPreview(cashPreview(), cashOptions({ sourceRows: [cashSource({ paid_bank: bank, paid_on: '2026-10-19' })] })), bank);
+  }
+  for (const amount of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert(!validReconciliationPreview(cashPreview(), cashOptions({ sourceRows: [cashSource({ amount_paid_cents: amount })] })), String(amount));
+  }
+});
+
+test('every internal-cash source needs a matching reconciliation item without shifted identities or duplicate rows', () => {
+  assert(!validReconciliationPreview(cashPreview({ reconciliation_items: [] }), cashOptions({ resolutionChoices: {} })));
+  assert(!validReconciliationPreview(cashPreview({ reconciliation_items: [cashItem(), cashItem()] }), cashOptions()));
+  for (const changes of [{ line: null }, { line: 2 }, { key: `title:${id}` }, { branch: 'Outra filial' }, { entry_number: 'OUTRO-TITULO' }, { kind: 'CENT' }]) {
+    assert(!validReconciliationPreview(cashPreview({ reconciliation_items: [cashItem(changes)] }), cashOptions()), JSON.stringify(changes));
+  }
+  const sources = [cashSource(), cashSource({ entry_number: 'TESTE-2' })];
+  assert(!validReconciliationPreview(cashPreview({ row_count: 2 }), cashOptions({ rowCount: 2, sourceRows: sources })));
+});
+
+test('the cent sentinel keeps CENT priority even for internal cash and never requires a fabricated payment date', () => {
+  const cent = cashItem({ kind: 'CENT', source_amount_cents: 1 });
+  const options = cashOptions({ sourceRows: [cashSource({ amount_paid_cents: 1 })] });
+  assert(validReconciliationPreview(cashPreview({ reconciliation_items: [cent] }), options));
+  assert(!validReconciliationPreview(cashPreview(), options));
+  assert(!validReconciliationPreview(cashPreview({ reconciliation_items: [cent] }), cashOptions()));
+  const ordinary = cashSource({ paid_bank: 'Banco sintético', amount_paid_cents: 12345, paid_on: null });
+  assert(!validReconciliationPreview(cashPreview({ reconciliation_items: [] }), cashOptions({ sourceRows: [ordinary], resolutionChoices: {} })));
+});
+
+test('unknown cash titles remain blocked with empty dates and no invented title amount', () => {
+  const unknown = cashItem({ title_id: null, due_date: null, amount_cents: null, allowed_actions: [], selected_action: null,
+    requires_resolution: false, problem: 'Importe primeiro a previsão do título.' });
+  const options = cashOptions({ resolutionChoices: {} });
+  assert(validReconciliationPreview(cashPreview({ can_commit: false, reconciliation_items: [unknown] }), options));
+  assert(!validReconciliationPreview(cashPreview({ can_commit: true, reconciliation_items: [unknown] }), options));
+});

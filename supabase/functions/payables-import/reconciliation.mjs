@@ -1,3 +1,5 @@
+import { isInternalCashBank } from '../../../src/lib/payable-bank-rules.mjs';
+
 const UUID = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i;
 const ROW_KEY = /^row:([1-9]\d{0,3})$/;
 const ACTIONS = new Set(['WRITE_OFF', 'PAID', 'REOPEN']);
@@ -27,7 +29,12 @@ export function validResolutionChoices(value, rowCount = 5000) {
       && Number.isSafeInteger(choice.amount_paid_cents) && choice.amount_paid_cents > 0 && typeof choice.bank_account_id === 'string' && UUID.test(choice.bank_account_id);
   });
 }
-export function validReconciliationPreview(preview, { rowCount, mode, fullReport, sourceRows, resolutionChoices = {} } = {}) {
+export function validReconciliationPreview(preview, { rowCount, mode, fullReport, sourceRows, resolutionChoices = {}, bankRulesVersion } = {}) {
+  const internalCashAllowed = bankRulesVersion === '050' && mode === 'payments';
+  if (bankRulesVersion !== undefined && !internalCashAllowed) return false;
+  if (internalCashAllowed && (!Array.isArray(sourceRows) || sourceRows.length !== rowCount || sourceRows.some(row => !row
+    || !Number.isSafeInteger(row.amount_paid_cents) || row.amount_paid_cents <= 0 || !text(row.paid_bank, 300)
+    || (isInternalCashBank(row.paid_bank) ? row.paid_on !== null : !validReconciliationDate(row.paid_on))))) return false;
   if (!object(preview) || preview.reconciliation_version !== '043' || preview.row_count !== rowCount || preview.mode !== mode
     || !text(preview.financial_revision, 256) || preview.financial_revision !== preview.financial_revision.trim()
     || typeof preview.can_commit !== 'boolean' || !Array.isArray(preview.reconciliation_items) || preview.reconciliation_items.length > 15000
@@ -37,7 +44,7 @@ export function validReconciliationPreview(preview, { rowCount, mode, fullReport
   const keys = new Set();
   for (const item of preview.reconciliation_items) {
     if (!object(item) || !validResolutionKey(item.key, rowCount) || keys.has(item.key)
-      || !['CENT', 'MISSING', 'REAPPEARED'].includes(item.kind)
+      || !['CENT', 'MISSING', 'REAPPEARED', ...(internalCashAllowed ? ['INTERNAL_CASH'] : [])].includes(item.kind)
       || !(item.line === null || Number.isSafeInteger(item.line) && item.line >= 1 && item.line <= rowCount)
       || !(item.title_id === null || typeof item.title_id === 'string' && UUID.test(item.title_id))
       || !text(item.branch, 300) || !text(item.entry_number, 300) || typeof item.description !== 'string' || item.description.length > 1500
@@ -47,11 +54,11 @@ export function validReconciliationPreview(preview, { rowCount, mode, fullReport
       || item.allowed_actions.some(action => !ACTIONS.has(action))
       || !(item.selected_action === null || item.allowed_actions.includes(item.selected_action))
       || typeof item.requires_resolution !== 'boolean' || !(item.problem === null || typeof item.problem === 'string' && item.problem.length <= 2000)
-      || item.kind === 'CENT' && item.allowed_actions.some(action => action !== 'WRITE_OFF')) return false;
+      || ['CENT', 'INTERNAL_CASH'].includes(item.kind) && item.allowed_actions.some(action => action !== 'WRITE_OFF')) return false;
     if (preview.can_commit && item.requires_resolution && !item.selected_action) return false;
     if (item.selected_action !== (resolutionChoices[item.key]?.action ?? null)) return false;
     if (preview.can_commit && item.problem) return false;
-    if (item.kind === 'CENT') {
+    if (['CENT', 'INTERNAL_CASH'].includes(item.kind)) {
       if (item.line === null || item.key !== `row:${item.line}`) return false;
     } else if (item.title_id === null || item.key !== `title:${item.title_id}` || mode !== 'forecast'
       || item.kind === 'MISSING' && (!fullReport || item.line !== null)
@@ -59,12 +66,21 @@ export function validReconciliationPreview(preview, { rowCount, mode, fullReport
     if (Array.isArray(sourceRows) && item.line !== null) {
       const row = sourceRows[item.line - 1];
       if (!row || identity(item.branch) !== identity(row.branch) || identity(item.entry_number) !== identity(row.entry_number)
-        || item.kind === 'CENT' && (mode === 'payments' ? row.amount_paid_cents : row.amount_cents) !== 1) return false;
+        || item.kind === 'CENT' && (mode === 'payments' ? row.amount_paid_cents : row.amount_cents) !== 1
+        || item.kind === 'INTERNAL_CASH' && (!isInternalCashBank(row.paid_bank) || row.amount_paid_cents === 1
+          || item.source_amount_cents !== row.amount_paid_cents)) return false;
+      if (internalCashAllowed && ['CENT', 'INTERNAL_CASH'].includes(item.kind)
+        && (item.source_amount_cents !== row.amount_paid_cents || item.title_id !== null
+          && (item.requires_resolution !== true || item.allowed_actions.length !== 1
+            || preview.can_commit && (item.selected_action !== 'WRITE_OFF' || resolutionChoices[item.key]?.action !== 'WRITE_OFF')))) return false;
     }
     keys.add(item.key);
   }
-  if (Array.isArray(sourceRows) && sourceRows.some((row, index) => (mode === 'payments' ? row.amount_paid_cents : row.amount_cents) === 1
-    && !preview.reconciliation_items.some(item => item.key === `row:${index + 1}` && item.kind === 'CENT'))) return false;
+  if (Array.isArray(sourceRows) && sourceRows.some((row, index) => {
+    const cent = (mode === 'payments' ? row.amount_paid_cents : row.amount_cents) === 1;
+    const cash = internalCashAllowed && isInternalCashBank(row.paid_bank);
+    return (cent || cash) && !preview.reconciliation_items.some(item => item.key === `row:${index + 1}` && item.kind === (cent ? 'CENT' : 'INTERNAL_CASH'));
+  })) return false;
   if (preview.can_commit && Object.keys(resolutionChoices).some(key => !keys.has(key))) return false;
   return true;
 }

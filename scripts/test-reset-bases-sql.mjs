@@ -8,6 +8,7 @@ const scope = JSON.parse(await readFile(new URL('./lib/base-reset-scope.json', i
 const resetSql = await readFile(new URL('../supabase/admin/zerar-bases-teste.sql', import.meta.url), 'utf8');
 const restoreSql = await readFile(new URL('../supabase/admin/restaurar-bases-teste.sql', import.meta.url), 'utf8');
 const operation = 'preparacao-base-oficial-2026-10-22-v1';
+const paidBankAlias = { source_key: 'BANCO SINTETICO DE PREPARACAO', official_bank_name: 'Banco sintético de preparação' };
 const f = await createCostFixture();
 const { db, owner, actor, scalar, file, users, id } = f;
 const quote = text => '"' + text.replaceAll('"', '""') + '"';
@@ -53,10 +54,12 @@ const newSchemas = () => scalar("SELECT coalesce(jsonb_agg(nspname ORDER BY nspn
 let today, older, month, bank, cpImport, cpTitle, stayTitle, originalTriggers;
 
 async function seed() {
-  // The shared fixture bootstraps 001..034 and 039; load every remaining migration through 047.
+  // The shared fixture bootstraps 001..034 and 039; load remaining migrations through 047, then private bank-alias configuration.
   await owner();
   const names = (await readdir(new URL('../supabase/migrations/', import.meta.url))).filter(name => /^\d{3}_.*\.sql$/.test(name) && Number(name.slice(0, 3)) > 34 && Number(name.slice(0, 3)) <= 47 && !name.startsWith('039_')).sort();
   for (const name of names) await db.exec(await file(name));
+  await db.exec(await file('050_paid_bank_rules.sql'));
+  await db.query('INSERT INTO cf_private.payable_paid_bank_aliases(source_key,official_bank_name) VALUES($1,$2)', [paidBankAlias.source_key, paidBankAlias.official_bank_name]);
   ({ today, older, month } = (await db.query("SELECT d::text today,(d-90)::text older,date_trunc('month',d)::date::text AS \"month\" FROM(SELECT(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date d)s")).rows[0]);
   await db.query('INSERT INTO public.collection_agents(id,display_name) VALUES($1,$2)', [id(101), 'Responsável sintética de preparação']);
   await db.query('INSERT INTO public.collector_bindings(user_id,agent_id,updated_by) VALUES($1,$2,$3)', [users.collector.id, id(101), users.manager.id]);
@@ -128,6 +131,7 @@ async function seed() {
   assert(filled.length >= 30, `Expected broad operational fixture, found ${filled.length} tables`);
   assert(baseline['public.receivable_report_retirement_events'].some(row => row.event_sequence > 0));
   assert(baseline['cf_private.bank_support_bytes'][0].file_bytes.startsWith('\\x0001ff80'));
+  assert.deepEqual(baseline['cf_private.payable_paid_bank_aliases'], [paidBankAlias]);
   console.log('Synthetic fixture:', filled.length, 'populated target tables, all', scope.targets.length, 'targets installed.');
 }
 
@@ -226,7 +230,8 @@ try {
     });
     await test('restore recovers every original row including raw bytes, HR totals, ledger identity and exact trigger modes', async () => {
       const oldStates = await state(scope.revision_states); await runScript(restoreSql);
-      const restored = await state(scope.targets); for (const name of scope.targets) assert.deepEqual(restored[name], baseline[name], name);
+      const restoredNames = [...scope.targets, 'cf_private.payable_paid_bank_aliases'];
+      const restored = await state(restoredNames); for (const name of restoredNames) assert.deepEqual(restored[name], baseline[name], name);
       assert.deepEqual(await triggers(), originalTriggers);
       const states = await state(scope.revision_states); for (const name of scope.revision_states) assert(states[name][0].revision > oldStates[name][0].revision, name);
       assert((await registry()).restored_at);

@@ -720,3 +720,138 @@ test('immutable replay proof reads complete bounded pages and excludes individua
     assert(reads.every(call => call.init.headers.apikey === ANON && call.init.headers.Authorization === `Bearer ${TOKEN}`));
   }
 });
+
+const bankRuleCapabilities = { cheque_number: true, forecast_incremental: true, paid_import: true, import_reconciliation: true, reconciliation_version: '043', paid_bank_rules_version: '050', internal_cash_writeoff: true };
+const bankRuleRequest = extra => ({ mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, bank_rules_version: '050', reconciliation_version: '043', ...extra });
+const cashCsv = (date = '') => explicitPaidCsv(date).replace('Banco sintético', 'CAIXA INTERNO');
+const cashPreview = (changes = {}) => ({
+  mode: 'payments', previous_import_id: null, financial_revision: '17', row_count: 1,
+  new_payment_count: 0, matched_payment_count: 0, correction_count: 0, conflict_count: 0,
+  errors: [], unmapped_banks: [], bank_options: [], unclassified_plans: [], can_commit: true,
+  reconciliation_version: '043', full_report: false, resolution_errors: [], bank_accounts: [],
+  rows: [{ branch: 'Filial sintética', entry_number: 'PAGO-SINTETICO', source_status: 'PAGO', paid_on: null, amount_paid_cents: 10898, paid_bank: 'CAIXA INTERNO',
+    line: 1, title_id: IMPORT, outcome: 'WRITE_OFF', forecast_due_date: '2026-10-10', bank_mapping_key: '["FILIAL SINTÉTICA","CAIXA INTERNO"]', bank_account_id: null,
+    payment_ids: [], title_amount_cents: 12345, amount_changed: false, updated_amount_cents: 12345, problem: '' }],
+  reconciliation_items: [{ key: 'row:1', kind: 'INTERNAL_CASH', line: 1, title_id: IMPORT, branch: 'Filial sintética', entry_number: 'PAGO-SINTETICO',
+    description: 'Título sintético', due_date: '2026-10-10', amount_cents: 12345, source_amount_cents: 10898,
+    allowed_actions: ['WRITE_OFF'], selected_action: 'WRITE_OFF', requires_resolution: true, problem: null }],
+  ...changes,
+});
+const cashChoice = { 'row:1': { action: 'WRITE_OFF', reason: 'Baixa de Caixa Interno conferida individualmente.' } };
+
+test('bank rules require the exact paid-only date and reconciliation contracts before decoding', async () => {
+  for (const extra of [
+    { mode: 'payments', bank_rules_version: '050' },
+    { mode: 'payments', bank_rules_version: '050', payment_date_version: PAYMENT_DATE_VERSION },
+    { mode: 'payments', bank_rules_version: '050', reconciliation_version: '043' },
+    { mode: 'forecast', bank_rules_version: '050', reconciliation_version: '043', full_report: true },
+    bankRuleRequest({ bank_rules_version: '049' }), bankRuleRequest({ bank_rules_version: null }), bankRuleRequest({ bank_rules_version: true }),
+  ]) {
+    const app = setup(), response = await app.send(body('preview', extra));
+    assert.equal(response.status, 400); assert.equal(app.calls.length, 2); assert.equal(app.workbookCalls(), 0);
+  }
+});
+
+test('050 activation gates the new import without falling back to old preview or commit writers', async () => {
+  const data = bankRuleRequest({ file_base64: encode(cashCsv('30/10/2026')), resolution_choices: cashChoice });
+  for (const capabilities of [undefined, { ...bankRuleCapabilities, paid_bank_rules_version: '049' }, { ...bankRuleCapabilities, internal_cash_writeoff: false }]) {
+    const app = setup({ ...(capabilities ? { capabilities } : {}) }), response = await app.send(body('preview', data));
+    assert.equal(response.status, 409); const payload = await response.json();
+    assert.equal(payload.code, 'P0050'); assert.equal(payload.activation_required, true);
+    assert(!app.calls.some(call => /preview_payables_|commit_payables_/.test(call.path)));
+  }
+  const missing = setup({ capabilityError: { code: 'PGRST202', message: 'private SQL' }, capabilityStatus: 404 });
+  assert.equal((await (await missing.send(body('preview', data))).json()).code, 'P0050');
+  const oldRpc = setup({ capabilities: bankRuleCapabilities, rpcError: { code: 'PGRST202', message: 'private SQL' }, rpcStatus: 404 });
+  const response = await oldRpc.send(body('preview', data));
+  assert.equal(response.status, 409); assert.equal((await response.json()).code, 'P0050');
+  assert.equal(oldRpc.calls.filter(call => call.path.includes('/preview_')).length, 1);
+});
+
+test('cash source rows retain their raw bank and nominal amount but never become financial payments', async () => {
+  for (const date of ['', '30/10/2026']) {
+    const input = cashCsv(date), app = setup({ capabilities: bankRuleCapabilities, previewPayload: cashPreview() });
+    const preview = await app.send(body('preview', bankRuleRequest({ file_base64: encode(input), resolution_choices: cashChoice })));
+    assert.equal(preview.status, 200); const payload = await preview.json();
+    assert.equal(payload.bank_rules_version, '050'); assert.equal(payload.payment_date_version, PAYMENT_DATE_VERSION);
+    assert.equal(payload.rows[0].paid_on, null); assert.equal(payload.rows[0].amount_paid_cents, 10898); assert.equal(payload.rows[0].paid_bank, 'CAIXA INTERNO');
+    assert.equal(payload.rows[0].bank_account_id, null); assert.deepEqual(payload.rows[0].payment_ids, []);
+    assert.equal(payload.file_sha256, createHash('sha256').update(input).digest('hex'));
+    const call = app.calls.at(-1); assert.equal(call.data.p_rows[0].paid_on, null); assert.equal(call.data.p_rows[0].amount_paid_cents, 10898);
+    assert.deepEqual(call.data.p_resolution_choices, cashChoice);
+    const request = body('commit', bankRuleRequest({ file_base64: encode(input), resolution_choices: cashChoice, request_id: SESSION, previous_financial_revision: '17' }));
+    const committed = await app.send(request);
+    assert.equal(committed.status, 200); assert.equal((await committed.json()).bank_rules_version, '050');
+    assert.equal(app.calls.at(-1).data.p_file_base64, request.file_base64); assert.equal(app.calls.at(-1).data.p_rows[0].paid_on, null);
+  }
+});
+
+test('cash administrative previews cannot invent a payment, bank, date or source value', async () => {
+  const valid = cashPreview();
+  for (const change of [
+    { outcome: 'NEW_PAYMENT' }, { outcome: 'MATCHED' }, { outcome: 'CORRECTION' }, { paid_on: '2026-10-27' },
+    { bank_account_id: BANK }, { amount_paid_cents: 1 }, { payment_ids: [SESSION] },
+  ]) {
+    const payload = cashPreview({ rows: [{ ...valid.rows[0], ...change }] });
+    const app = setup({ capabilities: bankRuleCapabilities, previewPayload: payload });
+    const response = await app.send(body('preview', bankRuleRequest({ file_base64: encode(cashCsv()), resolution_choices: cashChoice })));
+    assert.equal(response.status, 503, JSON.stringify(change));
+    assert(!app.calls.some(call => call.path.includes('/commit_')));
+  }
+  const regularSource = explicitPaidCsv('20/10/2026', '17/10/2026');
+  const regular = setup({ capabilities: bankRuleCapabilities, previewPayload: cashPreview() });
+  assert.equal((await regular.send(body('preview', bankRuleRequest({ file_base64: encode(regularSource), resolution_choices: cashChoice })))).status, 503);
+});
+
+test('each cash row needs its own source-matched reconciliation item and individual confirmation', async () => {
+  const valid = cashPreview();
+  for (const changes of [
+    { reconciliation_items: [] },
+    { reconciliation_items: [{ ...valid.reconciliation_items[0], kind: 'CENT' }] },
+    { reconciliation_items: [{ ...valid.reconciliation_items[0], source_amount_cents: 1 }] },
+    { reconciliation_items: [{ ...valid.reconciliation_items[0], allowed_actions: ['PAID'], selected_action: 'PAID' }] },
+    { reconciliation_items: [{ ...valid.reconciliation_items[0], requires_resolution: false, selected_action: null }] },
+  ]) {
+    const app = setup({ capabilities: bankRuleCapabilities, previewPayload: cashPreview(changes) });
+    const response = await app.send(body('preview', bankRuleRequest({ file_base64: encode(cashCsv()), resolution_choices: cashChoice })));
+    assert.equal(response.status, 503);
+  }
+  const pending = setup({ capabilities: bankRuleCapabilities, previewPayload: cashPreview({ can_commit: false,
+    reconciliation_items: [{ ...valid.reconciliation_items[0], selected_action: null, problem: 'Confirme esta baixa individualmente.' }],
+    rows: [{ ...valid.rows[0], outcome: 'WRITE_OFF_PENDING', problem: 'Confirme esta baixa individualmente.' }], resolution_errors: [{ line: 1, problem: 'Confirmação pendente.' }] }) });
+  const response = await pending.send(body('preview', bankRuleRequest({ file_base64: encode(cashCsv()) })));
+  assert.equal(response.status, 200); assert.equal((await response.json()).preview.can_commit, false);
+});
+
+test('legacy cash confirmations preserve their historical canonical dates without opting into bank rules', async () => {
+  const input = cashCsv('20/10/2026').replace('30/11/2026 23:59', '17/10/2026');
+  for (const version of [undefined, PAYMENT_DATE_VERSION]) {
+    const app = setup(), data = body('commit', { mode: 'payments', file_base64: encode(input), ...(version ? { payment_date_version: version } : {}) });
+    const response = await app.send(data);
+    assert.equal(response.status, 200); assert.equal(Object.hasOwn(await response.json(), 'bank_rules_version'), false);
+    assert.equal(app.calls.at(-1).data.p_rows[0].paid_on, version ? '2026-10-20' : '2026-10-17');
+    assert.equal(app.calls.at(-1).data.p_rows[0].paid_bank, 'CAIXA INTERNO');
+  }
+  const incompatible = setup({ previewPayload: cashPreview({ rows: [{ ...cashPreview().rows[0], paid_on: '2026-10-20' }] }) });
+  const response = await incompatible.send(body('preview', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, reconciliation_version: '043', file_base64: encode(input), resolution_choices: cashChoice }));
+  assert.equal(response.status, 503);
+});
+
+test('new immutable replay proof excludes cash administrative rows while legacy proof still requires recorded cash payments', async () => {
+  const source = 'Lançamento;Filial;Emissão: valor do lançamento;Plano cc - Conta: nome;Vencimento: data;Quitação: data do pagamento;Situação\r\n'
+    + 'CASH-SYN;Filial sintética;108,98;CAIXA INTERNO;17/10/2026;20/10/2026;PAGO\r\n'
+    + 'PAY-SYN;Filial sintética;100,00;Banco sintético;17/10/2026;20/10/2026;PAGO\r\n'
+    + 'CENT-SYN;Filial sintética;0,01;Banco sintético;17/10/2026;20/10/2026;PAGO\r\n';
+  const recorded = entry_number => ({ source_row: { branch: 'Filial sintética', entry_number, paid_on: '2026-10-20' } });
+  const result = { import_id: IMPORT, row_count: 3, mode: 'payments', settled_count: 0, idempotent: true, reconciliation_version: '043', request_id: SESSION };
+  const choices = { 'row:1': { action: 'WRITE_OFF', reason: 'Baixa de Caixa Interno confirmada.' }, 'row:3': { action: 'WRITE_OFF', reason: 'Baixa de centavo confirmada.' } };
+  const modern = setup({ capabilities: bankRuleCapabilities, commitPayload: result, historyRows: [recorded('PAY-SYN')] });
+  const response = await modern.send(body('commit', bankRuleRequest({ file_base64: encode(source), request_id: SESSION, previous_financial_revision: '17', confirm_corrections: true, resolution_choices: choices })));
+  assert.equal(response.status, 200); assert.equal((await response.json()).bank_rules_version, '050');
+  for (const [historyRows, expected] of [[[recorded('CASH-SYN'), recorded('PAY-SYN')], 200], [[recorded('PAY-SYN')], 503]]) {
+    const legacy = setup({ commitPayload: result, historyRows });
+    const oldResponse = await legacy.send(body('commit', { mode: 'payments', payment_date_version: PAYMENT_DATE_VERSION, reconciliation_version: '043', request_id: SESSION,
+      previous_financial_revision: '17', file_base64: encode(source), confirm_corrections: true, resolution_choices: { 'row:3': choices['row:3'] } }));
+    assert.equal(oldResponse.status, expected);
+  }
+});

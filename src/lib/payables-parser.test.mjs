@@ -420,3 +420,51 @@ test('repetição do contrato antigo conserva Vencimento mesmo com uma coluna ex
   assert.deepEqual(duplicateIgnored.errors, []);
   assert.equal(duplicateIgnored.rows[0].paid_on, '2026-10-17');
 });
+
+test('Caixa Interno exige opção explícita e conserva banco e valor sem inventar pagamento', () => {
+  const sourceHeader = [...paidHeader, 'Quitação: data do pagamento'];
+  for (const amount of ['0,01', '125,90']) {
+    const sourceRow = ['CAIXA-01', '7', amount, '  caixa   interno  ', '01/10/2026', '26/10/2026'];
+    const result = validatePayablePaidRows([sourceHeader, sourceRow], { today: '2026-10-27', allowInternalCashWriteoff: true });
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.rows[0].paid_on, null);
+    assert.equal(result.rows[0].amount_paid_cents, parseMoneyCents(amount));
+    assert.equal(result.rows[0].paid_bank, 'caixa interno');
+    assert.equal(sourceRow[3], '  caixa   interno  ');
+    const legacy = validatePayablePaidRows([sourceHeader, sourceRow], { today: '2026-10-27' });
+    assert.equal(legacy.rows[0].paid_on, '2026-10-26');
+    const truthy = validatePayablePaidRows([sourceHeader, sourceRow], { today: '2026-10-27', allowInternalCashWriteoff: 'true' });
+    assert.equal(truthy.rows[0].paid_on, '2026-10-26');
+  }
+});
+
+test('Caixa Interno dispensa o valor da data em qualquer ordem de cabeçalhos, preservando a conferência dos demais campos', () => {
+  const sourceHeader = ['Lançamento', 'Filial', 'Valor', 'Quitação: data do pagamento', 'Plano cc - Conta: nome', 'Vencimento: data'];
+  for (const date of ['', null, '31/02/2026', '30/10/2026', new Date('2043-01-23T00:00:00Z')]) {
+    const result = validatePayablePaidRows([sourceHeader, ['1', '7', '125,90', date, 'CAIXA INTERNO', '23/01/2043']], { today: '2026-10-27', allowInternalCashWriteoff: true });
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.rows[0].paid_on, null);
+  }
+  const invalidAmount = validatePayablePaidRows([sourceHeader, ['1', '7', '0,00', '', 'CAIXA INTERNO', '23/01/2043']], { allowInternalCashWriteoff: true });
+  assert.deepEqual(invalidAmount.rows, []);
+  assert.equal(invalidAmount.errors[0].problem, 'O valor pago deve ser maior que zero.');
+  const missingEntry = validatePayablePaidRows([sourceHeader, ['', '7', '125,90', '', 'CAIXA INTERNO', '23/01/2043']], { allowInternalCashWriteoff: true });
+  assert.deepEqual(missingEntry.rows, []);
+  assert.ok(missingEntry.errors.some(error => error.column === 'Nº lançamento'));
+  const missingDateHeader = validatePayablePaidRows([paidHeader.slice(0, 4), ['1', '7', '125,90', 'CAIXA INTERNO']], { allowInternalCashWriteoff: true });
+  assert.deepEqual(missingDateHeader.rows, []);
+  assert.ok(missingDateHeader.errors.some(error => error.line === 1 && error.column === 'Vencimento'));
+});
+
+test('a dispensa administrativa não relaxa fórmulas nem a data efetiva de bancos reais ou nomes parecidos', () => {
+  const sourceHeader = [...paidHeader, 'Quitação: data do pagamento'];
+  const formula = validatePayablePaidRows([sourceHeader, ['1', '7', '125,90', 'CAIXA INTERNO', '23/01/2043', { formula: '1+1', result: 2 }]], { allowInternalCashWriteoff: true });
+  assert.deepEqual(formula.rows, []);
+  assert.ok(formula.errors.some(error => /Fórmula/.test(error.problem)));
+  for (const bank of ['CAIXA INTERNO 1', 'BANCO SINTÉTICO H 000008-X']) {
+    const invalid = validatePayablePaidRows([sourceHeader, ['1', '7', '125,90', bank, '26/10/2026', '']], { today: '2026-10-27', allowInternalCashWriteoff: true });
+    assert.deepEqual(invalid.rows, []);
+    const future = validatePayablePaidRows([sourceHeader, ['1', '7', '125,90', bank, '26/10/2026', '30/10/2026']], { today: '2026-10-27', allowInternalCashWriteoff: true });
+    assert.equal(future.errors[0].problem, 'A data do pagamento é futura.');
+  }
+});

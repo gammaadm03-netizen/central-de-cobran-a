@@ -2,15 +2,17 @@ import { expect, test, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import ExcelJS from 'exceljs';
 import { isChequeNumberHeader, parseCsv, readPayableChequeCell, validatePayablePaidRows } from '../src/lib/payables-parser.mjs';
+import { isInternalCashBank, officialPaidBankName } from '../src/lib/payable-bank-rules.mjs';
 
 const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const now = new Date('2026-10-18T15:00:00Z');
 const paymentDateVersion = '2026-10-27.1';
+const bankRulesVersion = '050';
 const uuid = (value: number) => `76000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const bankLabels = ['BRADESCO ECOPLAST', 'BRADESCO LIMPE FACIL', 'BRADESCO GAMMA IND', 'BRADESCO F2G', 'BRADESCO FAST CLEAN', 'BRADESCO EASY CLEAN', 'BANCO DO BRASIL FAST CLEAN', 'BANCO DO BRASIL EASY CLEAN', 'BANCO DO BRASIL ECOPLAST', 'BANCO CORA LIMPE FACIL', 'BANCO CORA MY CLEAN', 'BANCO CORA ECO PLAST', 'CAIXA ECOPLAST', 'CAIXA LIMPE FACIL', 'CAIXA GAMMA', 'CAIXA FAST CLEAN', 'CAIXA EASY CLEAN'];
 const headers = ['Filial', 'Lançamento', 'Situação', 'Vencimento: data', 'Emissão: valor do lançamento', 'Plano cc - Conta: nome', 'Cheque: número', 'Histórico', 'Plano cp - Conta: nome', 'Emissão: data'];
 const csv = `${headers.join(';')}\r\n3;14;PAGO;17/10/2026 23:59:59;200,00;BANCO ERP PAGO;000123;Fornecedor pago sintético;ENERGIA;01/10/2026 10:15:00`;
-interface Options { director?: boolean; knownBank?: boolean; newPlan?: boolean; conflict?: boolean; correction?: boolean; stale?: boolean; uncertain?: boolean; commitBeforeError?: boolean; badHash?: boolean; financialRevision?: unknown; unknownCent?: boolean; staleChoice?: boolean; oldProtocol?: boolean; holdPreview?: () => Promise<void>; serverToday?: string; missingPaymentDateVersion?: boolean; dateReviewRequired?: boolean }
+interface Options { director?: boolean; knownBank?: boolean; newPlan?: boolean; conflict?: boolean; correction?: boolean; stale?: boolean; uncertain?: boolean; commitBeforeError?: boolean; badHash?: boolean; financialRevision?: unknown; unknownCent?: boolean; staleChoice?: boolean; oldProtocol?: boolean; holdPreview?: () => Promise<void>; serverToday?: string; missingPaymentDateVersion?: boolean; dateReviewRequired?: boolean; missingBankRulesVersion?: boolean; bankRulesUnavailable?: boolean; conflictingBankIds?: boolean; changeFreezeRevision?: boolean }
 
 async function parseOriginal(body: any, today = '2026-10-18') {
   const bytes = Buffer.from(body.file_base64, 'base64'); let matrix: unknown[][];
@@ -21,7 +23,7 @@ async function parseOriginal(body: any, today = '2026-10-18') {
     sheet.getRow(1).eachCell((cell, column) => { if (isChequeNumberHeader(cell.value)) chequeColumns.push(column); });
     matrix = []; for (let index=1;index<=sheet.rowCount;index++) { const row=sheet.getRow(index),values=(row.values as unknown[]).slice(1); if (index > 1) for (const column of chequeColumns) values[column - 1] = readPayableChequeCell(row.getCell(column).value, row.getCell(column).numFmt); matrix.push(values); }
   }
-  const parsed = validatePayablePaidRows(matrix, { excel1904: false, today });
+  const parsed = validatePayablePaidRows(matrix, { excel1904: false, today, allowInternalCashWriteoff: body.bank_rules_version === bankRulesVersion });
   return { ...parsed, hash: createHash('sha256').update(bytes).digest('hex') };
 }
 async function setup(page: Page, options: Options = {}) {
@@ -53,42 +55,44 @@ async function setup(page: Page, options: Options = {}) {
     if (['payable_review_titles', 'payable_financial_titles'].includes(name)) return reply({ code: 'PGRST205' }, 404);
     if (name === 'get_payable_payment_accounts') return reply(accounts);
     if (name === 'payables-import') {
-      expect(body.mode).toBe('payments'); expect(body.payment_date_version).toBe(paymentDateVersion);
+      expect(body.mode).toBe('payments'); expect(body.payment_date_version).toBe(paymentDateVersion); expect(body.bank_rules_version).toBe(bankRulesVersion);
+      if (options.bankRulesUnavailable) return reply({code:'P0050',activation_required:true,error:'private SQL query secret'},409);
       const parsed = await parseOriginal(body,options.serverToday); if (parsed.errors.length) return reply({ code: parsed.errors.some(error=>error.problem==='A data do pagamento é futura.')?'SOURCE_VALIDATION_FAILED':'INVALID_FILE', errors: parsed.errors }, 422);
       expect(body.reconciliation_version).toBe('043'); expect(body.resolution_choices).toBeDefined();
       const rows: any[] = [], banks: any[] = [], plans: any[] = [], errors: any[] = [], items: any[] = [], resolutionErrors: any[] = [];
       let newCount = 0, matched = 0, corrections = 0, conflicts = 0, writeoffs = 0;
       for (const [index, row] of parsed.rows.entries()) {
-        const key = JSON.stringify(['source-bank', row.branch, row.paid_bank]), cent = row.amount_paid_cents === 1;
+        const key = JSON.stringify(['source-bank', row.branch, row.paid_bank]), cent = row.amount_paid_cents === 1, internalCash = isInternalCashBank(row.paid_bank), administrative = cent || internalCash;
+        const approvedName=officialPaidBankName(row.paid_bank,approvedBankAliases.map(([source,official_name])=>({source,official_name}))),officialAccount=accounts.find(account=>account.account_type==='BANK'&&account.display_name===approvedName);
         const resolutionKey = `row:${index + 1}`, selected = body.resolution_choices?.[resolutionKey];
-        const bankId = cent ? null : body.bank_mappings?.[key] ?? storedBanks[key] ?? (options.knownBank ? accounts[0].id : null);
-        const classified = cent || !options.newPlan || !!body.mappings?.[row.plan] || !!storedPlans[row.plan];
-        if (!cent && !bankId) banks.push({ key, branch: row.branch, paid_bank: row.paid_bank, count: 1 });
+        const bankId = administrative ? null : options.conflictingBankIds&&index>0?accounts[1].id:officialAccount?.id ?? body.bank_mappings?.[key] ?? storedBanks[key] ?? (options.knownBank ? accounts[0].id : null);
+        const classified = administrative || !options.newPlan || !!body.mappings?.[row.plan] || !!storedPlans[row.plan];
+        if (!administrative && !bankId) banks.push({ key, branch: row.branch, paid_bank: row.paid_bank, count: 1 });
         if (!classified) { plans.push({ plan: row.plan, count: 1, total_cents: row.amount_paid_cents }); errors.push({ line: index + 2, column: 'Plano de Contas', problem: 'Plano novo sem Centro de Custo Macro.', correction: 'Escolha o Macro do plano e reanalise este arquivo.' }); }
         let outcome = !bankId ? 'UNMAPPED_BANK' : !classified || options.conflict ? 'CONFLICT' : committed ? 'MATCHED' : options.correction ? 'CORRECTION' : 'NEW_PAYMENT';
         let problem = options.conflict ? 'Pagamento manual divergente.' : '';
-        if (!cent && options.conflict) errors.push({ line: index + 2, column: 'Pagamento', problem: 'Este título possui pagamento manual divergente.', correction: 'Confira os pagamentos manuais antes de importar.' });
-        if (cent) {
+        if (!administrative && options.conflict) errors.push({ line: index + 2, column: 'Pagamento', problem: 'Este título possui pagamento manual divergente.', correction: 'Confira os pagamentos manuais antes de importar.' });
+        if (administrative) {
           const unknown = !!options.unknownCent;
-          problem = unknown ? 'Título de R$ 0,01 não encontrado. Importe primeiro a previsão para preservar o vencimento e o valor original.' : selected?.action === 'WRITE_OFF' ? '' : 'Confirme individualmente a baixa sem pagamento deste título de R$ 0,01.';
+          problem = unknown ? 'Título de R$ 0,01 não encontrado. Importe primeiro a previsão para preservar o vencimento e o valor original.' : selected?.action === 'WRITE_OFF' ? '' : cent?'Confirme individualmente a baixa sem pagamento deste título de R$ 0,01.':'Confirme individualmente a baixa sem pagamento deste lançamento de Caixa Interno.';
           outcome = unknown ? 'UNKNOWN_TITLE' : problem ? 'WRITE_OFF_PENDING' : 'WRITE_OFF'; if (!unknown) writeoffs++;
-          items.push({ key: resolutionKey, kind: 'CENT', line: index + 1, title_id: unknown ? null : uuid(10 + index), branch: row.branch, entry_number: row.entry_number,
-            description: row.description ?? '', due_date: unknown ? null : '2026-10-25', amount_cents: unknown ? null : 20000, source_amount_cents: 1,
+          items.push({ key: resolutionKey, kind: cent?'CENT':'INTERNAL_CASH', line: index + 1, title_id: unknown ? null : uuid(10 + index), branch: row.branch, entry_number: row.entry_number,
+            description: row.description ?? '', due_date: unknown ? null : '2026-10-25', amount_cents: unknown ? null : 20000, source_amount_cents: row.amount_paid_cents,
             allowed_actions: unknown ? [] : ['WRITE_OFF'], selected_action: options.staleChoice ? null : selected?.action ?? null,
             requires_resolution: !unknown, problem: problem || null, already_written_off: committed && !unknown });
           if (problem) { const error = { line: index + 2, column: 'Baixa sem pagamento', problem, correction: unknown ? 'Importe primeiro a previsão original.' : 'Confirme esta baixa individual e reanalise o arquivo.' }; errors.push(error); resolutionErrors.push(error); }
         }
         if (outcome === 'NEW_PAYMENT') newCount++; if (outcome === 'MATCHED') matched++; if (outcome === 'CORRECTION') corrections++; if (outcome === 'CONFLICT') conflicts++;
-        rows.push({ ...row, line: index + 2, bank_mapping_key: key, bank_account_id: bankId, title_id: cent && options.unknownCent ? null : uuid(10 + index), title_amount_cents: 20000,
-          forecast_due_date: cent && options.unknownCent ? null : '2026-10-25', outcome, payment_ids: committed && !cent ? [uuid(40)] : [], problem,
+        rows.push({ ...row, line: index + 1, bank_mapping_key: key, bank_account_id: bankId, title_id: administrative && options.unknownCent ? null : uuid(10 + index), title_amount_cents: 20000,
+          forecast_due_date: administrative && options.unknownCent ? null : '2026-10-25', outcome, payment_ids: committed && !administrative ? [uuid(40)] : [], problem,
           target_macro: body.mappings?.[row.plan] ?? storedPlans[row.plan] ?? 'FIXO' });
       }
       const preview = { mode: 'payments', reconciliation_version: options.oldProtocol ? '021' : '043', full_report: false, reconciliation_items: items, resolution_errors: resolutionErrors,
         writeoff_count: writeoffs, new_writeoff_count: committed ? 0 : writeoffs, matched_writeoff_count: committed ? writeoffs : 0,
-        financial_revision: 'financialRevision' in options ? options.financialRevision : committed ? '1:1' : '0:0', previous_import_id: committed ? uuid(30) : uuid(20),
+        financial_revision: 'financialRevision' in options ? options.financialRevision : options.changeFreezeRevision&&previews.length>0?'changed-during-bank-freeze':committed ? '1:1' : '0:0', previous_import_id: committed ? uuid(30) : uuid(20),
         row_count: rows.length, new_payment_count: newCount, matched_payment_count: matched, correction_count: corrections, conflict_count: conflicts + resolutionErrors.length,
         errors, unmapped_banks: banks, bank_accounts: accounts, bank_options: accounts, unclassified_plans: plans, macros: ['FIXO', 'VARIÁVEL'], can_commit: !errors.length && !banks.length && !conflicts };
-      if (body.action === 'preview') { previews.push(body); await options.holdPreview?.(); return reply({ rows, preview, file_sha256: options.badHash ? 'a'.repeat(64) : parsed.hash, ...(options.missingPaymentDateVersion?{}:{payment_date_version:paymentDateVersion}) }); }
+      if (body.action === 'preview') { previews.push(body); await options.holdPreview?.(); return reply({ rows, preview, file_sha256: options.badHash ? 'a'.repeat(64) : parsed.hash, ...(options.missingPaymentDateVersion?{}:{payment_date_version:paymentDateVersion}),...(options.missingBankRulesVersion?{}:{bank_rules_version:bankRulesVersion}) }); }
       commits.push(body); expect(body.request_id).toMatch(/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i);
       const saved = paidRequests.get(body.request_id);
       if (saved) { expect(body).toEqual(saved.body); return reply({ ...saved.result, idempotent: true }); }
@@ -96,7 +100,7 @@ async function setup(page: Page, options: Options = {}) {
       if (options.dateReviewRequired) return reply({ code: 'PAYMENT_DATE_REVIEW_REQUIRED', message: 'private SQL query secret' }, 409);
       if (!preview.can_commit || !body.complete || (corrections && !body.confirm_corrections)) return reply({ code: '22023', message: 'private SQL query secret' }, 400);
       const existed = committed;
-      const result = { import_id: uuid(30), request_id: body.request_id, reconciliation_version: '043', payment_date_version: paymentDateVersion, reconciled_at: now.toISOString(), row_count: rows.length,
+      const result = { import_id: uuid(30), request_id: body.request_id, reconciliation_version: '043', payment_date_version: paymentDateVersion, bank_rules_version: bankRulesVersion, reconciled_at: now.toISOString(), row_count: rows.length,
         new_payment_count: existed ? 0 : newCount, matched_payment_count: existed ? rows.length - writeoffs : matched, correction_count: existed ? 0 : corrections,
         reviewed_count: rows.length - writeoffs, writeoff_count: writeoffs, idempotent: existed };
       if (!options.uncertain || options.commitBeforeError || existed) {
@@ -130,8 +134,8 @@ test('unknown bank and new plan require explicit official mappings and a new ser
   const { previews, commits, accounts } = await setup(page, { newPlan: true }); await selectCsv(page); await analyze(page);
   await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeDisabled(); await expect(page.getByLabel('Conta oficial para banco 1', { exact: true }).locator('option')).toHaveCount(18); await expect(page.getByLabel('Macro para plano pago 1', { exact: true })).toHaveValue('');
   await page.getByLabel('Conta oficial para banco 1', { exact: true }).selectOption(accounts[10].id); await page.getByLabel('Macro para plano pago 1', { exact: true }).selectOption('VARIÁVEL'); await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeDisabled(); await analyze(page);
-  await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeEnabled(); expect(previews[1].bank_mappings).toEqual({ [JSON.stringify(['source-bank', '3', 'BANCO ERP PAGO'])]: accounts[10].id }); expect(previews[1].mappings).toEqual({ ENERGIA: 'VARIÁVEL' });
-  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true }).click(); await expect(panel(page).getByRole('status')).toContainText('Importação concluída'); expect(commits[0].bank_mappings).toEqual(previews[1].bank_mappings); expect(commits[0].mappings).toEqual(previews[1].mappings);
+  await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeEnabled(); expect(previews.at(-1).bank_mappings).toEqual({ [JSON.stringify(['source-bank', '3', 'BANCO ERP PAGO'])]: accounts[10].id }); expect(previews.at(-1).mappings).toEqual({ ENERGIA: 'VARIÁVEL' });
+  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true }).click(); await expect(panel(page).getByRole('status')).toContainText('Importação concluída'); expect(commits[0].bank_mappings).toEqual(previews.at(-1).bank_mappings); expect(commits[0].mappings).toEqual(previews.at(-1).mappings);
 });
 
 test('conflicting manual payments block automatic import with line and correction guidance', async ({ page }) => {
@@ -156,13 +160,13 @@ test('replacing the selected file invalidates the old preview and requires a fre
 
 test('a stale import preserves the file and requires reanalysis instead of repeating a write', async ({ page }) => {
   const options: Options = { knownBank: true, stale: true }; const { commits, previews } = await setup(page, options); await selectCsv(page); await analyze(page); page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true }).click(); await expect(panel(page).getByRole('alert')).toContainText('mudaram desde a análise'); await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeDisabled();
-  options.stale = false; await analyze(page); expect(previews[1].file_base64).toBe(previews[0].file_base64); page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true }).click(); await expect(panel(page).getByRole('status')).toContainText('Importação concluída'); expect(commits).toHaveLength(2); await expect(page.getByText('private SQL query secret')).toHaveCount(0);
+  options.stale = false; await analyze(page); expect(previews.at(-1).file_base64).toBe(previews[0].file_base64); page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true }).click(); await expect(panel(page).getByRole('status')).toContainText('Importação concluída'); expect(commits).toHaveLength(2); await expect(page.getByText('private SQL query secret')).toHaveCount(0);
 });
 
 test('an uncertain committed result freezes the file and safely recognizes it on retry without duplicating payments', async ({ page }) => {
   const options: Options = { knownBank: true, uncertain: true, commitBeforeError: true }; const { commits, ledgerCount } = await setup(page, options); await selectCsv(page); await analyze(page); page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true }).click();
   await expect(panel(page).getByRole('alert')).toContainText('Não foi possível confirmar o resultado'); await expect(page.getByLabel('Relatório de títulos pagos', { exact: true })).toBeDisabled(); await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Reanalisar mesmo arquivo', exact: true })).toBeDisabled(); await page.getByRole('button', { name: 'Repetir confirmação pendente', exact: true }).click(); await expect(panel(page).getByRole('status')).toContainText('sem duplicar pagamentos'); expect(commits[0]).toEqual(commits[1]); expect(commits[0].payment_date_version).toBe(paymentDateVersion); expect(commits[0].file_base64).toBe(commits[1].file_base64); expect(ledgerCount()).toBe(1); await expect(page.getByLabel('Relatório de títulos pagos', { exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Reanalisar mesmo arquivo', exact: true })).toBeDisabled(); await page.getByRole('button', { name: 'Repetir confirmação pendente', exact: true }).click(); await expect(panel(page).getByRole('status')).toContainText('sem duplicar pagamentos'); expect(commits[0]).toEqual(commits[1]); expect(commits[0].payment_date_version).toBe(paymentDateVersion);expect(commits[0].bank_rules_version).toBe(bankRulesVersion); expect(commits[0].file_base64).toBe(commits[1].file_base64); expect(ledgerCount()).toBe(1); await expect(page.getByLabel('Relatório de títulos pagos', { exact: true })).toBeEnabled();
 });
 
 test('a mismatched server file hash cannot authorize an import', async ({ page }) => {
@@ -204,22 +208,22 @@ test('a paid cent requires its own confirmation and another analysis before the 
   await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeDisabled();
   await centCheckbox(page).check(); await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeDisabled();
   await analyze(page); await expect(centCheckbox(page)).toBeChecked(); await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeEnabled();
-  expect(previews[1].resolution_choices).toMatchObject({ 'row:1': { action: 'WRITE_OFF' } });
+  expect(previews.at(-1).resolution_choices).toMatchObject({ 'row:1': { action: 'WRITE_OFF' } });
   page.once('dialog', dialog => { expect(dialog.message()).toContain('Novos pagamentos: 0'); expect(dialog.message()).toContain('Baixas sem pagamento confirmadas: 1'); return dialog.accept(); });
   await page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true }).click();
   await expect(panel(page).getByRole('status')).toContainText('0 conciliado(s) e 1 baixa(s) sem pagamento');
-  expect(commits).toHaveLength(1); expect(commits[0].resolution_choices).toEqual(previews[1].resolution_choices); expect(ledgerCount()).toBe(0); expect(writeoffLedgerCount()).toBe(1);
+  expect(commits).toHaveLength(1); expect(commits[0].resolution_choices).toEqual(previews.at(-1).resolution_choices); expect(ledgerCount()).toBe(0); expect(writeoffLedgerCount()).toBe(1);
 });
 
 test('two cent titles each require a separate confirmation and no partial file can be imported', async ({ page }) => {
   const report = centCsv + '\r\n' + centCsv.split('\r\n')[1].replace(';14;', ';15;');
   const { previews, commits, ledgerCount, writeoffLedgerCount } = await setup(page); await selectCsv(page, report); await analyze(page);
   await centCheckbox(page).check(); await analyze(page);
-  expect(previews[1].resolution_choices).toHaveProperty('row:1'); expect(previews[1].resolution_choices).not.toHaveProperty('row:2');
+  expect(previews.at(-1).resolution_choices).toHaveProperty('row:1'); expect(previews.at(-1).resolution_choices).not.toHaveProperty('row:2');
   await expect(centCheckbox(page, '15')).not.toBeChecked(); await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeDisabled();
   expect(commits).toHaveLength(0); expect(ledgerCount()).toBe(0); expect(writeoffLedgerCount()).toBe(0);
   await centCheckbox(page, '15').check(); await analyze(page); await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeEnabled();
-  expect(Object.keys(previews[2].resolution_choices)).toEqual(['row:1', 'row:2']);
+  expect(Object.keys(previews.at(-1).resolution_choices)).toEqual(['row:1', 'row:2']);
   page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true }).click();
   await expect(panel(page).getByRole('status')).toContainText('2 baixa(s) sem pagamento'); expect(commits).toHaveLength(1); expect(ledgerCount()).toBe(0); expect(writeoffLedgerCount()).toBe(2);
 });
@@ -250,12 +254,12 @@ test('an uncertain mixed import freezes all choices and retries the exact protoc
   await expect(page.getByRole('button', { name: 'Reanalisar mesmo arquivo', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Repetir confirmação pendente', exact: true }).click();
   await expect(panel(page).getByRole('status').filter({ hasText: 'sem duplicar pagamentos ou baixas' })).toBeVisible(); expect(commits).toHaveLength(2); expect(commits[1]).toEqual(commits[0]);
-  expect(previews).toHaveLength(2); expect(ledgerCount()).toBe(1); expect(writeoffLedgerCount()).toBe(1);
+  expect(previews.length).toBeGreaterThanOrEqual(2);expect(commits[0].resolution_choices).toEqual(previews.at(-1).resolution_choices); expect(ledgerCount()).toBe(1); expect(writeoffLedgerCount()).toBe(1);
 });
 
 test('a service response that loses an explicit cent choice cannot authorize confirmation', async ({ page }) => {
   const { commits, previews } = await setup(page, { staleChoice: true }); await selectCsv(page, centCsv); await analyze(page);
-  await centCheckbox(page).check(); await analyze(page); expect(previews[1].resolution_choices).toHaveProperty('row:1');
+  await centCheckbox(page).check(); await analyze(page); expect(previews.at(-1).resolution_choices).toHaveProperty('row:1');
   await expect(panel(page).getByRole('alert').first()).toContainText('Não foi possível concluir a análise');
   await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeDisabled(); expect(commits).toHaveLength(0);
 });
@@ -281,9 +285,9 @@ test('explicit Quitação date overrides a distant Vencimento while preserving t
   const {previews,commits}=await setup(page,{knownBank:true});const original=await selectExplicitPaidDate(page,new Date('2026-10-17T23:59:59Z'));
   const preview=page.getByRole('table',{name:/Prévia dos pagamentos/});await expect(preview.locator('tbody tr')).toHaveCount(1);
   await expect(preview.getByRole('cell',{name:'17/10/2026',exact:true})).toBeVisible();await expect(preview.getByRole('cell',{name:'25/10/2026',exact:true})).toBeVisible();await expect(preview).not.toContainText('30/06/2043');
-  expect(previews).toHaveLength(1);expect(previews[0].payment_date_version).toBe(paymentDateVersion);expect(Buffer.from(previews[0].file_base64,'base64')).toEqual(original);expect(previews[0]).not.toHaveProperty('rows');
+  expect(previews).toHaveLength(2);expect(previews[0].payment_date_version).toBe(paymentDateVersion);expect(previews[0].bank_rules_version).toBe(bankRulesVersion);expect(Buffer.from(previews[0].file_base64,'base64')).toEqual(original);expect(previews.at(-1).file_base64).toBe(previews[0].file_base64);expect(previews[0]).not.toHaveProperty('rows');
   page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true}).click();await expect(panel(page).getByRole('status')).toContainText('Importação concluída');
-  expect(commits).toHaveLength(1);expect(commits[0].payment_date_version).toBe(paymentDateVersion);expect(Buffer.from(commits[0].file_base64,'base64')).toEqual(original);expect(commits[0].file_base64).toBe(previews[0].file_base64);
+  expect(commits).toHaveLength(1);expect(commits[0].payment_date_version).toBe(paymentDateVersion);expect(commits[0].bank_rules_version).toBe(bankRulesVersion);expect(Buffer.from(commits[0].file_base64,'base64')).toEqual(original);expect(commits[0].file_base64).toBe(previews[0].file_base64);
   const preserved=new ExcelJS.Workbook();await preserved.xlsx.load(Buffer.from(commits[0].file_base64,'base64'));expect(preserved.worksheets[0].getCell('G2').value).toEqual(new Date('2043-06-30T12:00:00Z'));expect(preserved.worksheets[0].getCell('H2').value).toEqual(new Date('2026-10-17T23:59:59Z'));
 });
 
@@ -321,7 +325,7 @@ test('authoritative server date validation keeps detailed source errors and the 
 test('an older service that does not acknowledge the explicit payment-date contract cannot authorize confirmation',async({page})=>{
   const {previews,commits}=await setup(page,{knownBank:true,missingPaymentDateVersion:true});await selectExplicitPaidDate(page,new Date('2026-10-17T00:00:00Z'));
   await expect(panel(page).getByRole('alert')).toBeVisible();await expect(page.getByRole('heading',{name:'Conferência dos pagamentos',exact:true})).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toHaveCount(0);expect(previews).toHaveLength(1);expect(previews[0].payment_date_version).toBe(paymentDateVersion);expect(commits).toHaveLength(0);
+  await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toHaveCount(0);expect(previews).toHaveLength(1);expect(previews[0].payment_date_version).toBe(paymentDateVersion);expect(previews[0].bank_rules_version).toBe(bankRulesVersion);expect(commits).toHaveLength(0);
 });
 
 test('an older recorded import that still needs payment-date review never becomes a false success or an uncertain retry',async({page})=>{
@@ -329,5 +333,90 @@ test('an older recorded import that still needs payment-date review never become
   page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true}).click();
   await expect(panel(page).getByRole('alert')).toContainText('histórico');await expect(panel(page)).not.toContainText('Importação concluída');await expect(panel(page)).not.toContainText('private SQL query secret');
   await expect(page.getByRole('button',{name:'Repetir confirmação pendente',exact:true})).toHaveCount(0);await expect(page.getByLabel('Relatório de títulos pagos',{exact:true})).toBeEnabled();await expect(page.getByRole('button',{name:'Reanalisar mesmo arquivo',exact:true})).toBeEnabled();
-  await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toBeDisabled();expect(commits).toHaveLength(1);expect(commits[0].payment_date_version).toBe(paymentDateVersion);expect(ledgerCount()).toBe(0);
+  await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toBeDisabled();expect(commits).toHaveLength(1);expect(commits[0].payment_date_version).toBe(paymentDateVersion);expect(commits[0].bank_rules_version).toBe(bankRulesVersion);expect(ledgerCount()).toBe(0);
+});
+
+
+const approvedBankAliases=[
+  ['BANCO MODELO EASYCLEAN - 0001001-1','BRADESCO EASY CLEAN'],
+  ['BANCO MODELO ECOPLAST 0001002-2','BRADESCO ECOPLAST'],
+  ['BANCO MODELO F2G PARTICIPAÇÕES 0001003-3','BRADESCO F2G'],
+  ['BANCO MODELO FAST CLEAN 0001004-4','BRADESCO FAST CLEAN'],
+  ['BANCO MODELO GAMMA 0001005-5','BRADESCO GAMMA IND'],
+  ['BANCO MODELO LIMPE FÁCIL 0001006-6','BRADESCO LIMPE FACIL'],
+  ['DÉBITO SINTÉTICO EM CONTA - ECOPLAST','BRADESCO ECOPLAST'],
+]as const;
+const internalCashCheckbox=(page:Page,entry='14')=>page.getByRole('checkbox',{name:`Confirmar baixa sem pagamento do lançamento ${entry} filial 3`,exact:true});
+const internalCashCsv=csv.replace(';200,00;',';100,00;').replace(';BANCO ERP PAGO;',';CAIXA INTERNO;').replace('17/10/2026 23:59:59','');
+
+test('all seven approved source-bank descriptions resolve the official bank without inferring it from the branch',async({page})=>{
+  const {previews,commits,accounts,ledgerCount,writeoffLedgerCount}=await setup(page);
+  const report=headers.join(';')+'\r\n'+approvedBankAliases.map(([source],index)=>[`97`,String(100+index),'PAGO','17/10/2026 23:59:59','200,00',source,'000123',`Fornecedor bancário sintético ${index+1}`,'ENERGIA','01/10/2026 10:15:00'].join(';')).join('\r\n');
+  await selectCsv(page,report);await analyze(page);
+  const table=page.getByRole('table',{name:/Prévia dos pagamentos/});await expect(table.locator('tbody tr')).toHaveCount(7);
+  for(const [index,[source,official]]of approvedBankAliases.entries()){
+    const row=table.locator('tbody tr').nth(index),bankCell=row.locator('td').nth(5);
+    await expect(row.locator('td').nth(1)).toHaveText('97');await expect(bankCell).toContainText(source);await expect(bankCell.getByText(official,{exact:true})).toBeVisible();
+    expect(accounts.find(account=>account.display_name===official)?.account_type).toBe('BANK');
+  }
+  await expect(page.getByLabel(/^Conta oficial para banco/)).toHaveCount(0);await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toBeEnabled();
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true}).click();await expect(panel(page).getByRole('status')).toContainText('7 conciliado(s)');
+  expect(commits).toHaveLength(1);const expectedBanks=Object.fromEntries(approvedBankAliases.map(([source,official])=>[JSON.stringify(['source-bank','97',source]),accounts.find(account=>account.display_name===official)!.id]));expect(previews.length).toBeGreaterThanOrEqual(2);expect(previews[0].bank_mappings).toEqual({});expect(previews.at(-1).bank_mappings).toEqual(expectedBanks);expect(commits[0].bank_mappings).toEqual(expectedBanks);expect(commits[0].bank_rules_version).toBe(bankRulesVersion);expect(previews[0].bank_rules_version).toBe(bankRulesVersion);expect(Buffer.from(commits[0].file_base64,'base64').toString('utf8')).toBe(report);expect(ledgerCount()).toBe(7);expect(writeoffLedgerCount()).toBe(0);
+});
+
+test('Caixa Interno at a real nominal amount and blank date requires its own administrative writeoff confirmation',async({page})=>{
+  const {previews,commits,ledgerCount,writeoffLedgerCount}=await setup(page);await selectCsv(page,internalCashCsv);await analyze(page);
+  await expect(internalCashCheckbox(page)).not.toBeChecked();await expect(page.getByLabel(/^Conta oficial para banco/)).toHaveCount(0);
+  await expect(panel(page)).toContainText('Valor nominal R$ 200,00');await expect(panel(page)).toContainText('Valor no arquivo R$ 100,00');
+  const table=page.getByRole('table',{name:/Prévia dos pagamentos/});await expect(table).toContainText('Sem pagamento');await expect(table).toContainText('R$ 100,00');
+  await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toBeDisabled();expect(commits).toHaveLength(0);
+  await internalCashCheckbox(page).check();await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toBeDisabled();await analyze(page);
+  await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toBeEnabled();expect(previews.at(-1).resolution_choices['row:1']).toMatchObject({action:'WRITE_OFF'});
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true}).click();await expect(panel(page).getByRole('status')).toContainText('0 conciliado(s) e 1 baixa(s) sem pagamento');
+  expect(commits).toHaveLength(1);expect(commits[0].bank_mappings).toEqual({});expect(Buffer.from(commits[0].file_base64,'base64').toString('utf8')).toBe(internalCashCsv);expect(commits[0]).not.toHaveProperty('rows');expect(ledgerCount()).toBe(0);expect(writeoffLedgerCount()).toBe(1);
+});
+
+test('two Caixa Interno rows require separate confirmations even when the source date is future or absent',async({page})=>{
+  const first=internalCashCsv.split('\r\n')[1],second=first.replace(';14;',';15;').replace(';PAGO;;',';PAGO;19/10/2043;').replace(';100,00;',';250,50;');
+  const {previews,commits,ledgerCount,writeoffLedgerCount}=await setup(page);await selectCsv(page,headers.join(';')+'\r\n'+first+'\r\n'+second);await analyze(page);
+  await expect(internalCashCheckbox(page)).not.toBeChecked();await expect(internalCashCheckbox(page,'15')).not.toBeChecked();await internalCashCheckbox(page).check();await analyze(page);
+  expect(previews.at(-1).resolution_choices).toHaveProperty('row:1');expect(previews.at(-1).resolution_choices).not.toHaveProperty('row:2');await expect(internalCashCheckbox(page,'15')).not.toBeChecked();await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toBeDisabled();expect(commits).toHaveLength(0);
+  await internalCashCheckbox(page,'15').check();await analyze(page);await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toBeEnabled();
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true}).click();await expect(panel(page).getByRole('status')).toContainText('2 baixa(s) sem pagamento');expect(ledgerCount()).toBe(0);expect(writeoffLedgerCount()).toBe(2);expect(Object.keys(commits[0].resolution_choices)).toEqual(['row:1','row:2']);
+});
+
+test('a mixed bank and Caixa Interno import freezes050 rules and repeats exact bytes without duplicating financial payments or writeoffs',async({page})=>{
+  const real=csv.split('\r\n')[1].replace(';BANCO ERP PAGO;',`;${approvedBankAliases[0][0]};`),cash=internalCashCsv.split('\r\n')[1].replace(';14;',';15;'),report=headers.join(';')+'\r\n'+real+'\r\n'+cash;
+  const {previews,commits,ledgerCount,writeoffLedgerCount}=await setup(page,{uncertain:true,commitBeforeError:true});await selectCsv(page,report);await analyze(page);await internalCashCheckbox(page,'15').check();await analyze(page);
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true}).click();await expect(panel(page).getByRole('alert')).toContainText('O arquivo, as escolhas e o protocolo foram preservados');
+  await expect(internalCashCheckbox(page,'15')).toBeDisabled();await expect(page.getByLabel('Relatório de títulos pagos',{exact:true})).toBeDisabled();expect(ledgerCount()).toBe(1);expect(writeoffLedgerCount()).toBe(1);
+  await page.getByRole('button',{name:'Repetir confirmação pendente',exact:true}).click();await expect(panel(page).getByRole('status').filter({hasText:'sem duplicar pagamentos ou baixas'})).toBeVisible();
+  expect(commits).toHaveLength(2);expect(commits[1]).toEqual(commits[0]);expect(commits[0]).toMatchObject({payment_date_version:paymentDateVersion,bank_rules_version:bankRulesVersion});expect(commits[0].resolution_choices).toEqual(previews.at(-1).resolution_choices);expect(Object.keys(commits[0].resolution_choices)).toEqual(['row:2']);expect(Buffer.from(commits[0].file_base64,'base64').toString('utf8')).toBe(report);expect(ledgerCount()).toBe(1);expect(writeoffLedgerCount()).toBe(1);
+});
+
+for(const unavailable of [false,true])test(`missing050 bank service ${unavailable?'activation':'echo'} blocks the paid import without falling back`,async({page})=>{
+  const {calls,commits}=await setup(page,unavailable?{bankRulesUnavailable:true}:{missingBankRulesVersion:true});await selectCsv(page,internalCashCsv);await analyze(page);
+  await expect(panel(page).getByRole('alert')).toBeVisible();await expect(page.getByRole('heading',{name:'Conferência dos pagamentos',exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toHaveCount(0);
+  const requests=calls.filter(call=>call.name==='payables-import');expect(requests).toHaveLength(1);expect(requests[0].body.bank_rules_version).toBe(bankRulesVersion);expect(commits).toHaveLength(0);await expect(panel(page)).not.toContainText('private SQL query secret');
+});
+
+test('Caixa Interno with a one-cent marker keeps the existing individual CENT confirmation even without a payment date',async({page})=>{
+  const report=internalCashCsv.replace(';100,00;',';0,01;'),{previews,commits,ledgerCount,writeoffLedgerCount}=await setup(page);await selectCsv(page,report);await analyze(page);
+  await expect(centCheckbox(page)).not.toBeChecked();await expect(internalCashCheckbox(page)).toHaveCount(0);await expect(page.getByLabel(/^Conta oficial para banco/)).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toBeDisabled();await centCheckbox(page).check();await analyze(page);
+  await expect(centCheckbox(page)).toBeChecked();await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toBeEnabled();expect(previews.at(-1).resolution_choices['row:1']).toMatchObject({action:'WRITE_OFF'});
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true}).click();await expect(panel(page).getByRole('status')).toContainText('0 conciliado(s) e 1 baixa(s) sem pagamento');
+  expect(commits).toHaveLength(1);expect(ledgerCount()).toBe(0);expect(writeoffLedgerCount()).toBe(1);
+});
+
+
+test('resolved rows with the same source-bank key and different official IDs cannot produce an automatic mapping',async({page})=>{
+  const {previews,commits}=await setup(page,{knownBank:true,conflictingBankIds:true});await selectCsv(page,csv+'\r\n'+csv.split('\r\n')[1].replace(';14;',';15;'));await analyze(page);
+  await expect(panel(page).getByRole('alert')).toBeVisible();await expect(page.getByRole('heading',{name:'Conferência dos pagamentos',exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toHaveCount(0);expect(previews).toHaveLength(1);expect(commits).toHaveLength(0);
+});
+
+test('a financial revision change during the automatic official-bank confirmation blocks that entire analysis',async({page})=>{
+  const {previews,commits}=await setup(page,{knownBank:true,changeFreezeRevision:true});await selectCsv(page);await analyze(page);
+  await expect(panel(page).getByRole('alert')).toBeVisible();await expect(page.getByRole('heading',{name:'Conferência dos pagamentos',exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'Concluir importação dos pagamentos',exact:true})).toHaveCount(0);
+  expect(previews).toHaveLength(2);expect(previews[0].bank_mappings).toEqual({});expect(previews.at(-1).bank_mappings).toMatchObject({[JSON.stringify(['source-bank','3','BANCO ERP PAGO'])]:uuid(100)});expect(previews.at(-1).file_base64).toBe(previews[0].file_base64);expect(commits).toHaveLength(0);
 });
