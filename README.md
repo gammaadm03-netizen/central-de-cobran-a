@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.4**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.5**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Estatísticas da conferência de contatos — 0.18.5
+
+Quando um arquivo grande de descrições já estava preparado e os contatos eram recebidos depois, estatísticas anteriores podiam estimar apenas uma linha do novo arquivo e causar comparações repetidas entre milhares de registros. O SQL 049 atualiza somente as estatísticas da coluna de identificação do arquivo antes da primeira análise, preserva o reaproveitamento das conferências seguintes e evita calcular chaves de descrições ao conferir contatos. Os limites de tempo e as regras de publicação permanecem iguais. [Ativar o complemento 049 e retomar os arquivos preparados](docs/conferencia-contatos-descricoes.md#complemento-049--versão-0185). A função collection-reference-import já atualizada não precisa ser publicada novamente.
 
 ## Conferência de contatos e descrições — 0.18.4
 
