@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.18.10",
+  "version": "0.18.11",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -96,7 +96,9 @@
     "bundle:collection-contact-refresh": "node scripts/bundle-collection-contact-refresh.mjs",
     "test:collection-contact-refresh-sql": "node scripts/bundle-collection-contact-refresh.mjs && node scripts/test-collection-contact-refresh-sql.mjs",
     "bundle:receivable-financial-validation": "node scripts/bundle-receivable-financial-validation.mjs",
-    "test:receivable-financial-validation-sql": "node scripts/bundle-receivable-financial-validation.mjs && node scripts/test-receivable-financial-validation-sql.mjs"
+    "test:receivable-financial-validation-sql": "node scripts/bundle-receivable-financial-validation.mjs && node scripts/test-receivable-financial-validation-sql.mjs",
+    "bundle:collection-operational-statuses": "node scripts/bundle-collection-operational-statuses.mjs",
+    "test:collection-operational-statuses-sql": "node scripts/bundle-collection-operational-statuses.mjs && node scripts/test-collection-operational-statuses-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

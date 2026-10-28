@@ -1,7 +1,12 @@
 import { supabase } from './supabase';
 import { addCivilDays } from './financial-dates';
 
-export const COLLECTION_STATUSES = ['NOVO TÍTULO - COBRAR', 'SEM SUCESSO', 'AGUARDANDO RETORNO', 'COBRANCA VIA EMAIL', 'COBRANCA POR WHATSAPP', 'AGUARDANDO LIQUIDACAO', 'SEM PRAZO', 'SEM PREVISAO DE PG', 'PAGAMENTO PROGRAMADO', 'TÍTULO PAGO'] as const;
+export const COLLECTION_STATUSES = [
+  'NOVO TÍTULO - COBRAR', 'SEM SUCESSO', 'AGUARDANDO RETORNO', 'COBRANCA VIA EMAIL', 'COBRANCA POR WHATSAPP',
+  'AGUARDANDO LIQUIDACAO', 'SEM PRAZO', 'SEM PREVISAO DE PG', 'PAGAMENTO PROGRAMADO',
+  'MERCADORIA A RECOLHER', 'NOTA A CANCELAR', 'AGUARDANDO NOTA ASSINADA', 'NOTA COM PENDÊNCIA', 'PAUSAR COBRANÇA',
+  'TÍTULO PAGO',
+] as const;
 export type CollectionStatus = typeof COLLECTION_STATUSES[number];
 export const COLLECTION_BANDS = [['1_30', '1–30 dias'], ['31_60', '31–60 dias'], ['61_90', '61–90 dias'], ['91_180', '91–180 dias'], ['181_365', '181–365 dias'], ['ACIMA_365', 'Acima de 365 dias']] as const;
 export const COLLECTION_SORTS = [['delay_desc', 'Maior atraso'], ['amount_desc', 'Maior valor'], ['amount_asc', 'Menor valor'], ['delay_asc', 'Menor atraso'], ['client_asc', 'Cliente A–Z'], ['next_date_asc', 'Próximo retorno']] as const;

@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.7**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.11**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Novos status do atendimento de cobrança — 0.18.11
+
+O atendimento e o filtro de status incluem **Mercadoria a recolher**, **Nota a cancelar**, **Aguardando nota assinada**, **Nota com pendência** e **Pausar cobrança**. O andamento e as finalizações preservam o status no histórico; para finalizar, continuam obrigatórias observação, próxima ação e data de retorno. São classificações operacionais: pagamentos, cancelamentos de notas e baixas seguem seus procedimentos próprios. [Ativar o SQL 054 e utilizar os status](docs/status-atendimento-cobranca.md). A atualização não exige alteração de Edge Function.
 
 ## Bancos de pagamentos e Caixa Interno — 0.18.7
 

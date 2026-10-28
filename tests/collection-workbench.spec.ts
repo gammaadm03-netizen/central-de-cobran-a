@@ -5,7 +5,8 @@ const initialTime = new Date('2026-10-18T15:00:01Z');
 const today = '2026-10-18';
 const id = (n: number) => `97000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const own = id(20), other = id(21);
-const statuses = ['NOVO TÍTULO - COBRAR', 'SEM SUCESSO', 'AGUARDANDO RETORNO', 'COBRANCA VIA EMAIL', 'COBRANCA POR WHATSAPP', 'AGUARDANDO LIQUIDACAO', 'SEM PRAZO', 'SEM PREVISAO DE PG', 'PAGAMENTO PROGRAMADO', 'TÍTULO PAGO'];
+const additionalStatuses = ['MERCADORIA A RECOLHER', 'NOTA A CANCELAR', 'AGUARDANDO NOTA ASSINADA', 'NOTA COM PENDÊNCIA', 'PAUSAR COBRANÇA'];
+const statuses = ['NOVO TÍTULO - COBRAR', 'SEM SUCESSO', 'AGUARDANDO RETORNO', 'COBRANCA VIA EMAIL', 'COBRANCA POR WHATSAPP', 'AGUARDANDO LIQUIDACAO', 'SEM PRAZO', 'SEM PREVISAO DE PG', 'PAGAMENTO PROGRAMADO', ...additionalStatuses, 'TÍTULO PAGO'];
 const workflow = { version: '029', normal_pause: true, finish_requires_started: true, pending_read_only: true, returns_priority: true };
 const shifted = (days: number) => new Date(Date.parse(`${today}T12:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 type Options = { director?: boolean; manager?: boolean; unbound?: boolean; unassigned?: boolean; large?: boolean; wrongScope?: boolean; unsafe?: boolean; failure?: 'stale' | 'uncertain'; pending?: boolean };
@@ -113,7 +114,8 @@ async function setup(page: Page, options: Options = {}) {
       if (body.p_finish && !state.started.has(row.id)) return reply({ code: '55000' }, 409);
       row.operational_status = body.p_status; row.observation = body.p_observation; row.next_action_text = body.p_next_action; row.next_date = body.p_next_date; if (body.p_finish) row.revision++; row.case_revision++; row.updated_at = new Date(state.now).toISOString();
       row.case_payment_date = body.p_payment_date;
-      if (body.p_finish && body.p_status === statuses[9]) { row.status = 'PENDING_VALIDATION'; row.validation_status = 'PENDING'; row.payment_source = 'COBRANCA'; row.payment_reported_date = body.p_payment_date; row.reported_in_collection = true; row.last_action = 'PAID'; }
+      state.caseEvents.unshift({ id: id(1_000 + state.caseEvents.length), title_id: row.id, status: row.operational_status, observation: row.observation, next_action: row.next_action_text, next_date: row.next_date, finalized: !!body.p_finish, created_at: row.updated_at });
+      if (body.p_finish && body.p_status === 'TÍTULO PAGO') { row.status = 'PENDING_VALIDATION'; row.validation_status = 'PENDING'; row.payment_source = 'COBRANCA'; row.payment_reported_date = body.p_payment_date; row.reported_in_collection = true; row.last_action = 'PAID'; }
       if (body.p_finish) {
         state.started.delete(row.id); row.next_action_date = body.p_next_date; row.next_action = body.p_next_date ? 'OTHER' : null;
         const current = timer(row); state.sessions.set(row.id, { session_id: null, started_at: null, running: false, total_seconds: current.total_seconds }); row.finalized_at = row.updated_at;
@@ -233,7 +235,7 @@ test('iniciar, pausar, salvar e finalizar preservam rascunho e tempo com as duas
   await expect(sidebar(page).getByRole('timer')).toContainText('00:00:12'); await seen.advance(60_000); await expect(sidebar(page).getByRole('timer')).toContainText('00:00:12');
 });
 
-test('há dez status, rascunho não informa pagamento e título pago sai da carteira ativa para validação', async ({ page }) => {
+test('os quinze status aparecem no atendimento; somente título pago finalizado segue para validação', async ({ page }) => {
   const seen = await setup(page);
   await page.getByRole('tab', { name: 'Validação financeira', exact: true }).click(); await expect(page.getByRole('cell', { name: 'Nenhum pagamento pendente para este filtro.', exact: true })).toBeVisible();
   const validationReads = () => seen.calls.filter(call => ['collection_overdue_titles', 'receivable_titles'].includes(call.name) && new URLSearchParams(call.query).get('status') === 'eq.PENDING_VALIDATION').length;
@@ -265,6 +267,46 @@ test('há dez status, rascunho não informa pagamento e título pago sai da cart
   await expect(page.getByRole('button', { name: 'Abrir título NF-1', exact: true })).toBeVisible(); await open(page);
   await expect(sidebar(page).getByRole('button', { name: 'Iniciar', exact: true })).toBeDisabled(); await expect(sidebar(page).getByRole('textbox', { name: 'Observações', exact: true })).toBeDisabled();
 });
+
+for (const status of additionalStatuses) {
+  test(`${status}: salva e finaliza o atendimento, aparece no histórico e filtra a carteira`, async ({ page }) => {
+    const seen = await setup(page); await open(page);
+    await expect(page.getByRole('combobox', { name: 'Status da cobrança', exact: true }).locator('option')).toHaveText(['Todos os status', ...statuses]);
+    await sidebar(page).getByRole('button', { name: 'Iniciar', exact: true }).click();
+    await expect(sidebar(page).getByRole('button', { name: 'Pausar', exact: true })).toBeEnabled();
+    await page.getByRole('combobox', { name: 'Status do atendimento', exact: true }).selectOption(status);
+    await sidebar(page).getByRole('textbox', { name: 'Observações', exact: true }).fill(`Conferência sintética: ${status}`);
+    await sidebar(page).getByLabel('Próxima ação', { exact: true }).fill('Conferir o retorno do responsável');
+    await sidebar(page).getByLabel('Data da próxima ação', { exact: true }).fill('2026-10-20');
+    await expect(sidebar(page).getByLabel('Data do pagamento informado', { exact: false })).toHaveCount(0);
+    await sidebar(page).getByRole('button', { name: 'Salvar andamento', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Andamento salvo na base central.' })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Status do atendimento', exact: true })).toHaveValue(status);
+    await expect(sidebar(page).getByRole('button', { name: 'Pausar', exact: true })).toBeEnabled();
+    expect(seen.state.sessions.get(id(101))?.running).toBe(true);
+    expect(seen.rows[0]).toMatchObject({ status: 'OPEN', validation_status: 'NONE', payment_date: null, payment_reported_date: null, reported_in_collection: false });
+    await sidebar(page).getByRole('button', { name: 'Finalizar atendimento', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Atendimento finalizado e registrado no histórico.' })).toBeVisible();
+    expect(seen.calls.filter(call => call.name === 'save_collection_case').map(call => call.body)).toMatchObject([
+      { p_status: status, p_finish: false, p_payment_date: null },
+      { p_status: status, p_finish: true, p_payment_date: null, p_next_date: '2026-10-20' },
+    ]);
+    expect(seen.state.sessions.get(id(101))?.running).toBe(false);
+    expect(seen.rows[0]).toMatchObject({ status: 'OPEN', validation_status: 'NONE', amount_cents: 10_001, due_date: shifted(-45), payment_date: null, payment_reported_date: null });
+    expect(seen.calls.some(call => ['record_collection_action', 'validate_receivable_payment', 'validate_receivable_payment_v2'].includes(call.name))).toBe(false);
+    await sidebar(page).getByText('Andamentos salvos', { exact: true }).click();
+    const finalized = sidebar(page).getByRole('listitem').filter({ hasText: 'Finalizado' });
+    await expect(finalized.getByText(status, { exact: true })).toBeVisible();
+    await expect(finalized).toContainText('Conferência sintética');
+    await page.getByRole('combobox', { name: 'Status da cobrança', exact: true }).selectOption(status);
+    await expect.poll(() => listCalls(seen.calls).at(-1)?.body.p_status).toBe(status);
+    await expect(page.getByRole('button', { name: /^Abrir título NF-/ })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Abrir título NF-1', exact: true })).toBeVisible();
+    await page.reload(); await seen.login(); await open(page);
+    await expect(page.getByRole('combobox', { name: 'Status do atendimento', exact: true })).toHaveValue(status);
+    await expect(sidebar(page).getByRole('textbox', { name: 'Observações', exact: true })).toHaveValue(`Conferência sintética: ${status}`);
+  });
+}
 
 test('pagamento informado exige data real até a data oficial e não envia um pagamento futuro', async ({ page }) => {
   const { calls } = await setup(page); await open(page); await sidebar(page).getByRole('button', { name: 'Iniciar', exact: true }).click(); await expect(sidebar(page).getByRole('button', { name: 'Pausar', exact: true })).toBeEnabled(); await sidebar(page).getByRole('button', { name: 'Marcar como título pago', exact: true }).click();
