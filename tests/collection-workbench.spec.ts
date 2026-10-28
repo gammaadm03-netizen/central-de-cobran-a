@@ -26,7 +26,7 @@ async function setup(page: Page, options: Options = {}) {
     customer_key: `name:CLIENTE SINTÉTICO ${n}`, branch: 'Filial sintética', issued_on: shifted(-500), due_date: shifted(-days), amount_cents: 10_000 + n,
     collector_id: (options.unassigned && n === 1 ? null : collector) as string | null, status: options.pending && n === 1 ? 'PENDING_VALIDATION' : 'OPEN', validation_status: options.pending && n === 1 ? 'PENDING' : 'NONE',
     payment_source: options.pending && n === 1 ? 'COBRANCA' : null, payment_reported_date: options.pending && n === 1 ? shifted(-1) : null, payment_date: null,
-    reported_in_collection: !!options.pending && n === 1, collector_locked: false, in_latest_report: true, revision: 1, updated_at: initialTime.toISOString(),
+    reported_in_collection: !!options.pending && n === 1, collector_locked: false, in_latest_report: true, retired_from_report: false, revision: 1, updated_at: initialTime.toISOString(),
     last_action: null as string | null, next_action: null as string | null, next_action_date: null as string | null,
     operational_status: statuses[0], case_revision: n === 1 ? 0 : 1, observation: n === 1 ? null : `Observação sintética ${n}`, next_action_text: null as string | null, next_date: null as string | null,
     delay_days: days, collector_name: options.unassigned && n === 1 ? null : collector === own ? 'Responsável A' : 'Responsável B', total_work_seconds: 0,

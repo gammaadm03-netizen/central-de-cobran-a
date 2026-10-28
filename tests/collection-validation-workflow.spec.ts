@@ -4,7 +4,7 @@ const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const id = (value: number) => `98000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const userId = id(1), sessionId = id(2), agentId = id(20), titleId = id(30);
 const originalObservation = 'Cliente informou pagamento e enviou comprovante.\nConferir a entrada bancária antes da baixa.';
-interface Options { role?: 'contas_receber' | 'diretor' | 'cobradora_1'; reportDenied?: boolean; wrongReport?: boolean; noReport?: boolean; receiptExists?: boolean; stale?: boolean; unassigned?: boolean }
+interface Options { role?: 'contas_receber' | 'diretor' | 'cobradora_1'; reportDenied?: boolean; wrongReport?: boolean; noReport?: boolean; receiptExists?: boolean; stale?: boolean; unassigned?: boolean; retired?: boolean; ignoreRetiredFilter?: boolean; missingRetirement?: boolean; detailRetired?: boolean; detailDenied?: boolean; wrongDetail?: boolean; missing053?: boolean; netExample?: boolean; commitRace?: 'retired' | 'validated'; uncertain?: 'lost-after-commit' | 'proof' }
 
 async function setup(page: Page, options: Options = {}) {
   await page.clock.setFixedTime(new Date('2026-10-18T15:00:00Z'));
@@ -14,9 +14,11 @@ async function setup(page: Page, options: Options = {}) {
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify({ sub: userId, session_id: sessionId, exp: 4070908800, role: 'authenticated' })).toString('base64url'), 'synthetic-test-only'].join('.');
   const title = { id: titleId, scope: 'grupo-consolidado', document: 'NF-FIN-1', client_name: 'Órgão sintético da conferência', client_document: null, customer_key: 'name:ÓRGÃO SINTÉTICO DA CONFERÊNCIA', branch: '4', issued_on: '2026-08-01', due_date: '2026-08-15', amount_cents: 123456,
     collector_id: options.unassigned ? null : agentId, status: 'PENDING_VALIDATION', validation_status: 'PENDING', payment_source: 'COBRANCA' as string | null, payment_reported_date: '2026-10-17' as string | null, payment_date: null as string | null,
-    reported_in_collection: true, collector_locked: false, in_latest_report: true, revision: 7, updated_at: '2026-10-18T14:00:00Z', last_action: 'PAID', next_action: null as string | null, next_action_date: null as string | null };
+    retired_from_report: options.retired ?? false, reported_in_collection: true, collector_locked: false, in_latest_report: true, revision: 7, updated_at: '2026-10-18T14:00:00Z', last_action: 'PAID', next_action: null as string | null, next_action_date: null as string | null };
+  if (options.netExample) { title.amount_cents = 424020; title.document = 'NF-FIN-1'; title.payment_reported_date = '2026-08-07'; }
   const reported = { id: id(40), title_id: options.wrongReport ? id(999) : titleId, action: 'PAID', collector_id: agentId, contact_date: '2026-10-18', next_action: null, next_date: null, observation: originalObservation, return_note: 'Status operacional: TÍTULO PAGO; próxima ação: VALIDAÇÃO FINANCEIRA', payment_date: '2026-10-17', created_at: '2026-10-18T14:10:00Z' };
   const receipts: Record<string, unknown>[] = options.receiptExists ? [{ id: id(50), title_id: titleId, amount_cents: title.amount_cents, payment_date: '2026-10-17', delay_days: 63, delay_band: '61_90', payment_source: 'COBRANCA', validated_at: '2026-10-18T14:30:00Z' }] : [];
+  const results = new Map<string, Record<string, unknown>>();
   const calls: { name: string; query: string; body: any }[] = [], writes: { name: string; body: any }[] = [];
   await page.route(`${project}/**`, async route => {
     const request = route.request(), url = new URL(request.url()), name = url.pathname.split('/').at(-1)!, body = request.postDataJSON();
@@ -31,10 +33,14 @@ async function setup(page: Page, options: Options = {}) {
     if (name === 'collection_workbench') return reply({ as_of_date: '2026-10-18', server_now: '2026-10-18T15:00:00Z', snapshot_revision: 'financial-workflow-empty-returns', active_timer: null, count: 0, total_cents: 0, rows: [], workflow: { version: '029', normal_pause: true, finish_requires_started: true, pending_read_only: true, returns_priority: true }, priority: { collector_id: collector ? agentId : null, due_count: 0, total_cents: 0, next_title_id: null, next_due_date: null } });
     if (name === 'collection_agents') return reply([{ id: agentId, display_name: 'Cobradora sintética responsável', enabled: true }]);
     if (name === 'receivable_titles' || name === 'collection_overdue_titles') {
-      let rows = [{ ...title, ...(name === 'collection_overdue_titles' ? { collection_as_of_date: '2026-10-18' } : {}) }];
+      if (url.searchParams.has('id') && options.detailDenied) return reply({ code: '42501', message: 'private title details' }, 403);
+      if (url.searchParams.has('id') && options.detailRetired) title.retired_from_report = true;
+      let rows = [{ ...title, ...(options.missingRetirement ? { retired_from_report: undefined } : {}), ...(url.searchParams.has('id') && options.wrongDetail ? { id: id(999) } : {}), ...(name === 'collection_overdue_titles' ? { collection_as_of_date: '2026-10-18' } : {}) }];
       const status = url.searchParams.get('status'), validation = url.searchParams.get('validation_status'), owner = url.searchParams.get('collector_id');
       if (status?.startsWith('eq.')) rows = rows.filter(row => row.status === status.slice(3));
       else if (status === 'neq.VALIDATED') rows = rows.filter(row => row.status !== 'VALIDATED');
+      const retired = url.searchParams.get('retired_from_report');
+      if (!options.ignoreRetiredFilter && retired === 'eq.false' && title.retired_from_report) rows = [];
       if (validation?.startsWith('eq.')) rows = rows.filter(row => row.validation_status === validation.slice(3));
       if (owner === 'is.null') rows = rows.filter(row => row.collector_id === null);
       else if (owner?.startsWith('eq.')) rows = rows.filter(row => row.collector_id === owner.slice(3));
@@ -45,19 +51,31 @@ async function setup(page: Page, options: Options = {}) {
       return reply(options.noReport ? [] : [reported]);
     }
     if (name === 'effective_receivable_receipts' || name === 'receivable_receipts') return reply(receipts);
-    if (name === 'validate_receivable_payment') {
+    if (name === 'validate_receivable_payment_v2') {
       writes.push({ name, body });
+      if (options.missing053) return reply({ code: 'PGRST202', message: 'private function signature' }, 404);
+      if (results.has(body.p_request_id)) return reply(results.get(body.p_request_id));
       if (director || collector) return reply({ code: '42501' }, 403);
+      if (options.commitRace === 'retired') { title.retired_from_report = true; title.revision++; return reply({ code: 'PV001', message: 'private retirement query' }, 409); }
+      if (options.commitRace === 'validated') { title.status = 'VALIDATED'; title.validation_status = 'VALIDATED'; title.revision++; receipts.push({ id: id(50), title_id: titleId, amount_cents: title.amount_cents, payment_date: '2026-10-17', validated_at: '2026-10-18T15:00:00Z' }); return reply({ code: 'PV003' }, 409); }
       if (options.stale || body.p_expected_revision !== title.revision) return reply({ code: '40001', message: 'private SQL conflict details' }, 409);
-      if (body.p_payment_date && body.p_payment_date > '2026-10-18') return reply({ code: '23514' }, 400);
+      if (body.p_payment_date && body.p_payment_date > '2026-10-18') return reply({ code: 'PV004', message: 'private future guard' }, 400);
+      if (title.retired_from_report) return reply({ code: 'PV001' }, 409);
       title.revision++;
       if (body.p_decision === 'CONFIRM') {
         title.status = 'VALIDATED'; title.validation_status = 'VALIDATED'; title.payment_date = body.p_payment_date;
-        receipts.push({ id: id(50), title_id: titleId, amount_cents: title.amount_cents, payment_date: body.p_payment_date, delay_days: 62, delay_band: '61_90', collector_id: title.collector_id, payment_source: 'COBRANCA', validated_at: '2026-10-18T15:00:00Z' });
+        receipts.push({ id: id(50), title_id: titleId, amount_cents: body.p_received_cents, payment_date: body.p_payment_date, delay_days: 62, delay_band: '61_90', collector_id: title.collector_id, payment_source: 'COBRANCA', validated_at: '2026-10-18T15:00:00Z' });
       } else {
         title.status = 'NOT_LOCATED'; title.validation_status = 'NONE'; title.payment_source = null; title.payment_reported_date = null; title.payment_date = null; title.reported_in_collection = false; title.collector_locked = true; title.last_action = 'PAYMENT_NOT_LOCATED'; title.next_action = 'RETRY'; title.next_action_date = '2026-10-18';
       }
-      return reply(body.p_decision === 'CONFIRM' ? id(50) : null);
+      const proof = { format_version: '053', request_id: body.p_request_id, title_id: titleId, decision: body.p_decision, receipt_id: body.p_decision === 'CONFIRM' ? id(50) : null,
+        payment_date: body.p_payment_date, nominal_cents: title.amount_cents, received_cents: body.p_received_cents,
+        adjustment_cents: body.p_decision === 'CONFIRM' ? title.amount_cents - body.p_received_cents : null,
+        adjustment_reason: body.p_adjustment_reason, title_revision: title.revision };
+      results.set(body.p_request_id, proof);
+      if (options.uncertain === 'lost-after-commit') return reply({ code: 'upstream error', message: 'private token details' }, 503);
+      if (options.uncertain === 'proof') return reply({ ...proof, received_cents: Number(proof.received_cents) + 1 });
+      return reply(proof);
     }
     throw new Error(`Unexpected synthetic financial workflow request ${name}`);
   });
@@ -90,12 +108,13 @@ test('Contas a Receber abre a fila dedicada e exibe o último PAID original sem 
 
 test('confirmar usa a data real escolhida no financeiro e preserva o relato original e a responsável', async ({ page }) => {
   const seen = await setup(page); await openValidation(page);
+  await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
   await validationPanel(page).getByLabel('Data real do recebimento', { exact: true }).fill('2026-10-16');
   await validationPanel(page).getByRole('textbox', { name: 'Justificativa / observação da validação', exact: true }).fill('Entrada bancária conferida pelo financeiro.');
   page.once('dialog', dialog => { expect(dialog.message()).toContain('16/10/2026'); return dialog.accept(); });
   await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
   await expect(validationPanel(page).getByRole('status')).toContainText('Recebimento validado');
-  expect(seen.writes).toEqual([{ name: 'validate_receivable_payment', body: { p_title_id: titleId, p_decision: 'CONFIRM', p_payment_date: '2026-10-16', p_observation: 'Entrada bancária conferida pelo financeiro.', p_expected_revision: 7 } }]);
+  expect(seen.writes).toEqual([{ name: 'validate_receivable_payment_v2', body: expect.objectContaining({ p_title_id: titleId, p_decision: 'CONFIRM', p_payment_date: '2026-10-16', p_observation: 'Entrada bancária conferida pelo financeiro.', p_expected_revision: 7, p_received_cents: 123456, p_adjustment_reason: null, p_request_id: expect.any(String) }) }]);
   expect(seen.receipts).toHaveLength(1); expect(seen.title.collector_id).toBe(agentId); expect(seen.title.amount_cents).toBe(123456); expect(seen.title.due_date).toBe('2026-08-15');
   expect(seen.reported.payment_date).toBe('2026-10-17'); expect(seen.reported.observation).toBe(originalObservation);
   await expect(validationPanel(page).getByText('Nenhum pagamento pendente para este filtro.', { exact: true })).toBeVisible();
@@ -156,6 +175,7 @@ test('recebimento já efetivado impede uma segunda confirmação financeira', as
 
 test('conflito financeiro preserva o relato e exige atualizar a fila sem repetir a confirmação', async ({ page }) => {
   const seen = await setup(page, { stale: true }); await openValidation(page);
+  await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
   page.once('dialog', dialog => dialog.accept()); await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
   await expect(validationPanel(page).getByRole('alert')).toContainText('Este título mudou'); await expect(validationPanel(page).getByRole('region', { name: 'Relato original da cobrança', exact: true })).toContainText(originalObservation);
   expect(seen.writes).toHaveLength(1); expect(seen.title.status).toBe('PENDING_VALIDATION'); expect(seen.receipts).toHaveLength(0);
@@ -167,4 +187,132 @@ test('ausência conhecida de relato não inventa observações, e responsável a
   await expect(validationPanel(page).getByText('Não há relato de pagamento da cobrança disponível para este título.', { exact: true })).toBeVisible();
   await expect(validationPanel(page).getByText('Este título está sem responsável definida.', { exact: false })).toBeVisible();
   await expect(validationPanel(page).getByRole('combobox', { name: /^Decisão da validação/ }).locator('option[value="NOT_LOCATED"]')).toHaveJSProperty('disabled', true); expect(seen.writes).toHaveLength(0);
+});
+
+test('a fila exclui títulos retirados e solicita explicitamente o indicador de retirada', async ({ page }) => {
+  const seen = await setup(page, { retired: true });
+  await page.getByRole('tab', { name: 'Validação financeira', exact: true }).click();
+  await expect(validationPanel(page).getByText('Nenhum pagamento pendente para este filtro.', { exact: true })).toBeVisible();
+  await expect(validationPanel(page).getByRole('button', { name: 'Conferir NF-FIN-1', exact: true })).toHaveCount(0);
+  const request = seen.calls.find(call => call.name === 'receivable_titles' && new URLSearchParams(call.query).get('validation_status') === 'eq.PENDING')!;
+  expect(new URLSearchParams(request.query).get('retired_from_report')).toBe('eq.false');
+  expect(new URLSearchParams(request.query).get('select')).toContain('retired_from_report');
+  expect(seen.writes).toHaveLength(0);
+});
+
+for (const options of [{ retired: true, ignoreRetiredFilter: true }, { missingRetirement: true }]) test(`fila inconsistente não oferece validação: ${JSON.stringify(options)}`, async ({ page }) => {
+  const seen = await setup(page, options);
+  await page.getByRole('tab', { name: 'Validação financeira', exact: true }).click();
+  await expect(validationPanel(page).getByRole('alert')).toContainText('Não foi possível carregar a fila');
+  await expect(validationPanel(page).getByRole('button', { name: 'Conferir NF-FIN-1', exact: true })).toHaveCount(0);
+  expect(seen.writes).toHaveLength(0);
+});
+
+test('retirada entre a fila e a conferência mantém o relato e orienta quitados sem confirmar', async ({ page }) => {
+  const seen = await setup(page, { detailRetired: true }); await openValidation(page);
+  await expect(validationPanel(page).getByRole('alert')).toContainText('Título retirado da carteira');
+  await expect(validationPanel(page).getByRole('alert')).toContainText('Importar Bases → Contas a Receber → Títulos quitados');
+  await expect(validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true })).toBeDisabled();
+  await expect(validationPanel(page).getByRole('region', { name: 'Relato original da cobrança', exact: true })).toContainText(originalObservation);
+  expect(seen.writes).toHaveLength(0);
+});
+
+test('retirada após abrir a conferência é detectada novamente antes de enviar a confirmação', async ({ page }) => {
+  const seen = await setup(page); await openValidation(page);
+  await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
+  seen.title.retired_from_report = true; seen.title.revision++;
+  page.once('dialog', dialog => dialog.accept());
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('alert')).toContainText('Título retirado da carteira');
+  await expect(validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true })).toBeDisabled();
+  expect(seen.writes).toHaveLength(0); expect(seen.receipts).toHaveLength(0);
+});
+
+for (const race of ['retired', 'validated'] as const) test(`mudança concorrente ${race} apresenta a situação atual sem repetir gravação`, async ({ page }) => {
+  const seen = await setup(page, { commitRace: race }); await openValidation(page);
+  await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
+  page.once('dialog', dialog => dialog.accept());
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('alert')).toContainText(race === 'retired' ? 'Título retirado da carteira' : 'Já existe recebimento validado');
+  await expect(validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true })).toBeDisabled();
+  await expect(page.getByText('private retirement query', { exact: true })).toHaveCount(0);
+  expect(seen.writes).toHaveLength(1);
+});
+
+for (const option of ['detailDenied', 'wrongDetail'] as const) test(`estado financeiro ${option} bloqueia a conferência sem alterar o relato`, async ({ page }) => {
+  const seen = await setup(page, { [option]: true });
+  await page.getByRole('tab', { name: 'Validação financeira', exact: true }).click();
+  await validationPanel(page).getByRole('button', { name: 'Conferir NF-FIN-1', exact: true }).click();
+  await expect(validationPanel(page).getByRole('alert')).toBeVisible();
+  await expect(validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true })).toBeDisabled();
+  await expect(page.getByText('private title details', { exact: true })).toHaveCount(0);
+  expect(seen.writes).toHaveLength(0);
+});
+
+test('confirmação com retenção exige valor líquido, justificativa e quitação integral explícita', async ({ page }) => {
+  const seen = await setup(page, { netExample: true }); await openValidation(page);
+  const amount = validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true });
+  await expect(amount).toHaveValue('');
+  await expect(validationPanel(page).getByText('Valor original R$ 4.240,20', { exact: false })).toBeVisible();
+  await amount.fill('4.189,32');
+  await expect(validationPanel(page).getByText('R$ 50,88', { exact: true })).toBeVisible();
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('alert')).toContainText('justificativa do desconto');
+  await validationPanel(page).getByLabel('Desconto ou retenção — justificativa', { exact: true }).fill('Retenção confirmada no documento de recebimento.');
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('alert')).toContainText('integralmente quitado');
+  expect(seen.writes).toHaveLength(0);
+  await validationPanel(page).getByLabel('Confirmo que a diferença é desconto ou retenção e que o título está integralmente quitado.', { exact: true }).check();
+  page.once('dialog', dialog => { expect(dialog.message()).toContain('4.189,32'); expect(dialog.message()).toContain('50,88'); expect(dialog.message()).toContain('07/08/2026'); return dialog.accept(); });
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('status')).toContainText('Recebimento validado: R$ 4.189,32');
+  expect(seen.writes[0].body).toMatchObject({ p_received_cents: 418932, p_adjustment_reason: 'Retenção confirmada no documento de recebimento.', p_payment_date: '2026-08-07' });
+  expect(seen.receipts[0].amount_cents).toBe(418932); expect(seen.title.amount_cents).toBe(424020); expect(seen.reported.observation).toBe(originalObservation);
+});
+
+for (const invalid of ['-1,00', '0,00', '1.234,567', '1.234,57', '900719925474099,91']) test(`valor recebido inválido é recusado sem requisição financeira: ${invalid}`, async ({ page }) => {
+  const seen = await setup(page); await openValidation(page);
+  await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill(invalid);
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('alert')).toContainText('Informe o valor efetivamente recebido');
+  expect(seen.writes).toHaveLength(0); expect(seen.receipts).toHaveLength(0);
+});
+
+test('data futura usa o bloqueio do servidor e permite corrigir a data sem alterar o relato', async ({ page }) => {
+  const seen = await setup(page); await openValidation(page);
+  await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
+  await validationPanel(page).getByLabel('Data real do recebimento', { exact: true }).fill('2026-10-19');
+  page.once('dialog', dialog => dialog.accept());
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('alert')).toContainText('data real do recebimento, até hoje');
+  await expect(validationPanel(page).getByLabel('Data real do recebimento', { exact: true })).toBeEnabled();
+  expect(seen.receipts).toHaveLength(0); expect(seen.reported.observation).toBe(originalObservation);
+});
+
+test('banco sem SQL 053 mostra ativação e nunca usa a validação nominal antiga', async ({ page }) => {
+  const seen = await setup(page, { missing053: true }); await openValidation(page);
+  await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
+  page.once('dialog', dialog => dialog.accept());
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('alert')).toContainText('Ative o SQL 053');
+  expect(seen.calls.some(call => call.name === 'validate_receivable_payment')).toBe(false); expect(seen.receipts).toHaveLength(0);
+});
+
+for (const uncertain of ['lost-after-commit', 'proof'] as const) test(`resultado ${uncertain} congela o mesmo protocolo e recupera sem novo recebimento`, async ({ page }) => {
+  const seen = await setup(page, { uncertain }); await openValidation(page);
+  await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
+  page.once('dialog', dialog => dialog.accept());
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('button', { name: 'Conferir confirmação pendente', exact: true })).toBeVisible();
+  await expect(validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true })).toBeDisabled();
+  await expect(validationPanel(page).getByRole('button', { name: 'Atualizar fila', exact: true })).toBeDisabled();
+  await expect(validationPanel(page).getByRole('button', { name: 'Fechar conferência', exact: true })).toBeDisabled();
+  await expect(validationPanel(page).getByLabel('Responsável pela carteira', { exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeDisabled();
+  await expect(page.getByRole('navigation').getByRole('button', { name: 'Contas a Receber', exact: true })).toBeDisabled();
+  await expect(page.getByRole('navigation').getByRole('button', { name: 'Cobrança', exact: true })).toBeDisabled();
+  await validationPanel(page).getByRole('button', { name: 'Conferir confirmação pendente', exact: true }).click();
+  await expect(validationPanel(page).getByRole('status')).toContainText('Recebimento validado');
+  expect(seen.writes).toHaveLength(2); expect(seen.writes[1].body).toEqual(seen.writes[0].body); expect(seen.receipts).toHaveLength(1);
+  await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeEnabled();
 });

@@ -87,7 +87,8 @@ DECLARE
   'cf_private.payable_import_resolution_requests',
   'cf_private.product_cost_import_files',
   'cf_private.product_cost_import_rows',
-  'cf_private.receivable_open_report_requests'
+  'cf_private.receivable_open_report_requests',
+  'cf_private.receivable_financial_validation_requests'
  ];
  v_preserved text[] := ARRAY[
   'public.profiles',

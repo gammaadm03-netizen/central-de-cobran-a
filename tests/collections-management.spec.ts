@@ -16,7 +16,7 @@ async function setup(page: Page, options: Options = {}) {
   const make = (n: number, days: number, collector = own) => ({
     id: id(100 + n), scope: 'grupo-consolidado', source_key: `synthetic-${n}`, document: `NF-${n}`, client_name: `Cliente sintético ${n}`, client_document: null, customer_key: `name:CLIENTE SINTÉTICO ${n}`, branch: 'Filial sintética', issued_on: shifted(serverDate, -500), due_date: shifted(serverDate, -days), amount_cents: 10000,
     collector_id: collector as string | null, status: n === 2 ? 'PENDING_VALIDATION' : n === 3 ? 'NOT_LOCATED' : 'OPEN', validation_status: n === 2 ? 'PENDING' : 'NONE', payment_source: n === 2 ? 'IMPORTACAO_DIARIA' : null,
-    payment_reported_date: n === 2 ? shifted(serverDate, -1) : null, payment_date: null, reported_in_collection: false, collector_locked: false, in_latest_report: true, revision: 1, updated_at: fixed.toISOString(),
+    payment_reported_date: n === 2 ? shifted(serverDate, -1) : null, payment_date: null, reported_in_collection: false, collector_locked: false, in_latest_report: true, retired_from_report: false, revision: 1, updated_at: fixed.toISOString(),
     last_action: n === 2 ? 'PAID' : n === 3 ? 'PAYMENT_NOT_LOCATED' : null, next_action: n === 2 ? 'CONTACT' : n === 3 ? 'RETRY' : null, next_action_date: n === 2 ? serverDate : n === 3 ? shifted(serverDate, -1) : null,
   });
   const records = options.empty ? [] : options.large ? Array.from({ length: 31 }, (_, i) => make(i + 1, i + 1)) : [

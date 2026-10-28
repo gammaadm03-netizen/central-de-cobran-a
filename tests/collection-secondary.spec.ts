@@ -10,7 +10,7 @@ async function setup(page: Page, options: Options = {}) {
   const permissions = [{ resource: 'cobranca', action: 'read' }, ...(!director ? [{ resource: 'cobranca', action: 'write' }] : []), ...(!collector ? [{ resource: 'contas_receber', action: 'read' }] : []), ...(!collector && !director ? [{ resource: 'contas_receber', action: 'write' }, { resource: 'contas_receber', action: 'validate' }] : [])];
   const access = { profile: { id: id(1), username: 'TesteSecundario', display_name: 'Pessoa sintética', role_key: role, enabled: true }, permissions, collector_id: collector ? own : null };
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify({ sub: id(1), session_id: id(2), exp: 4070908800, role: 'authenticated' })).toString('base64url'), 'synthetic-test-only'].join('.');
-  const title = { id: titleId, scope: 'grupo-consolidado', document: 'NF-SEC-1', client_name: 'Cliente sintético pendente', branch: 'Filial sintética', due_date: '2026-09-01', amount_cents: 123456, collector_id: options.unassigned ? null : own, status: 'PENDING_VALIDATION', validation_status: 'PENDING', payment_source: options.sourceCollection ? 'COBRANCA' : 'IMPORTACAO_DIARIA', payment_reported_date: null as string | null, revision: 4 };
+  const title = { id: titleId, scope: 'grupo-consolidado', document: 'NF-SEC-1', client_name: 'Cliente sintético pendente', branch: 'Filial sintética', due_date: '2026-09-01', amount_cents: 123456, collector_id: options.unassigned ? null : own, status: 'PENDING_VALIDATION', validation_status: 'PENDING', retired_from_report: false, payment_source: options.sourceCollection ? 'COBRANCA' : 'IMPORTACAO_DIARIA', payment_reported_date: null as string | null, revision: 4 };
   const calls: { name: string; body: any; query: string }[] = [], writes: { name: string; body: any }[] = [];
   await page.route(`${project}/**`, async route => {
     const request = route.request(), url = new URL(request.url()), name = url.pathname.split('/').at(-1)!, body = request.postDataJSON();
@@ -26,13 +26,14 @@ async function setup(page: Page, options: Options = {}) {
     if (['collections_overdue_summary', 'receivables_management_summary'].includes(name)) return reply({ code: 'PGRST202' }, 404);
     if (name === 'collection_agents') return reply([{ id: own, display_name: 'Responsável A' }, ...(!collector ? [{ id: other, display_name: 'Responsável B' }] : [])]);
     if (name === 'receivable_titles' || name === 'collection_overdue_titles') {
-      let rows = title.status === 'PENDING_VALIDATION' ? [title] : [];
+      let rows = url.searchParams.has('id') || title.status === 'PENDING_VALIDATION' ? [title] : [];
+      if (url.searchParams.get('retired_from_report') === 'eq.false') rows = rows.filter(row => !row.retired_from_report);
       const filter = url.searchParams.get('collector_id');
       if (filter === 'is.null') rows = rows.filter(row => row.collector_id === null);
       else if (filter?.startsWith('eq.')) rows = rows.filter(row => row.collector_id === filter.slice(3));
       return reply(rows, 200, rows.length);
     }
-    if (name === 'effective_receivable_receipts') return options.receiptDenied ? reply({ code: '42501', message: 'private details' }, 403) : reply(options.existingReceipt ? [{ id: id(90), amount_cents: 120000, payment_date: '2026-10-17', validated_at: '2026-10-18T10:00:00Z' }] : []);
+    if (name === 'effective_receivable_receipts') return options.receiptDenied ? reply({ code: '42501', message: 'private details' }, 403) : reply(options.existingReceipt ? [{ id: id(90), title_id: titleId, amount_cents: 120000, payment_date: '2026-10-17', validated_at: '2026-10-18T10:00:00Z' }] : []);
     if (name === 'collection_work_summary') {
       if (options.timeMissing) return reply({ code: 'PGRST202', message: 'private SQL' }, 404);
       const selected = collector ? own : body.p_collector_id || own;
@@ -43,14 +44,14 @@ async function setup(page: Page, options: Options = {}) {
         by_collector: rows.length ? [{ collector_id: owner, display_name: options.wrongScope ? 'Nome que não deve aparecer' : 'Responsável A', total_seconds: seconds, session_count: rows.length, running_count: 1, title_count: 1 }] : [],
         by_day: rows.length ? [{ date: '2026-10-18', total_seconds: seconds, session_count: rows.length, title_count: 1 }] : [], rows });
     }
-    if (name === 'set_receivable_payment_date' || name === 'validate_receivable_payment') {
+    if (name === 'set_receivable_payment_date' || name === 'validate_receivable_payment_v2') {
       writes.push({ name, body });
       if (options.stale) return reply({ code: '40001', message: 'private sensitive SQL details' }, 409);
-      if (body.p_payment_date && body.p_payment_date > '2026-10-18') return reply({ code: '23514', message: 'private date constraint' }, 400);
+      if (body.p_payment_date && body.p_payment_date > '2026-10-18') return reply({ code: 'PV004', message: 'private date constraint' }, 400);
       title.revision++;
       if (name === 'set_receivable_payment_date') title.payment_reported_date = body.p_payment_date;
       else { title.status = body.p_decision === 'CONFIRM' ? 'VALIDATED' : 'NOT_LOCATED'; title.validation_status = body.p_decision === 'CONFIRM' ? 'VALIDATED' : 'NONE'; }
-      return reply(name === 'set_receivable_payment_date' ? null : id(90));
+      return reply(name === 'set_receivable_payment_date' ? null : { format_version: '053', request_id: body.p_request_id, title_id: titleId, decision: body.p_decision, receipt_id: body.p_decision === 'CONFIRM' ? id(90) : null, payment_date: body.p_payment_date, nominal_cents: title.amount_cents, received_cents: body.p_decision === 'CONFIRM' ? body.p_received_cents : null, adjustment_cents: body.p_decision === 'CONFIRM' ? title.amount_cents - body.p_received_cents : null, adjustment_reason: body.p_adjustment_reason, title_revision: title.revision });
     }
     throw new Error(`Unexpected offline secondary request ${name}`);
   });
@@ -64,10 +65,11 @@ async function time(page: Page) { await page.getByRole('tab', { name: 'Tempo de 
 test('validação exige data efetiva e confirmação; vencimento e valor original permanecem imutáveis', async ({ page }) => {
   const seen = await setup(page); await validation(page);
   await expect(page.getByLabel('Data real do recebimento', { exact: true })).toHaveValue('');
+  await page.getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1234,56');
   await page.getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click(); await expect(page.getByRole('alert')).toContainText('Informe a data real'); expect(seen.writes).toHaveLength(0);
   await page.getByLabel('Data real do recebimento', { exact: true }).fill('2026-10-17'); page.once('dialog', dialog => dialog.dismiss()); await page.getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click(); expect(seen.writes).toHaveLength(0);
   page.once('dialog', dialog => { expect(dialog.message()).toContain('Confira a entrada bancária'); return dialog.accept(); }); await page.getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Recebimento validado'); expect(seen.writes).toEqual([{ name: 'validate_receivable_payment', body: { p_title_id: titleId, p_decision: 'CONFIRM', p_payment_date: '2026-10-17', p_observation: '', p_expected_revision: 4 } }]);
+  await expect(page.getByRole('status')).toContainText('Recebimento validado'); expect(seen.writes).toHaveLength(1); expect(seen.writes[0]).toEqual({ name: 'validate_receivable_payment_v2', body: { p_title_id: titleId, p_decision: 'CONFIRM', p_payment_date: '2026-10-17', p_received_cents: 123456, p_adjustment_reason: null, p_observation: '', p_expected_revision: 4, p_request_id: expect.any(String) } }); expect(seen.writes[0].body.p_request_id).toMatch(/^[a-f0-9-]{36}$/i);
   expect(seen.title.amount_cents).toBe(123456); expect(seen.title.due_date).toBe('2026-09-01');
 });
 test('data real pode ser salva sem confirmar recebimento nem retirar o título da fila', async ({ page }) => {
@@ -93,7 +95,7 @@ for (const role of ['diretor', 'cobradora_1'] as const) {
   });
 }
 test('conferência bloqueada não expõe detalhes técnicos e exige revisão da fila', async ({ page }) => {
-  const seen = await setup(page, { stale: true }); await validation(page); await page.getByLabel('Data real do recebimento', { exact: true }).fill('2026-10-17');
+  const seen = await setup(page, { stale: true }); await validation(page); await page.getByLabel('Data real do recebimento', { exact: true }).fill('2026-10-17'); await page.getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1234,56');
   page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click(); await expect(page.getByRole('alert')).toContainText('Este título mudou'); await expect(page.getByText('private sensitive SQL details')).toHaveCount(0); expect(seen.title.status).toBe('PENDING_VALIDATION');
 });
 test('recebimento efetivo existente e falha de leitura impedem nova validação', async ({ page }) => {
@@ -135,8 +137,9 @@ test('falha de permissão ao conferir recebimentos não libera os botões financ
 });
 test('financeiro usa limite de hoje do servidor e aceita data real mesmo com relógio local atrasado', async ({ page }) => {
   const seen = await setup(page); await page.clock.setFixedTime(new Date('2026-10-14T15:00:00Z')); await validation(page);
+  await page.getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1234,56');
   await page.getByLabel('Data real do recebimento', { exact: true }).fill('2026-10-19'); page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('Nenhum recebimento foi confirmado'); expect(seen.title.status).toBe('PENDING_VALIDATION');
+  await expect(page.getByRole('alert')).toContainText('data real'); expect(seen.title.status).toBe('PENDING_VALIDATION');
   await page.getByLabel('Data real do recebimento', { exact: true }).fill('2026-10-18'); page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Recebimento validado'); expect(seen.writes.at(-1)?.body.p_payment_date).toBe('2026-10-18');
 });

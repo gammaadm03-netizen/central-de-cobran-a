@@ -85,7 +85,9 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
   const [busyLogout, setBusyLogout] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [closingExpanded, setClosingExpanded] = useState(false);
-  const [closingBusy, setClosingBusy] = useState(false);
+  const [closingOperationBusy, setClosingBusy] = useState(false);
+  const [financialValidationPending, setFinancialValidationPending] = useState(false);
+  const closingBusy = closingOperationBusy || financialValidationPending;
   const [clientRevision, setClientRevision] = useState(0);
   const loggingOut = useRef(false);
   const sessionGeneration = useRef(0);
@@ -93,9 +95,16 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
   const accessRef = useRef(access);
   accessRef.current = access;
 
+  useEffect(() => {
+    const changed = (event: Event) => setFinancialValidationPending((event as CustomEvent).detail === true);
+    window.addEventListener('receivable-validation-pending', changed);
+    return () => window.removeEventListener('receivable-validation-pending', changed);
+  }, []);
+
   function endLocalSession(message: string) {
     sessionGeneration.current += 1;
     setAccess(null);
+    setFinancialValidationPending(false);
     accessRef.current = null;
     setNotice(message);
     clearClientSession();
@@ -165,7 +174,7 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
   }
 
   async function logout() {
-    if (loggingOut.current) return;
+    if (loggingOut.current || financialValidationPending) return;
     loggingOut.current = true;
     setBusyLogout(true);
     let revoked = false;
@@ -218,5 +227,5 @@ function CentralApp({ initialNotice }: { initialNotice: string }) {
         <div id="closing-submenu" className="nav-submenu" role="group" aria-label="Áreas do fechamento" hidden={!closingExpanded}>
           {closingChildren.map(child => <button type="button" key={child.id} className={`nav-item nav-subitem ${safeSelected === child.id ? 'active' : ''}`} disabled={closingBusy} aria-current={safeSelected === child.id ? 'page' : undefined} onClick={() => showClosing(child.id === 'fechamento_margens' ? 'margins' : 'costs')}><span className="nav-icon" aria-hidden="true">{child.icon}</span>{child.label}</button>)}
         </div>
-      </div> : <button key={module.id} disabled={closingBusy} className={`nav-item ${safeSelected === module.id ? 'active' : ''}`} onClick={() => navigate(module.id)} aria-current={safeSelected === module.id ? 'page' : undefined}><span className="nav-icon" aria-hidden="true">{module.icon}</span>{module.label}</button>)}</nav>{canReadAdministration && <div className="admin-nav"><span className="nav-label">GESTÃO DO SISTEMA</span><button disabled={closingBusy} className={`nav-item ${safeSelected === 'administracao' ? 'active' : ''}`} onClick={() => navigate('administracao')}><span className="nav-icon" aria-hidden="true">⚙</span>Administração</button></div>}<div className="sidebar-footer"><span className="small-shield">✓</span><div>Acesso individual<small>Permissões verificadas no banco</small></div></div></aside><div className="main-shell"><header className="topbar"><div className="topbar-title"><button className="menu-button" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Abrir navegação" aria-expanded={mobileOpen}>☰</button><span>Central Financeira <span className="breadcrumb-separator">/</span> <strong>{title}</strong></span></div><div className="user-menu"><span className="avatar" aria-hidden="true">{access.profile.display_name.slice(0, 1).toUpperCase()}</span><div><strong>{access.profile.display_name}</strong><small>{roleNames[access.profile.role_key]}</small></div><button className="logout-button" disabled={busyLogout} onClick={() => void logout()}>{busyLogout ? 'Saindo…' : 'Sair'}<span aria-hidden="true">↪</span></button></div></header><main className="workspace"><div className="page-heading"><div><span className="eyebrow">GRUPO ECOPLAST</span><h1>{title}</h1></div><span className="time-zone">Horário oficial · Brasília</span></div><MonthlyCampaignCard />{content}</main><footer className="app-footer"><span>Central Financeira · Grupo Ecoplast</span><span>Versão {version} · America/Sao_Paulo</span></footer></div></div>;
+      </div> : <button key={module.id} disabled={closingBusy} className={`nav-item ${safeSelected === module.id ? 'active' : ''}`} onClick={() => navigate(module.id)} aria-current={safeSelected === module.id ? 'page' : undefined}><span className="nav-icon" aria-hidden="true">{module.icon}</span>{module.label}</button>)}</nav>{canReadAdministration && <div className="admin-nav"><span className="nav-label">GESTÃO DO SISTEMA</span><button disabled={closingBusy} className={`nav-item ${safeSelected === 'administracao' ? 'active' : ''}`} onClick={() => navigate('administracao')}><span className="nav-icon" aria-hidden="true">⚙</span>Administração</button></div>}<div className="sidebar-footer"><span className="small-shield">✓</span><div>Acesso individual<small>Permissões verificadas no banco</small></div></div></aside><div className="main-shell"><header className="topbar"><div className="topbar-title"><button className="menu-button" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Abrir navegação" aria-expanded={mobileOpen}>☰</button><span>Central Financeira <span className="breadcrumb-separator">/</span> <strong>{title}</strong></span></div><div className="user-menu"><span className="avatar" aria-hidden="true">{access.profile.display_name.slice(0, 1).toUpperCase()}</span><div><strong>{access.profile.display_name}</strong><small>{roleNames[access.profile.role_key]}</small></div><button className="logout-button" disabled={busyLogout || financialValidationPending} onClick={() => void logout()}>{busyLogout ? 'Saindo…' : 'Sair'}<span aria-hidden="true">↪</span></button></div></header><main className="workspace"><div className="page-heading"><div><span className="eyebrow">GRUPO ECOPLAST</span><h1>{title}</h1></div><span className="time-zone">Horário oficial · Brasília</span></div><MonthlyCampaignCard />{content}</main><footer className="app-footer"><span>Central Financeira · Grupo Ecoplast</span><span>Versão {version} · America/Sao_Paulo</span></footer></div></div>;
 }

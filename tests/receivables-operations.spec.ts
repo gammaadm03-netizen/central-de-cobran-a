@@ -22,7 +22,7 @@ async function setup(page: Page, options: Options = {}) {
   const title = {
     id: titleId, scope: 'grupo-consolidado', document: 'NF-120', client_name: 'Cliente sintético da carteira', client_document: '12345678000199', customer_key: 'cnpj:12345678000199', branch: '3', issued_on: '2026-08-01', due_date: '2026-08-15', amount_cents: 123456,
     collector_id: options.unassigned ? null : ownAgent, status: options.pending ? 'PENDING_VALIDATION' : 'OPEN', validation_status: options.pending ? 'PENDING' : 'NONE', payment_source: options.pending ? 'IMPORTACAO_DIARIA' : null, payment_reported_date: null as string | null, payment_date: null as string | null,
-    reported_in_collection: false, collector_locked: false, in_latest_report: !options.pending, revision: 7, updated_at: '2026-10-15T10:00:00Z', last_action: null as string | null, next_action: null as string | null, next_action_date: null as string | null,
+    reported_in_collection: false, collector_locked: false, retired_from_report: false, in_latest_report: !options.pending, revision: 7, updated_at: '2026-10-15T10:00:00Z', last_action: null as string | null, next_action: null as string | null, next_action_date: null as string | null,
   };
   const seen = { titleQueries: [] as string[], titlePaths: [] as string[], receiptPaths: [] as string[], workbenchQueries: [] as any[], caseQueries: [] as string[], writes: [] as { name: string; body: any }[], events: [] as any[], receipts: [] as any[], exportSnapshots: 0 };
   const serverToday = options.serverToday ?? '2026-10-18';
@@ -119,7 +119,7 @@ async function setup(page: Page, options: Options = {}) {
     if (url.pathname === '/rest/v1/effective_receivable_receipts' || url.pathname === '/rest/v1/receivable_receipts') {
       seen.receiptPaths.push(url.pathname);
       if (url.pathname === '/rest/v1/effective_receivable_receipts' && options.missingReceipts) return reply({ code: options.missingReceipts }, options.missingReceipts === '42501' ? 403 : 404);
-      if (options.correctedReceipt) return reply([{ id: 'receipt-adjusted', amount_cents: url.pathname === '/rest/v1/effective_receivable_receipts' ? 120000 : 123456, payment_date: '2026-10-17', delay_days: 63, delay_band: '61_90', payment_source: 'IMPORTACAO_DIARIA', validated_at: '2026-10-18T10:00:00Z' }]);
+      if (options.correctedReceipt) return reply([{ id: 'receipt-adjusted', title_id: titleId, amount_cents: url.pathname === '/rest/v1/effective_receivable_receipts' ? 120000 : 123456, payment_date: '2026-10-17', delay_days: 63, delay_band: '61_90', payment_source: 'IMPORTACAO_DIARIA', validated_at: '2026-10-18T10:00:00Z' }]);
       return reply(seen.receipts);
     }
     if (url.pathname === '/rest/v1/receivable_imports') return reply([], 200, 0);
@@ -147,13 +147,13 @@ async function setup(page: Page, options: Options = {}) {
           next_date: body.p_next_date, payment_date: body.p_payment_date, created_at: `${serverToday}T15:00:00Z` });
         return reply({ title_id: title.id, revision: title.revision, case_revision: next.revision, event_id: body.p_finish ? seen.events[0].id : null, finished: body.p_finish, timer: timer(title.id) });
       }
-      if (name === 'validate_receivable_payment') {
+      if (name === 'validate_receivable_payment_v2') {
         title.status = body.p_decision === 'CONFIRM' ? 'VALIDATED' : 'NOT_LOCATED'; title.validation_status = body.p_decision === 'CONFIRM' ? 'VALIDATED' : 'NONE';
         title.payment_date = body.p_payment_date;
         running.delete(title.id); started.delete(title.id);
         if (body.p_decision === 'NOT_LOCATED') { title.payment_source = null; title.payment_reported_date = null; title.next_action = 'RETRY'; title.next_action_date = serverToday; caseState.set(title.id, { status: 'NOVO TÍTULO - COBRAR', observation: body.p_observation, next_action: 'Retomar cobrança', next_date: serverToday, revision: stateOf(title).revision + 1 }); }
-        else seen.receipts.push({ id: 'synthetic-receipt', amount_cents: title.amount_cents, payment_date: body.p_payment_date, delay_days: 60, delay_band: '31_60', payment_source: title.payment_source, validated_at: '2026-10-15T15:00:00Z' });
-        return reply(body.p_decision === 'CONFIRM' ? '60000000-0000-4000-8000-000000000001' : null);
+        else seen.receipts.push({ id: '60000000-0000-4000-8000-000000000001', title_id: titleId, amount_cents: body.p_received_cents, payment_date: body.p_payment_date, delay_days: 60, delay_band: '31_60', payment_source: title.payment_source, validated_at: '2026-10-15T15:00:00Z' });
+        return reply({ format_version: '053', request_id: body.p_request_id, title_id: titleId, decision: body.p_decision, receipt_id: body.p_decision === 'CONFIRM' ? '60000000-0000-4000-8000-000000000001' : null, payment_date: body.p_payment_date, nominal_cents: title.amount_cents, received_cents: body.p_decision === 'CONFIRM' ? body.p_received_cents : null, adjustment_cents: body.p_decision === 'CONFIRM' ? title.amount_cents - body.p_received_cents : null, adjustment_reason: body.p_adjustment_reason, title_revision: title.revision });
       }
       throw new Error(`Unexpected RPC ${name}`);
     }
@@ -196,7 +196,7 @@ test('cobradora consulta somente sua carteira e pagamento exige data e confirma�
   await page.getByRole('button', { name: 'Finalizar atendimento', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'Validação financeira', exact: true })).toHaveAttribute('aria-selected', 'true');
   expect(seen.writes.map(write => write.name)).toEqual(['collection_work_action', 'save_collection_case']); expect(seen.writes[1].body).toMatchObject({ p_title_id: titleId, p_status: 'TÍTULO PAGO', p_payment_date: '2026-10-14', p_expected_revision: 7, p_expected_case_revision: 0, p_finish: true });
-  expect(seen.writes.some(write => write.name === 'validate_receivable_payment')).toBe(false);
+  expect(seen.writes.some(write => write.name === 'validate_receivable_payment_v2')).toBe(false);
   await expect(page.getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true })).toHaveCount(0); expect(seen.receipts).toHaveLength(0);
   await expect(page.getByRole('tabpanel', { name: 'Validação financeira', exact: true }).getByText('Consulta em leitura.', { exact: false })).toBeVisible();
   await openCollectionTitles(page); await expect(page.getByRole('button', { name: 'Abrir título NF-120', exact: true })).toHaveCount(0);
@@ -214,29 +214,30 @@ test('cobradora sem vínculo recebe orientação e não consulta títulos nem ca
 test('recebimento exige data real e confirma financeiramente somente após confirmação explícita', async ({ page }) => {
   const seen = await setup(page, { role: 'contas_receber', pending: true }); await page.getByRole('button', { name: 'Abrir fila de validação' }).click(); await page.getByRole('button', { name: 'Conferir NF-120', exact: true }).click();
   await expect(page.getByLabel('Data real do recebimento', { exact: true })).toBeVisible();
+  await page.getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1234,56');
   await page.getByRole('button', { name: 'Confirmar recebimento financeiro' }).click(); expect(seen.writes).toHaveLength(0);
   await page.getByLabel('Data real do recebimento', { exact: true }).fill('2026-10-14');
   page.once('dialog', dialog => dialog.dismiss()); await page.getByRole('button', { name: 'Confirmar recebimento financeiro' }).click(); expect(seen.writes).toHaveLength(0);
   page.once('dialog', dialog => { expect(dialog.message()).toContain('Confirmar financeiramente'); return dialog.accept(); }); await page.getByRole('button', { name: 'Confirmar recebimento financeiro' }).click();
   await expect(page.getByRole('status')).toContainText('Recebimento validado');
-  expect(seen.writes[0]).toEqual({ name: 'validate_receivable_payment', body: { p_title_id: titleId, p_decision: 'CONFIRM', p_payment_date: '2026-10-14', p_observation: '', p_expected_revision: 7 } });
-  await page.getByRole('tab', { name: 'Títulos', exact: true }).click(); await page.getByLabel('Situação do título').selectOption(''); await openDetail(page); await expect(page.getByText('Recebimento validado: R$ 1.234,56', { exact: false })).toBeVisible();
+  expect(seen.writes[0]).toEqual({ name: 'validate_receivable_payment_v2', body: { p_title_id: titleId, p_decision: 'CONFIRM', p_payment_date: '2026-10-14', p_received_cents: 123456, p_adjustment_reason: null, p_observation: '', p_expected_revision: 7, p_request_id: expect.any(String) } }); expect(seen.writes[0].body.p_request_id).toMatch(/^[a-f0-9-]{36}$/i);
+  await page.getByRole('tab', { name: 'Títulos', exact: true }).click(); await page.getByLabel('Situação do título').selectOption(''); await openDetail(page); await expect(page.locator('.receivable-detail').getByText('Recebimento validado: R$ 1.234,56', { exact: false })).toBeVisible();
 });
 
 test('financeiro não localizado exige justificativa, preserva a mesma cobradora e solicita cobrar novamente', async ({ page }) => {
-  const seen = await setup(page, { role: 'contas_receber', pending: true }); await openDetail(page);
-  await page.getByLabel('Decisão financeira').selectOption('NOT_LOCATED'); await page.getByRole('button', { name: 'Devolver à mesma cobradora' }).click(); expect(seen.writes).toHaveLength(0);
-  await page.getByLabel('Observação da validação').fill('Entrada não encontrada no extrato');
-  page.once('dialog', dialog => { expect(dialog.message()).toContain('mesma cobradora'); expect(dialog.message()).toContain('não gerará recebimento nem comissão'); return dialog.accept(); }); await page.getByRole('button', { name: 'Devolver à mesma cobradora' }).click();
-  await expect(page.getByRole('status')).toContainText('Título devolvido à mesma cobradora');
-  expect(seen.writes[0].body).toEqual({ p_title_id: titleId, p_decision: 'NOT_LOCATED', p_payment_date: null, p_observation: 'Entrada não encontrada no extrato', p_expected_revision: 7 });
-  expect(seen.writes[0].body).not.toHaveProperty('p_collector_id'); await expect(page.getByRole('cell', { name: 'Responsável A', exact: true })).toBeVisible(); await expect(page.getByRole('cell', { name: 'Cobrar novamente 18/10/2026', exact: true })).toBeVisible(); expect(seen.receipts).toHaveLength(0);
+  const seen = await setup(page, { role: 'contas_receber', pending: true }); await openDetail(page); await page.getByRole('button', { name: 'Abrir fila de validação financeira', exact: true }).click(); await page.getByRole('button', { name: 'Conferir NF-120', exact: true }).click();
+  await page.getByLabel('Decisão da validação').selectOption('NOT_LOCATED'); await page.getByRole('button', { name: 'Devolver à mesma responsável' }).click(); expect(seen.writes).toHaveLength(0);
+  await page.getByLabel('Justificativa / observação da validação').fill('Entrada não encontrada no extrato');
+  page.once('dialog', dialog => { expect(dialog.message()).toContain('mesma responsável'); expect(dialog.message()).toContain('Nenhum recebimento ou comissão'); return dialog.accept(); }); await page.getByRole('button', { name: 'Devolver à mesma responsável' }).click();
+  await expect(page.getByRole('status')).toContainText('Título devolvido à mesma responsável');
+  expect(seen.writes[0].body).toEqual({ p_title_id: titleId, p_decision: 'NOT_LOCATED', p_payment_date: null, p_received_cents: null, p_adjustment_reason: null, p_observation: 'Entrada não encontrada no extrato', p_expected_revision: 7, p_request_id: expect.any(String) });
+  expect(seen.writes[0].body).not.toHaveProperty('p_collector_id'); await page.getByRole('tab', { name: 'Títulos', exact: true }).click(); await expect(page.getByRole('cell', { name: 'Responsável A', exact: true })).toBeVisible(); await expect(page.getByRole('cell', { name: 'Cobrar novamente 18/10/2026', exact: true })).toBeVisible(); expect(seen.receipts).toHaveLength(0);
 });
 
 test('título alterado concorrentemente exige atualização sem expor erro técnico nem indicar sucesso', async ({ page }) => {
-  const seen = await setup(page, { role: 'contas_receber', pending: true, stale: true }); await openDetail(page); await page.getByLabel('Data real do pagamento', { exact: true }).fill('2026-10-14');
+  const seen = await setup(page, { role: 'contas_receber', pending: true, stale: true }); await openDetail(page); await page.getByRole('button', { name: 'Abrir fila de validação financeira', exact: true }).click(); await page.getByRole('button', { name: 'Conferir NF-120', exact: true }).click(); await page.getByLabel('Data real do recebimento', { exact: true }).fill('2026-10-14'); await page.getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1234,56');
   page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Confirmar recebimento financeiro' }).click();
-  await expect(page.getByRole('alert')).toContainText('Este título foi alterado por outra operação'); await expect(page.getByText('private SQL details', { exact: false })).toHaveCount(0); expect(seen.receipts).toHaveLength(0); await expect(page.getByRole('button', { name: 'Confirmar recebimento financeiro' })).toBeEnabled();
+  await expect(page.getByRole('alert')).toContainText('Este título mudou'); await expect(page.getByText('private SQL details', { exact: false })).toHaveCount(0); expect(seen.receipts).toHaveLength(0); await expect(page.getByRole('button', { name: 'Confirmar recebimento financeiro' })).toBeDisabled(); await expect(page.getByRole('button', { name: 'Atualizar fila', exact: true })).toBeEnabled(); expect(seen.writes).toHaveLength(1);
 });
 
 test('diretor consulta CR, carteiras e histórico sem ações de escrita', async ({ page }) => {

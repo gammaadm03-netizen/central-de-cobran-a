@@ -54,11 +54,12 @@ const newSchemas = () => scalar("SELECT coalesce(jsonb_agg(nspname ORDER BY nspn
 let today, older, month, bank, cpImport, cpTitle, stayTitle, originalTriggers;
 
 async function seed() {
-  // The shared fixture bootstraps 001..034 and 039; load remaining migrations through 047, then private bank-alias configuration.
+  // The shared fixture bootstraps 001..034 and 039; load remaining migrations through 047, private bank aliases and validation protocols.
   await owner();
   const names = (await readdir(new URL('../supabase/migrations/', import.meta.url))).filter(name => /^\d{3}_.*\.sql$/.test(name) && Number(name.slice(0, 3)) > 34 && Number(name.slice(0, 3)) <= 47 && !name.startsWith('039_')).sort();
   for (const name of names) await db.exec(await file(name));
   await db.exec(await file('050_paid_bank_rules.sql'));
+  await db.exec(await file('053_receivable_financial_validation.sql'));
   await db.query('INSERT INTO cf_private.payable_paid_bank_aliases(source_key,official_bank_name) VALUES($1,$2)', [paidBankAlias.source_key, paidBankAlias.official_bank_name]);
   ({ today, older, month } = (await db.query("SELECT d::text today,(d-90)::text older,date_trunc('month',d)::date::text AS \"month\" FROM(SELECT(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date d)s")).rows[0]);
   await db.query('INSERT INTO public.collection_agents(id,display_name) VALUES($1,$2)', [id(101), 'Responsável sintética de preparação']);
@@ -88,12 +89,20 @@ async function seed() {
   const paid = { document: 'CR-PAGO-SYN', client_name: 'Cliente sintético pago', client_document: null, branch: '2', issued_on: older, due_date: older, amount_cents: 12000 };
   const retired = { ...paid, document: 'CR-RETIRADO-SYN', client_name: 'Cliente sintético retirado' };
   const stay = { ...paid, document: 'CR-PRESENTE-SYN', client_name: 'Cliente sintético presente' };
+  const validated = { ...paid, document: 'CR-VALIDACAO-SYN', client_name: 'Cliente sintético de validação', amount_cents: 15000 };
   async function open(rows, full) {
     const collectors = Object.fromEntries(rows.map(row => ['name:' + row.client_name.toUpperCase(), id(101)]));
     const preview = await scalar('SELECT public.preview_receivables_open_report($1,$2,$3,$4,$5,$6) r', ['grupo-consolidado', JSON.stringify(rows), full, today, '{}', JSON.stringify(collectors)]);
     return gateway('commit_receivables_open_report_from_gateway', [users.manager.id, users.manager.session, 'grupo-consolidado', ...sourceArgs(`receber-abertos-${++sequence}`), JSON.stringify(rows), '{}', preview.previous_import_id, preview.financial_revision, JSON.stringify(collectors), full, today, randomUUID()]);
   }
-  await open([paid, retired, stay], false);
+  await open([paid, retired, stay, validated], false);
+  const validationTitle = await scalar('SELECT to_jsonb(t) r FROM public.receivable_titles t WHERE document=$1', [validated.document]);
+  await scalar("SELECT public.collection_work_action($1,'START',$2,$3) r", [validationTitle.id, validationTitle.revision, randomUUID()]);
+  await scalar("SELECT public.save_collection_case($1,'TÍTULO PAGO','Relato sintético para validação',NULL,NULL,$2,0,$3,true,$4) r", [validationTitle.id, validationTitle.revision, today, randomUUID()]);
+  const pendingValidation = await scalar('SELECT to_jsonb(t) r FROM public.receivable_titles t WHERE id=$1', [validationTitle.id]);
+  const validationResult = await scalar("SELECT public.validate_receivable_payment_v2($1,'CONFIRM',$2,14500,'Retenção sintética','Conferência sintética para restauração',$3,$4) r", [pendingValidation.id, today, pendingValidation.revision, randomUUID()]);
+  assert.equal(validationResult.received_cents, 14500);
+  assert.equal(validationResult.adjustment_cents, 500);
   const retiredTitle = await scalar('SELECT to_jsonb(t) r FROM public.receivable_titles t WHERE document=$1', [retired.document]);
   await scalar("SELECT public.collection_work_action($1,'START',$2,$3) r", [retiredTitle.id, retiredTitle.revision, randomUUID()]);
   stayTitle = await scalar('SELECT to_jsonb(t) r FROM public.receivable_titles t WHERE document=$1', [stay.document]);
@@ -132,6 +141,14 @@ async function seed() {
   assert(baseline['public.receivable_report_retirement_events'].some(row => row.event_sequence > 0));
   assert(baseline['cf_private.bank_support_bytes'][0].file_bytes.startsWith('\\x0001ff80'));
   assert.deepEqual(baseline['cf_private.payable_paid_bank_aliases'], [paidBankAlias]);
+  assert.equal(baseline['cf_private.receivable_financial_validation_requests'].length, 1);
+  assert.deepEqual(baseline['cf_private.receivable_financial_validation_requests'][0].result, validationResult);
+  const manualReceipt = baseline['public.receivable_receipts'].find(row => row.id === validationResult.receipt_id);
+  assert.equal(manualReceipt.amount_cents, 14500);
+  assert.equal(manualReceipt.manual_nominal_amount_cents, 15000);
+  assert.equal(manualReceipt.manual_adjustment_cents, 500);
+  assert.equal(manualReceipt.manual_adjustment_reason, 'Retenção sintética');
+  assert.equal(manualReceipt.manual_original_due_date, older);
   console.log('Synthetic fixture:', filled.length, 'populated target tables, all', scope.targets.length, 'targets installed.');
 }
 
@@ -237,6 +254,7 @@ try {
       assert((await registry()).restored_at);
       const before = await allState(); await runScript(resetSql); assert.deepEqual(await allState(), before); await runScript(restoreSql); assert.deepEqual(await allState(), before);
       await owner(); await rejects(() => db.query('UPDATE public.payable_payments SET amount_cents=1'), '42501');
+      await rejects(() => db.query("UPDATE cf_private.receivable_financial_validation_requests SET result='{}'"), '42501');
       const row = baseline['public.receivable_report_retirement_events'][0];
       const sequenceName = await scalar("SELECT pg_get_serial_sequence('public.receivable_report_retirement_events','event_sequence') r");
       assert(Number(await scalar(`SELECT last_value r FROM ${relation(sequenceName)}`)) >= row.event_sequence);
@@ -251,6 +269,7 @@ try {
         const run = await partial.scalar('SELECT to_jsonb(r) r FROM cf_operations.base_resets r WHERE operation_key=$1', [operation]);
         assert(Object.keys(run.counts).length < scope.targets.length);
         assert(!Object.hasOwn(run.counts, 'public.receivable_report_retirement_events'));
+        assert(!Object.hasOwn(run.counts, 'cf_private.receivable_financial_validation_requests'));
         assert.equal((await partial.scalar("SELECT public.list_commercial_items('2026-10-01') r")).count, 0);
         await partial.db.exec(restoreSql);
         assert.equal((await partial.scalar("SELECT public.list_commercial_items('2026-10-01') r")).count, 1);
