@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { deflateRawSync } from 'node:zlib';
-import { parseReferenceCsv, streamReferenceWorkbook, inspectReferenceZip, REFERENCE_HEADERS, REFERENCE_LIMITS, referenceCsvRow, referenceSha256, safeReferenceExportCell } from './collection-reference-parser.mjs';
+import { parseReferenceCsv, streamReferenceWorkbook, inspectReferenceZip, REFERENCE_HEADERS, REFERENCE_CONTACT_REPORT_HEADERS, REFERENCE_LIMITS, referenceCsvRow, referenceSha256, safeReferenceExportCell } from './collection-reference-parser.mjs';
 
 const encode = (text) => new TextEncoder().encode(text);
 const xml = (value) => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -21,7 +21,7 @@ function zip(parts, options = {}) {
 }
 function row(line, values) { return `<row r="${line}">${values.map((value, index) => value === null ? '' : typeof value === 'object' ? `<c r="${String.fromCharCode(65 + index)}${line}" ${value.attributes ?? ''}>${value.inner}</c>` : `<c r="${String.fromCharCode(65 + index)}${line}" t="inlineStr"><is><t xml:space="preserve">${xml(value)}</t></is></c>`).join('')}</row>`; }
 function workbook(mode, rows, options = {}) {
-  const sheet = `<worksheet><sheetData>${row(1, REFERENCE_HEADERS[mode])}${rows.join('')}</sheetData></worksheet>`;
+  const sheet = `<worksheet><sheetData>${row(1, options.headers ?? REFERENCE_HEADERS[mode])}${rows.join('')}</sheetData></worksheet>`;
   const parts = [
     ['xl/workbook.xml', options.workbook ?? '<workbook xmlns:r="urn:relationships"><sheets><sheet name="Referências" sheetId="1" r:id="rId1"/></sheets></workbook>'],
     ['xl/_rels/workbook.xml.rels', '<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'],
@@ -31,6 +31,7 @@ function workbook(mode, rows, options = {}) {
   return zip(parts, options);
 }
 const csv = (mode, rows) => referenceCsvRow(['source_line', ...REFERENCE_HEADERS[mode]]) + rows.map(referenceCsvRow).join('');
+const contactReportCsv = (rows) => referenceCsvRow(['source_line', ...REFERENCE_CONTACT_REPORT_HEADERS]) + rows.map(referenceCsvRow).join('');
 async function convert(bytes, mode, options = {}) { const chunks = []; const result = await streamReferenceWorkbook(bytes, mode, { ...options, onChunk: async chunk => { chunks.push(chunk); await options.onChunk?.(chunk); } }); return { ...result, chunks }; }
 
 test('server CSV parser preserves literal fields, quoted lines and optional contracts without inventing identifiers', () => {
@@ -79,6 +80,75 @@ test('the real spaced phone headers and only their explicit historic aliases are
   const original = csv('contacts', [[2, 'Cliente', '', '11', '999998888']]);
   assert.equal(parseReferenceCsv(original.replaceAll('T. 1:', 'T.1:'), 'contacts').rows.length, 1);
   assert.throws(() => parseReferenceCsv(original.replace('T. 1: ddd', 'DDD'), 'contacts'), /Cabeçalho/);
+});
+test('grouped contact report reads full DDD phones and only explicit WhatsApp channels', () => {
+  const source = contactReportCsv([[12, ' Órgão  Sintético ', 'A@example.com\nb@example.org; a@example.com', '(31) 3222-2222\n(31) 98888-7777', '(31) 98888-7777 / (21) 97777-6666']]);
+  const parsed = parseReferenceCsv(source, 'contacts');
+  assert.deepEqual(parsed.rows[0], { source_line: 12, client_name: 'Órgão Sintético', client_document: null,
+    emails: ['a@example.com', 'b@example.org'], phones: ['3132222222', '31988887777', '21977776666'],
+    notes: 'WhatsApp cadastrado: (31) 98888-7777, (21) 97777-6666' });
+  assert.deepEqual(parsed.problems, []);
+  const ordinary = parseReferenceCsv(contactReportCsv([[2, 'Órgão', '', '(31) 98888-7777', '']]), 'contacts');
+  assert.equal(ordinary.rows[0].notes, null); assert.deepEqual(ordinary.rows[0].phones, ['31988887777']);
+  const onlyWhatsApp = parseReferenceCsv(contactReportCsv([[2, 'Órgão', '', '', '(31) 98888-7777']]), 'contacts');
+  assert.equal(onlyWhatsApp.stats.quarantined_rows, 0); assert.deepEqual(onlyWhatsApp.rows[0].phones, ['31988887777']);
+});
+test('grouped report preserves explicit extensions and toll-free references without inventing DDD', () => {
+  const source = contactReportCsv([[2, 'Órgão', 'a@example.com', '(31) 3222-2222 ramal 1035\n0800 032 1011\n0800 031 7140 ramal 203', '']]);
+  const parsed = parseReferenceCsv(source, 'contacts');
+  assert.deepEqual(parsed.rows[0].phones, ['3132222222', '08000321011', '08000317140']);
+  assert.equal(parsed.rows[0].notes, 'Telefone informado: (31) 3222-2222 ramal 1035\nTelefone informado: 0800 031 7140 ramal 203');
+  assert.deepEqual(parsed.problems.map(item => item.code), ['WARN_PHONE_NOTE']);
+  assert.equal(parsed.stats.quarantined_rows, 0);
+  const plainTollFree = parseReferenceCsv(contactReportCsv([[2, 'Órgão', '', '0800 032 1011', '']]), 'contacts');
+  assert.deepEqual(plainTollFree.rows[0].phones, ['08000321011']); assert.equal(plainTollFree.rows[0].notes, null); assert.deepEqual(plainTollFree.problems, []);
+});
+test('grouped phone parsing rejects missing DDD, implicit country handling and malformed WhatsApp', () => {
+  const parsed = parseReferenceCsv(contactReportCsv([[2, 'Órgão', 'a@example.com', '99999-8888\n+55 (31) 98888-7777\n0800abc1011', '(31) 98888-7777\n1234\n+55 (21) 97777-6666']]), 'contacts');
+  assert.deepEqual(parsed.rows[0].phones, ['31988887777']);
+  assert.equal(parsed.rows[0].notes, 'WhatsApp cadastrado: (31) 98888-7777');
+  assert.deepEqual(parsed.problems.map(item => item.code), ['WARN_INVALID_PHONE', 'WARN_INVALID_WHATSAPP']);
+  const missing = parseReferenceCsv(contactReportCsv([[2, 'Órgão', '', '99999-8888', 'errado']]), 'contacts');
+  assert.equal(missing.stats.quarantined_rows, 1); assert(missing.problems.some(item => item.code === 'MISSING_CONTACT'));
+});
+test('new report headings are exact and cannot be mixed with legacy columns or descriptions', async () => {
+  const source = contactReportCsv([[2, 'Órgão', 'a@example.com', '(31) 98888-7777', '']]);
+  for (const modified of [source.replace('"E-mails"', '"Email"'), source.replace('"Telefones"', '"T. 1: ddd"'), source.replace('"WhatsApp cadastrado"', '"Celular"')]) assert.throws(() => parseReferenceCsv(modified, 'contacts'), /Cabeçalho/);
+  assert.throws(() => parseReferenceCsv(source, 'descriptions'), /Cabeçalho/);
+  await assert.rejects(convert(workbook('contacts', [row(2, ['Órgão', 'a@example.com', '(31) 98888-7777', ''])], { headers: ['Entidade: nome', 'E-mails', 'Telefones', 'Celular'] }), 'contacts'), /Cabeçalho/);
+});
+test('new report keeps source fields and physical lines in streamed artifacts while deduplicating exact rows', async () => {
+  const values = ['Órgão Sintético', 'A@example.com\nb@example.org', '(31) 3222-2222 ramal 12', '(31) 98888-7777'];
+  const source = workbook('contacts', [row(2, values), row(3, ['', '', '', '']), row(9, values), row(10, [...values.slice(0, 3), '(21) 97777-6666'])], { headers: REFERENCE_CONTACT_REPORT_HEADERS });
+  const result = await convert(source, 'contacts'), artifact = new TextDecoder().decode(result.chunks[0].csv);
+  assert.equal(result.stats.source_rows, 4); assert.equal(result.stats.blank_rows, 1); assert.equal(result.stats.duplicate_rows, 1); assert.equal(result.stats.emitted_rows, 2);
+  assert(artifact.startsWith(referenceCsvRow(['source_line', ...REFERENCE_CONTACT_REPORT_HEADERS])));
+  assert(artifact.includes(referenceCsvRow([2, ...values])));
+  assert.deepEqual(parseReferenceCsv(artifact, 'contacts').rows.map(item => item.source_line), [2, 10]);
+  assert.equal(await referenceSha256(result.chunks[0].csv), result.chunks[0].sha256);
+  assert.equal(await referenceSha256(source), result.sourceSha256);
+  assert.equal(result.stats.warning_count, 2); assert.equal(result.stats.quarantined_rows, 0);
+  await assert.rejects(convert(workbook('contacts', [row(2, ['Órgão', 'a@example.com', '(31) 98888-7777', '', 'coluna extra'])], { headers: REFERENCE_CONTACT_REPORT_HEADERS }), 'contacts'), /fora das colunas/);
+  await assert.rejects(convert(workbook('contacts', [row(2, ['Órgão', 'a@example.com', { inner: '<f>1+1</f><v>2</v>' }, ''])], { headers: REFERENCE_CONTACT_REPORT_HEADERS }), 'contacts'), /fórmula/);
+});
+test('new grouped contacts keep method and annotation caps without silently truncating valid imports', () => {
+  const many = Array.from({ length: 51 }, (_, index) => `(31) 9${String(index).padStart(8, '0')}`).join('\n');
+  const parsed = parseReferenceCsv(contactReportCsv([[2, 'Órgão', 'a@example.com', '', many]]), 'contacts');
+  assert.equal(parsed.rows[0].phones.length, 50); assert.equal(parsed.stats.quarantined_rows, 1); assert(parsed.problems.some(item => item.code === 'LIMIT_METHODS'));
+  const notes = Array.from({ length: 180 }, (_, index) => `(31) 3222-2222 ramal ${index}`).join('\n');
+  const overlong = parseReferenceCsv(contactReportCsv([[2, 'Órgão', 'a@example.com', notes, '']]), 'contacts');
+  assert.equal(overlong.rows[0].notes, null); assert.equal(overlong.stats.quarantined_rows, 1); assert(overlong.problems.some(item => item.code === 'FIELD_TOO_LONG' && item.field === 'notes'));
+  const control = parseReferenceCsv(contactReportCsv([[2, 'Órgão', 'a@example.com', '(31)\u000B3222-2222 ramal 12', '']]), 'contacts');
+  assert.equal(control.stats.quarantined_rows, 1); assert(control.problems.some(item => item.code === 'FIELD_TOO_LONG'));
+});
+test('new report streams every chunk with its explicit grouped header', async () => {
+  const rows = Array.from({ length: 1001 }, (_, index) => row(index + 2, ['Órgão ' + index, 'a@example.com', '(31) 3222-2222', '(31) 98888-7777']));
+  const result = await convert(workbook('contacts', rows, { headers: REFERENCE_CONTACT_REPORT_HEADERS }), 'contacts');
+  assert.equal(result.chunks.length, 3); assert.equal(result.stats.emitted_rows, 1001); assert.equal(result.stats.problem_count, 0);
+  for (const chunk of result.chunks) {
+    assert(new TextDecoder().decode(chunk.csv).startsWith(referenceCsvRow(['source_line', ...REFERENCE_CONTACT_REPORT_HEADERS])));
+    assert.equal(parseReferenceCsv(chunk.csv, 'contacts').rows.length, chunk.rowCount);
+  }
 });
 test('streamed XLSX preserves physical lines, skips blanks and only deduplicates complete equal records', async () => {
   const result = await convert(workbook('descriptions', [row(2, ['Cliente', '', '001', 'Descrição A', '9']), row(3, ['', '', '', '', '']), row(9, ['Cliente', '', '001', 'Descrição A', '9']), row(10, ['Cliente', '', '001', 'Descrição B', '9']), row(14, ['', '', '002', 'Órfã', '9'])]), 'descriptions');

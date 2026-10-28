@@ -12,6 +12,14 @@ test('unknown codes, diagnostic phases, request IDs and schema versions never be
  assert.deepEqual(error,{action:'history',code:'REF_SERVICE_UNAVAILABLE',activation_required:false,status:503});
  assert.equal(collectionReferenceFailureReference(error),'HISTÓRICO · HTTP503 · REF_SERVICE_UNAVAILABLE · SERVIÇO SEM DIAGNÓSTICO');
 });
+test('contact refresh diagnostics distinguish database activation from the new source layout without exposing contacts',()=>{
+ const error=makeCollectionReferenceFailure({action:'preview',status:409,payload:{code:'P0052',activation_required:true,schema_version:'collection-reference-import/2026-10-28.1',diagnostic:{request_id:requestId,phase:'preview'},error:'private contact rows'}});
+ assert.equal(error.code,'P0052');assert.equal(error.schema_version,'collection-reference-import/2026-10-28.1');
+ assert.match(collectionReferenceFailureMessage(error,'fallback'),/atualização 052/);
+ assert.doesNotMatch(JSON.stringify(error),/private|contact rows/);
+ const incompatible=makeCollectionReferenceFailure({action:'stage',status:422,payload:{code:'REFERENCE_CSV_INVALID'}});
+ assert.match(collectionReferenceFailureMessage(incompatible,'fallback'),/atualize a função collection-reference-import/);
+});
 test('legacy HTTP failures retain actionable safe categories without reading provider error strings',()=>{
  for(const [status,code] of [[401,'PGRST301'],[403,'42501'],[404,'REF_FUNCTION_NOT_FOUND'],[408,'REF_UPSTREAM_TIMEOUT'],[429,'REF_RATE_LIMITED'],[500,'REF_SERVICE_UNAVAILABLE'],[504,'REF_UPSTREAM_TIMEOUT'],[422,'REF_REQUEST_INVALID']])assert.equal(makeCollectionReferenceFailure({action:'preview',status,payload:{error:'private database content'}}).code,code);
  for(const code of ['57014','55P03','P0028','PGRST202'])assert.equal(makeCollectionReferenceFailure({action:'preview',status:503,payload:{code}}).code,code);

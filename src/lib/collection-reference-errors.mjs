@@ -1,8 +1,8 @@
 const actions = new Set(['begin','status','history','verify_original','stage','finish_prepare','preview','publish']);
 const phases = new Set(['configuration','auth','access','body','begin','job','storage','stage','finish','preview','publish','history']);
-const codes = new Set(['42501','40001','23505','23514','22023','54000','57014','55P03','P0002','P0027','P0028','PGRST202','PGRST205','PGRST301','PGRST303','42P01','42883','ORIGINAL_MISSING','SOURCE_MISMATCH',
+const codes = new Set(['42501','40001','23505','23514','22023','54000','57014','55P03','P0002','P0027','P0028','P0052','PGRST202','PGRST205','PGRST301','PGRST303','42P01','42883','ORIGINAL_MISSING','SOURCE_MISMATCH','REFERENCE_CSV_INVALID',
   'REF_UPSTREAM_TIMEOUT','REF_SERVICE_UNAVAILABLE','REF_INVALID_RESPONSE','REF_RATE_LIMITED','REF_REQUEST_TIMEOUT','REF_REQUEST_INVALID','REF_INVALID_PREVIEW','REF_NETWORK_ERROR','REF_AUTH_UNAVAILABLE','REF_FUNCTION_NOT_FOUND','REF_UNEXPECTED_ERROR']);
-const schema = 'collection-reference-import/2026-10-27.1';
+const schemas = new Set(['collection-reference-import/2026-10-27.1', 'collection-reference-import/2026-10-28.1']);
 const uuid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const actionOf = action => actions.has(action) ? action : 'preview';
@@ -22,7 +22,7 @@ export function makeCollectionReferenceFailure({ action, status, code, payload }
   const http = Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
   const result = { action: actionOf(action), code: codes.has(code) ? code : codes.has(source.code) ? source.code : fromStatus(http), activation_required: source.activation_required === true };
   if (http !== null) result.status = http;
-  if (source.schema_version === schema) result.schema_version = schema;
+  if (schemas.has(source.schema_version)) result.schema_version = source.schema_version;
   if (typeof diagnostic.request_id === 'string' && uuid.test(diagnostic.request_id)) result.request_id = diagnostic.request_id;
   if (phases.has(diagnostic.phase)) result.phase = diagnostic.phase;
   return result;
@@ -37,6 +37,7 @@ export function collectionReferenceFailureReference(error, action = 'preview') {
 }
 export function collectionReferenceFailureMessage(error, fallback) {
   const source = object(error) ? error : {}, code = codes.has(source.code) ? source.code : 'REF_UNEXPECTED_ERROR';
+  if (code === 'P0052') return 'Ative a atualização 052 de contatos no banco de dados antes de atualizar os contatos dos órgãos.';
   const problem = code === '57014' ? 'O banco interrompeu a conferência antes de concluí-la.'
     : code === '55P03' ? 'A preparação está ocupada por outra operação.'
     : ['REF_REQUEST_TIMEOUT','REF_UPSTREAM_TIMEOUT'].includes(code) ? 'A conferência excedeu o tempo de resposta do serviço.'
@@ -47,6 +48,7 @@ export function collectionReferenceFailureMessage(error, fallback) {
     : code === 'REF_RATE_LIMITED' ? 'O serviço recebeu muitas solicitações. Aguarde um pouco antes de conferir novamente.'
     : code === 'REF_SERVICE_UNAVAILABLE' ? 'O serviço de importação está temporariamente indisponível.'
     : code === 'REF_REQUEST_INVALID' ? 'O serviço não aceitou esta solicitação. Atualize a página antes de conferir novamente.'
+    : code === 'REFERENCE_CSV_INVALID' ? 'O serviço não reconheceu o formato dos contatos. Confira os cabeçalhos e atualize a função collection-reference-import para ler o novo relatório.'
     : null;
   if (!problem) return fallback;
   return source.action === 'publish'

@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.18.8",
+  "version": "0.18.9",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -92,7 +92,9 @@
     "bundle:paid-bank-rules": "node scripts/bundle-paid-bank-rules.mjs",
     "test:paid-bank-rules-sql": "node scripts/bundle-paid-bank-rules.mjs && node scripts/test-paid-bank-rules-sql.mjs",
     "bundle:receivables-delinquency": "node scripts/bundle-receivables-delinquency.mjs",
-    "test:receivables-delinquency-sql": "node scripts/bundle-receivables-delinquency.mjs && node scripts/test-receivables-delinquency-sql.mjs"
+    "test:receivables-delinquency-sql": "node scripts/bundle-receivables-delinquency.mjs && node scripts/test-receivables-delinquency-sql.mjs",
+    "bundle:collection-contact-refresh": "node scripts/bundle-collection-contact-refresh.mjs",
+    "test:collection-contact-refresh-sql": "node scripts/bundle-collection-contact-refresh.mjs && node scripts/test-collection-contact-refresh-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

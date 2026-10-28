@@ -2,11 +2,16 @@
 // artifact; XLSX conversion below runs only in the browser worker (or tests).
 export const REFERENCE_LIMITS = Object.freeze({ fileBytes: 16 * 1024 * 1024, expandedBytes: 128 * 1024 * 1024, sharedStringBytes: 14 * 1024 * 1024, rows: 300000, chunkRows: 500, chunkBytes: 256 * 1024, entries: 256, cellBytes: 128 * 1024 });
 export const REFERENCE_HEADERS = Object.freeze({ contacts: ['Entidade: nome', 'Endereço: email', 'T. 1: ddd', 'T. 1: número'], descriptions: ['CLIENTE', 'CONTRATO', 'NOTA FISCAL', 'DESCRIÇÃO', 'FILIAL'] });
+export const REFERENCE_CONTACT_REPORT_HEADERS = Object.freeze(['Entidade: nome', 'E-mails', 'Telefones', 'WhatsApp cadastrado']);
 const utf8 = new TextEncoder();
 const fail = (message) => { throw new Error(message); };
 const abortCheck = (signal) => { if (signal?.aborted) throw new DOMException('Importação cancelada.', 'AbortError'); };
 const modeHeaders = (mode) => REFERENCE_HEADERS[mode] ?? fail('Tipo de referência inválido.');
 const headerMatches = (value, expected) => value === expected || (expected === 'T. 1: ddd' && value === 'T.1: ddd') || (expected === 'T. 1: número' && value === 'T.1: número');
+function referenceHeaders(mode, cells) {
+  const candidates = mode === 'contacts' ? [modeHeaders(mode), REFERENCE_CONTACT_REPORT_HEADERS] : [modeHeaders(mode)];
+  return candidates.find((headers) => headers.length === cells.length && cells.every((value, index) => headerMatches(value, headers[index]))) ?? null;
+}
 const clean = (value) => String(value ?? '').trim();
 const clientText = (value) => clean(value).replace(/\s+/gu, ' ');
 const csvCell = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
@@ -37,18 +42,46 @@ function emailValid(value) {
   return local.length <= 64 && !local.startsWith('.') && !local.endsWith('.') && !local.includes('..') && domain.split('.').every((part) => part.length > 0 && part.length <= 63 && !part.startsWith('-') && !part.endsWith('-'));
 }
 const absent = (value) => /^(?:\s*|[-–—.]+|n[ãa]o\s+(?:tem|possui|informado)|sem\s+(?:e-?mail|telefone|contato)|n\/?a|null|undefined)$/iu.test(value);
+const fullPhoneDigits = (value) => {
+  const digits = clean(value).replace(/[()\s.\-]/gu, '');
+  return /^(?:[1-9]\d{9,10}|0800\d{7})$/u.test(digits) ? digits : null;
+};
+const formattedPhone = (digits) => digits.startsWith('0800') ? `${digits.slice(0, 4)} ${digits.slice(4, -4)} ${digits.slice(-4)}` : `(${digits.slice(0, 2)}) ${digits.slice(2, -4)}-${digits.slice(-4)}`;
+function reportPhones(value, whatsapp, issue, annotations) {
+  if (absent(value)) return [];
+  const result = []; let invalid = false, annotated = false;
+  for (const raw of value.split(/[;,/\r\n]+/u).filter((item) => clean(item))) {
+    const token = clean(raw), digits = fullPhoneDigits(token);
+    if (digits) { result.push(digits); continue; }
+    if (!whatsapp) {
+      const extension = /^(.+?)\s+ramal\s+(\d{1,8})$/iu.exec(token);
+      const base = extension ? fullPhoneDigits(extension[1]) : null;
+      if (base) {
+        result.push(base);
+        annotations.push(`Telefone informado: ${token}`); annotated = true; continue;
+      }
+    }
+    invalid = true;
+  }
+  if (annotated) issue('WARN_PHONE_NOTE', 'phones', 'Telefones com ramal foram preservados nas observações; confira esses canais.');
+  if (invalid || !result.length && !annotated) issue(whatsapp ? 'WARN_INVALID_WHATSAPP' : 'WARN_INVALID_PHONE', whatsapp ? 'whatsapp' : 'phones', whatsapp
+    ? 'Há números de WhatsApp sem DDD e número válidos; apenas os canais explicitamente reconhecidos serão considerados.'
+    : 'Há telefones sem DDD e número válidos; nenhum DDD ou código de país foi presumido.');
+  return [...new Set(result)];
+}
 
 /** CSV shape/cap errors throw; source content problems remain private row issues. */
 export function parseReferenceCsv(input, mode) {
-  const headers = modeHeaders(mode);
+  modeHeaders(mode);
   const bytes = typeof input === 'string' ? utf8.encode(input) : input;
   if (!(bytes instanceof Uint8Array) || bytes.byteLength > REFERENCE_LIMITS.chunkBytes) fail('Trecho CSV inválido ou maior que 256 KiB.');
   let text;
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/^\uFEFF/, ''); } catch { fail('CSV deve usar UTF-8 válido.'); }
   const matrix = csvMatrix(text);
   if (matrix.length < 2 || matrix.length > REFERENCE_LIMITS.chunkRows + 1) fail('O trecho CSV deve conter de 1 a 500 linhas.');
-  const expected = ['source_line', ...headers];
-  if (matrix[0].length !== expected.length || matrix[0].some((value, index) => !headerMatches(value, expected[index]))) fail('Cabeçalho CSV de referência inválido.');
+  const headers = matrix[0][0] === 'source_line' ? referenceHeaders(mode, matrix[0].slice(1)) : null;
+  if (!headers) fail('Cabeçalho CSV de referência inválido.');
+  const expected = ['source_line', ...headers], groupedContacts = headers === REFERENCE_CONTACT_REPORT_HEADERS;
   const rows = [], problems = [], sourceLines = new Set();
   for (const cells of matrix.slice(1)) {
     if (cells.length !== expected.length) fail('CSV contém quantidade inesperada de colunas.');
@@ -67,8 +100,14 @@ export function parseReferenceCsv(input, mode) {
         if (invalid) issue('WARN_INVALID_EMAIL', 'emails', 'Há e-mails não reconhecidos; apenas endereços com formato válido serão considerados.');
       }
       emails = [...new Set(emails)];
-      const dddRaw = clean(cells[3]), phoneRaw = clean(cells[4]); let phones = [];
-      if (!absent(dddRaw) || !absent(phoneRaw)) {
+      const dddRaw = clean(cells[3]), phoneRaw = clean(cells[4]), annotations = []; let phones = [], notes = null;
+      if (groupedContacts) {
+        phones = reportPhones(dddRaw, false, issue, annotations);
+        const whatsapp = reportPhones(phoneRaw, true, issue, annotations);
+        phones.push(...whatsapp);
+        if (whatsapp.length) annotations.unshift(`WhatsApp cadastrado: ${whatsapp.map(formattedPhone).join(', ')}`);
+        notes = bounded([...new Set(annotations)].join('\n'), 5000, 'notes') || null;
+      } else if (!absent(dddRaw) || !absent(phoneRaw)) {
         const ddd = dddRaw.replace(/[()\s]/g, ''); let invalid = !/^[1-9]\d$/.test(ddd);
         const tokens = phoneRaw.split(/[;,/\n]+/u).filter((value) => clean(value));
         if (!tokens.length) invalid = true;
@@ -78,7 +117,7 @@ export function parseReferenceCsv(input, mode) {
       phones = [...new Set(phones)];
       if (emails.length > 50 || phones.length > 50) { issue('LIMIT_METHODS', 'contacts', 'O cliente excede o limite de canais por linha.'); emails = emails.slice(0, 50); phones = phones.slice(0, 50); }
       if (!emails.length && !phones.length) issue('MISSING_CONTACT', 'contacts', 'A linha não possui e-mail ou telefone com formato válido.');
-      rows.push({ source_line, client_name, client_document: null, emails, phones, notes: null });
+      rows.push({ source_line, client_name, client_document: null, emails, phones, notes });
     } else {
       const contract = bounded(clean(cells[2]), 300, 'contract') || null;
       const document = bounded(clean(cells[3]), 150, 'document');
@@ -246,7 +285,7 @@ export async function referenceSha256(bytes) { return Array.from(new Uint8Array(
 
 /** Browser-worker/Node streaming conversion. Awaiting onChunk is the backpressure. */
 export async function streamReferenceWorkbook(bytes, mode, options) {
-  const headers = modeHeaders(mode); if (typeof options?.onChunk !== 'function') fail('Destino dos trechos CSV não informado.');
+  let headers = modeHeaders(mode); if (typeof options?.onChunk !== 'function') fail('Destino dos trechos CSV não informado.');
   const signal = options.signal; abortCheck(signal); const entries = inspectReferenceZip(bytes), readEntries = new Set();
   const readText = async (name) => { const entry = entries.get(name); if (!entry) fail('Estrutura XLSX incompleta.'); readEntries.add(name); return entryText(bytes, entry, signal); };
   const workbook = await readText('xl/workbook.xml'), rels = await readText('xl/_rels/workbook.xml.rels');
@@ -268,7 +307,7 @@ export async function streamReferenceWorkbook(bytes, mode, options) {
   }
   const stats = { source_rows: 0, nonblank_rows: 0, blank_rows: 0, duplicate_rows: 0, emitted_rows: 0, chunk_count: 0, problem_count: 0, warning_count: 0, quarantined_rows: 0, source_line_max: 0, header_source_line: 0, extra_column_rows: 0, extra_cells: 0, shared_string_bytes: sharedBytes };
   const seen = new Set(); let previousLine = 0, headerSeen = false, pending = [], csvParts = [], csvSize = 0, chunkLines = [];
-  const csvHeader = referenceCsvRow(['source_line', ...headers]);
+  let csvHeader = referenceCsvRow(['source_line', ...headers]);
   const flushChunk = async () => {
     if (!chunkLines.length) return;
     abortCheck(signal); const csv = utf8.encode(csvHeader + csvParts.join(''));
@@ -293,7 +332,12 @@ export async function streamReferenceWorkbook(bytes, mode, options) {
   for await (const xmlRow of elements(bytes, entries.get(target), 'row', signal, REFERENCE_LIMITS.chunkBytes * 2)) {
     abortCheck(signal); const { line, cells } = rowCells(xmlRow, shared, formats, previousLine); previousLine = line;
     const raw = headers.map((_, index) => cells[index] ?? ''), nonblank = cells.some((value) => clean(value));
-    if (!headerSeen) { if (!nonblank) continue; if (raw.some((value, index) => !headerMatches(clean(value).replace(/^\uFEFF/u, ''), headers[index])) || cells.slice(headers.length).some((value) => clean(value))) fail('Cabeçalho XLSX diferente das colunas oficiais desta referência.'); headerSeen = true; stats.header_source_line = line; continue; }
+    if (!headerSeen) {
+      if (!nonblank) continue;
+      const matched = referenceHeaders(mode, raw.map((value) => clean(value).replace(/^\uFEFF/u, '')));
+      if (!matched || cells.slice(headers.length).some((value) => clean(value))) fail('Cabeçalho XLSX diferente das colunas oficiais desta referência.');
+      headers = matched; csvHeader = referenceCsvRow(['source_line', ...headers]); headerSeen = true; stats.header_source_line = line; continue;
+    }
     stats.source_rows++; stats.source_line_max = line;
     if (stats.source_rows > REFERENCE_LIMITS.rows) fail('A referência ultrapassa 300.000 linhas de origem.');
     if (!nonblank) { stats.blank_rows++; continue; } stats.nonblank_rows++;

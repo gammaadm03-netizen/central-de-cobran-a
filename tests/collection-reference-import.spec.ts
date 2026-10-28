@@ -1,17 +1,19 @@
 import { expect, test, type Page } from '@playwright/test';
 import JSZip from 'jszip';
 import { createHash } from 'node:crypto';
+import { parseReferenceCsv } from '../src/lib/collection-reference-parser.mjs';
 
 // All workbooks, people and addresses below are synthetic. Never load customer attachments.
 const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const id = (n: number) => '98000000-0000-4000-8000-' + String(n).padStart(12, '0');
 const fixed = new Date('2026-10-18T15:00:00Z');
 const contactHeaders = ['Entidade: nome', 'Endereço: email', 'T. 1: ddd', 'T. 1: número'];
+const refreshedContactHeaders = ['Entidade: nome', 'E-mails', 'Telefones', 'WhatsApp cadastrado'];
 const descriptionHeaders = ['CLIENTE', 'CONTRATO', 'NOTA FISCAL', 'DESCRIÇÃO', 'FILIAL'];
 type Mode = 'contacts' | 'descriptions';
-async function workbook(mode: Mode = 'contacts', quantity = 3) {
-  const matrix: string[][] = [mode === 'contacts' ? contactHeaders : descriptionHeaders];
-  for (let n = 1; n <= quantity; n++) matrix.push(mode === 'contacts'
+async function workbook(mode: Mode = 'contacts', quantity = 3, providedMatrix?: string[][]) {
+  const matrix: string[][] = providedMatrix ?? [mode === 'contacts' ? contactHeaders : descriptionHeaders];
+  for (let n = 1; !providedMatrix && n <= quantity; n++) matrix.push(mode === 'contacts'
     ? ['Cliente sintético para importação de contatos ' + n + ' ' + 'c'.repeat(150), 'synthetic' + n + '@example.invalid', '', '']
     : ['Cliente sintético ' + n, n % 2 ? '' : 'Contrato sintético', '000' + n, 'Descrição sintética ' + n, '37']);
   const xml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
@@ -32,6 +34,7 @@ interface Options {
   role?: string; missingWrite?: boolean; warning?: boolean; lostStageAck?: boolean; holdFirstStage?: boolean;
   lostPublishAck?: boolean; stalePublish?: boolean; existingPublished?: boolean; existingUnverified?: boolean;
   badSource?: boolean; activationMissing?: boolean; previewFailureOnce?: '57014' | '55P03'; previewFailureOnAttempt?: number; malformedPreviewOnce?: boolean;
+  refreshVersionMissing?: boolean; publishVersionMissingOnce?: boolean;
 }
 async function setup(page: Page, options: Options = {}) {
   await page.clock.setFixedTime(fixed);
@@ -43,9 +46,11 @@ async function setup(page: Page, options: Options = {}) {
   const staged = new Map<number, { hash: string; count: number }>(), published = new Map<string, any>();
   let job: any = null, originalStored = !!options.existingUnverified, stageFailure = !!options.lostStageAck, publishFailure = !!options.lostPublishAck, stale = !!options.stalePublish;
   let previewFailure = options.previewFailureOnce, previewAttempts = 0, malformedPreview = !!options.malformedPreviewOnce;
+  let missingPublishVersion = !!options.publishVersionMissingOnce;
   let release!: () => void; const stageHold = new Promise<void>(resolve => { release = resolve; }); let stageWasHeld = false;
   const preview = () => ({
     job_id: job.job_id, mode: job.mode, status: job.status, financial_revision: stale ? 'financial-1' : 'financial-2', context_revision: 'reference-1',
+    ...(job.mode === 'CONTACTS' && !options.refreshVersionMissing ? { contact_refresh_version: '052' } : {}),
     source: { name: job.source_name, size: job.source_size, sha256: job.source_sha256, verified: true }, manifest_sha256: 'b'.repeat(64),
     row_count: job.staged_rows, deduplicated_count: 0, eligible_count: options.warning ? Math.max(0, job.staged_rows - 1) : job.staged_rows,
     matched_title_count: job.staged_rows, unmatched_count: options.warning ? 1 : 0, paid_only_count: 0, ambiguous_count: 0, invalid_count: options.warning ? 1 : 0,
@@ -82,7 +87,7 @@ async function setup(page: Page, options: Options = {}) {
     if (body.action === 'stage') {
       const raw = Buffer.from(body.chunk_base64, 'base64'), hash = createHash('sha256').update(raw).digest('hex');
       expect(hash).toBe(body.chunk_sha256); expect(raw.length).toBeLessThanOrEqual(256 * 1024);
-      const rows = raw.toString('utf8').trimEnd().split(/\r?\n/).length - 1, previous = staged.get(body.chunk_index);
+      const rows = parseReferenceCsv(raw, job.mode === 'CONTACTS' ? 'contacts' : 'descriptions').rows.length, previous = staged.get(body.chunk_index);
       expect(rows).toBeGreaterThan(0); expect(rows).toBeLessThanOrEqual(500); if (previous) expect(previous.hash).toBe(hash);
       staged.set(body.chunk_index, { hash, count: rows }); job.status = 'STAGING'; job.staged_chunks = staged.size; job.staged_rows = [...staged.values()].reduce((sum, part) => sum + part.count, 0);
       if (options.holdFirstStage && !stageWasHeld) { stageWasHeld = true; await stageHold; }
@@ -103,9 +108,10 @@ async function setup(page: Page, options: Options = {}) {
       if (published.has(body.request_id)) return reply(published.get(body.request_id));
       if (stale) { stale = false; return reply({ code: '40001', error: 'private SQL revision details' }, 409); }
       job.status = 'PUBLISHED';
-      const result = { job_id: job.job_id, status: 'PUBLISHED', done: true, processed_rows: job.staged_rows, published_rows: options.warning ? Math.max(0, job.staged_rows - 1) : job.staged_rows, skipped_manual_rows: 1, quarantined_rows: options.warning ? 1 : 0, remaining_rows: 0 };
+      const result = { job_id: job.job_id, status: 'PUBLISHED', done: true, processed_rows: job.staged_rows, published_rows: options.warning ? Math.max(0, job.staged_rows - 1) : job.staged_rows, skipped_manual_rows: 1, quarantined_rows: options.warning ? 1 : 0, remaining_rows: 0, ...(job.mode === 'CONTACTS' ? { contact_refresh_version: '052' } : {}) };
       published.set(body.request_id, result);
       if (publishFailure) { publishFailure = false; return reply({ error: 'private response lost' }, 503); }
+      if (missingPublishVersion) { missingPublishVersion = false; const { contact_refresh_version: _version, ...unconfirmed } = result; return reply(unconfirmed); }
       return reply(result);
     }
     throw new Error('Unexpected reference action ' + body.action);
@@ -138,9 +144,59 @@ test('requires explicit acknowledgement of pending lines and preserves manual ch
   const seen = await setup(page, { warning: true }); await openReferences(page); await prepare(page);
   await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true })).toBeDisabled(); await page.getByRole('checkbox').check();
-  page.once('dialog', dialog => { expect(dialog.message()).toContain('contatos-sinteticos.xlsx'); expect(dialog.message()).toContain('Alterações manuais serão preservadas'); return dialog.accept(); }); await page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Importação concluída'); await expect(page.getByRole('status')).toContainText('1 alterações manuais preservadas'); expect(seen.calls.find(call => call.action === 'publish')?.body.confirm_quarantine).toBe(true);
+  page.once('dialog', dialog => { expect(dialog.message()).toContain('contatos-sinteticos.xlsx'); expect(dialog.message()).toContain('substituirão os dados importados'); expect(dialog.message()).toContain('Clientes ausentes permanecem como estão'); expect(dialog.message()).toContain('Alterações manuais serão preservadas'); return dialog.accept(); }); await page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Importação concluída'); await expect(page.getByRole('status')).toContainText('registros incluídos ou atualizados'); await expect(page.getByRole('status')).toContainText('1 alterações manuais preservadas'); expect(seen.calls.find(call => call.action === 'publish')?.body.confirm_quarantine).toBe(true);
   expect(await page.evaluate(() => ({ local: Object.keys(localStorage), session: Object.keys(sessionStorage) }))).toEqual({ local: [], session: [] });
+});
+
+test('accepts the refreshed organization contact columns and preserves the explicit WhatsApp field in staged source', async ({ page }) => {
+  const seen = await setup(page); await openReferences(page);
+  await expect(page.locator('.collection-reference-sequence')).toContainText('substituem os dados importados anteriormente');
+  await expect(page.locator('.collection-reference-sequence')).toContainText('Clientes ausentes do arquivo e fichas editadas manualmente são preservados');
+  await expect(page.locator('.collection-reference-sequence')).toContainText('WhatsApp cadastrado');
+  await expect(page.locator('.collection-reference-sequence')).toContainText('T. 1: ddd');
+  const bytes = await workbook('contacts', 1, [refreshedContactHeaders,
+    ['Órgão sintético atualizado', 'Financeiro@example.invalid\ncompras@example.invalid', '(31) 3333-4444\n(32) 3222-5555', '(31) 99999-8888']]);
+  await page.locator('#collection-reference-file').setInputFiles({ name: 'contatos-orgaos-atualizados.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: bytes });
+  await page.getByRole('button', { name: 'Preparar e conferir arquivo', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toBeVisible();
+  expect(seen.job().staged_rows).toBe(1); expect(seen.uploads).toHaveLength(1);
+  const call = seen.calls.find(call => call.action === 'stage')!;
+  const raw = Buffer.from(call.body.chunk_base64, 'base64');
+  expect(raw.toString('utf8').split('\r\n')[0]).toBe('"source_line";"Entidade: nome";"E-mails";"Telefones";"WhatsApp cadastrado"');
+  const parsed = parseReferenceCsv(raw, 'contacts');
+  expect(parsed.stats.quarantined_rows).toBe(0); expect(parsed.rows).toHaveLength(1);
+  const row = parsed.rows[0] as { source_line: number; emails: string[]; phones: string[]; notes: string | null };
+  expect(row.source_line).toBe(2); expect(row.emails).toEqual(['financeiro@example.invalid', 'compras@example.invalid']);
+  expect(row.phones).toEqual(expect.arrayContaining(['3133334444', '3232225555', '31999998888']));
+  expect(row.notes).toContain('WhatsApp cadastrado: (31) 99999-8888');
+  expect(row.notes).not.toContain('3333-4444'); expect(row.notes).not.toContain('3222-5555');
+  expect(Object.keys(call.body).sort()).toEqual(['action', 'chunk_base64', 'chunk_index', 'chunk_sha256', 'job_id']);
+  await expect(page.locator('.collection-reference-coverage')).toContainText('1 alterações manuais preservadas');
+});
+
+test('requires the database contact refresh activation before offering publication of a prepared contact file', async ({ page }) => {
+  const seen = await setup(page, { refreshVersionMissing: true }); await openReferences(page); await prepare(page);
+  await expect(page.getByRole('alert')).toContainText('Ative a atualização 052 de contatos no banco de dados');
+  await expect(page.getByRole('alert')).toContainText('A preparação foi preservada');
+  await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true })).toHaveCount(0);
+  expect(seen.job().status).toBe('PREPARED'); expect(seen.staged.size).toBe(1);
+  expect(seen.calls.some(call => call.action === 'publish')).toBe(false);
+  await expect(page.getByRole('button', { name: 'Reanalisar arquivo preparado', exact: true })).toBeVisible();
+});
+
+test('a contact publication without refresh proof keeps the exact confirmation pending until its recorded result is confirmed', async ({ page }) => {
+  const seen = await setup(page, { publishVersionMissingOnce: true }); await openReferences(page); await prepare(page);
+  await expect(page.getByRole('heading', { name: 'Conferência antes de concluir' })).toBeVisible();
+  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação deste arquivo', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Conferir confirmação pendente', exact: true })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Importação concluída' })).toHaveCount(0);
+  await expect(page.locator('#collection-reference-file')).toBeDisabled();
+  await page.getByRole('button', { name: 'Conferir confirmação pendente', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('registros incluídos ou atualizados');
+  const calls = seen.calls.filter(call => call.action === 'publish'); expect(calls).toHaveLength(2);
+  expect(calls[0].body).toEqual(calls[1].body); expect(seen.published.size).toBe(1);
 });
 
 test('pauses preparation at a confirmed chunk boundary and resumes the same original without another upload', async ({ page }) => {
@@ -176,7 +232,7 @@ test('reanalyses a prepared job after a financial revision conflict and uses a f
 });
 
 test('recognises an already published source and an already stored unverified original without uploading over them', async ({ page }) => {
-  const seen = await setup(page, { existingPublished: true }); await openReferences(page); await prepare(page); await expect(page.getByRole('status')).toContainText('Este arquivo já foi concluído');
+  const seen = await setup(page, { existingPublished: true, refreshVersionMissing: true }); await openReferences(page); await prepare(page); await expect(page.getByRole('status')).toContainText('Este arquivo já foi concluído');
   expect(seen.uploads).toHaveLength(0); expect(seen.calls.some(call => ['stage', 'finish_prepare', 'publish'].includes(call.action))).toBe(false);
 });
 

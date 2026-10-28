@@ -2,7 +2,7 @@ import { parseReferenceCsv } from '../../../src/lib/collection-reference-parser.
 
 // This gateway deliberately does not load an XLSX library. The original is
 // preserved privately; only bounded CSV conversion artifacts are parsed here.
-export const COLLECTION_REFERENCE_GATEWAY_SCHEMA = 'collection-reference-import/2026-10-27.1';
+export const COLLECTION_REFERENCE_GATEWAY_SCHEMA = 'collection-reference-import/2026-10-28.1';
 export const REFERENCE_REQUEST_BUDGET_MS = 50000;
 const MAX_ORIGINAL_BYTES = 16 * 1024 * 1024;
 const MAX_CHUNK_BYTES = 256 * 1024;

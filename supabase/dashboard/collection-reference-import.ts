@@ -1,12 +1,17 @@
 // src/lib/collection-reference-parser.mjs
 var REFERENCE_LIMITS = Object.freeze({ fileBytes: 16 * 1024 * 1024, expandedBytes: 128 * 1024 * 1024, sharedStringBytes: 14 * 1024 * 1024, rows: 3e5, chunkRows: 500, chunkBytes: 256 * 1024, entries: 256, cellBytes: 128 * 1024 });
 var REFERENCE_HEADERS = Object.freeze({ contacts: ["Entidade: nome", "Endere\xE7o: email", "T. 1: ddd", "T. 1: n\xFAmero"], descriptions: ["CLIENTE", "CONTRATO", "NOTA FISCAL", "DESCRI\xC7\xC3O", "FILIAL"] });
+var REFERENCE_CONTACT_REPORT_HEADERS = Object.freeze(["Entidade: nome", "E-mails", "Telefones", "WhatsApp cadastrado"]);
 var utf8 = new TextEncoder();
 var fail = (message) => {
   throw new Error(message);
 };
 var modeHeaders = (mode) => REFERENCE_HEADERS[mode] ?? fail("Tipo de refer\xEAncia inv\xE1lido.");
 var headerMatches = (value, expected) => value === expected || expected === "T. 1: ddd" && value === "T.1: ddd" || expected === "T. 1: n\xFAmero" && value === "T.1: n\xFAmero";
+function referenceHeaders(mode, cells) {
+  const candidates = mode === "contacts" ? [modeHeaders(mode), REFERENCE_CONTACT_REPORT_HEADERS] : [modeHeaders(mode)];
+  return candidates.find((headers) => headers.length === cells.length && cells.every((value, index) => headerMatches(value, headers[index]))) ?? null;
+}
 var clean = (value) => String(value ?? "").trim();
 var clientText = (value) => clean(value).replace(/\s+/gu, " ");
 function csvMatrix(text) {
@@ -57,8 +62,39 @@ function emailValid(value) {
   return local.length <= 64 && !local.startsWith(".") && !local.endsWith(".") && !local.includes("..") && domain.split(".").every((part) => part.length > 0 && part.length <= 63 && !part.startsWith("-") && !part.endsWith("-"));
 }
 var absent = (value) => /^(?:\s*|[-–—.]+|n[ãa]o\s+(?:tem|possui|informado)|sem\s+(?:e-?mail|telefone|contato)|n\/?a|null|undefined)$/iu.test(value);
+var fullPhoneDigits = (value) => {
+  const digits = clean(value).replace(/[()\s.\-]/gu, "");
+  return /^(?:[1-9]\d{9,10}|0800\d{7})$/u.test(digits) ? digits : null;
+};
+var formattedPhone = (digits) => digits.startsWith("0800") ? `${digits.slice(0, 4)} ${digits.slice(4, -4)} ${digits.slice(-4)}` : `(${digits.slice(0, 2)}) ${digits.slice(2, -4)}-${digits.slice(-4)}`;
+function reportPhones(value, whatsapp, issue, annotations) {
+  if (absent(value)) return [];
+  const result = [];
+  let invalid = false, annotated = false;
+  for (const raw of value.split(/[;,/\r\n]+/u).filter((item) => clean(item))) {
+    const token = clean(raw), digits = fullPhoneDigits(token);
+    if (digits) {
+      result.push(digits);
+      continue;
+    }
+    if (!whatsapp) {
+      const extension = /^(.+?)\s+ramal\s+(\d{1,8})$/iu.exec(token);
+      const base = extension ? fullPhoneDigits(extension[1]) : null;
+      if (base) {
+        result.push(base);
+        annotations.push(`Telefone informado: ${token}`);
+        annotated = true;
+        continue;
+      }
+    }
+    invalid = true;
+  }
+  if (annotated) issue("WARN_PHONE_NOTE", "phones", "Telefones com ramal foram preservados nas observa\xE7\xF5es; confira esses canais.");
+  if (invalid || !result.length && !annotated) issue(whatsapp ? "WARN_INVALID_WHATSAPP" : "WARN_INVALID_PHONE", whatsapp ? "whatsapp" : "phones", whatsapp ? "H\xE1 n\xFAmeros de WhatsApp sem DDD e n\xFAmero v\xE1lidos; apenas os canais explicitamente reconhecidos ser\xE3o considerados." : "H\xE1 telefones sem DDD e n\xFAmero v\xE1lidos; nenhum DDD ou c\xF3digo de pa\xEDs foi presumido.");
+  return [...new Set(result)];
+}
 function parseReferenceCsv(input, mode) {
-  const headers = modeHeaders(mode);
+  modeHeaders(mode);
   const bytes = typeof input === "string" ? utf8.encode(input) : input;
   if (!(bytes instanceof Uint8Array) || bytes.byteLength > REFERENCE_LIMITS.chunkBytes) fail("Trecho CSV inv\xE1lido ou maior que 256 KiB.");
   let text;
@@ -69,8 +105,9 @@ function parseReferenceCsv(input, mode) {
   }
   const matrix = csvMatrix(text);
   if (matrix.length < 2 || matrix.length > REFERENCE_LIMITS.chunkRows + 1) fail("O trecho CSV deve conter de 1 a 500 linhas.");
-  const expected = ["source_line", ...headers];
-  if (matrix[0].length !== expected.length || matrix[0].some((value, index) => !headerMatches(value, expected[index]))) fail("Cabe\xE7alho CSV de refer\xEAncia inv\xE1lido.");
+  const headers = matrix[0][0] === "source_line" ? referenceHeaders(mode, matrix[0].slice(1)) : null;
+  if (!headers) fail("Cabe\xE7alho CSV de refer\xEAncia inv\xE1lido.");
+  const expected = ["source_line", ...headers], groupedContacts = headers === REFERENCE_CONTACT_REPORT_HEADERS;
   const rows = [], problems = [], sourceLines = /* @__PURE__ */ new Set();
   for (const cells of matrix.slice(1)) {
     if (cells.length !== expected.length) fail("CSV cont\xE9m quantidade inesperada de colunas.");
@@ -99,9 +136,15 @@ function parseReferenceCsv(input, mode) {
         if (invalid) issue("WARN_INVALID_EMAIL", "emails", "H\xE1 e-mails n\xE3o reconhecidos; apenas endere\xE7os com formato v\xE1lido ser\xE3o considerados.");
       }
       emails = [...new Set(emails)];
-      const dddRaw = clean(cells[3]), phoneRaw = clean(cells[4]);
-      let phones = [];
-      if (!absent(dddRaw) || !absent(phoneRaw)) {
+      const dddRaw = clean(cells[3]), phoneRaw = clean(cells[4]), annotations = [];
+      let phones = [], notes = null;
+      if (groupedContacts) {
+        phones = reportPhones(dddRaw, false, issue, annotations);
+        const whatsapp = reportPhones(phoneRaw, true, issue, annotations);
+        phones.push(...whatsapp);
+        if (whatsapp.length) annotations.unshift(`WhatsApp cadastrado: ${whatsapp.map(formattedPhone).join(", ")}`);
+        notes = bounded([...new Set(annotations)].join("\n"), 5e3, "notes") || null;
+      } else if (!absent(dddRaw) || !absent(phoneRaw)) {
         const ddd = dddRaw.replace(/[()\s]/g, "");
         let invalid = !/^[1-9]\d$/.test(ddd);
         const tokens = phoneRaw.split(/[;,/\n]+/u).filter((value) => clean(value));
@@ -120,7 +163,7 @@ function parseReferenceCsv(input, mode) {
         phones = phones.slice(0, 50);
       }
       if (!emails.length && !phones.length) issue("MISSING_CONTACT", "contacts", "A linha n\xE3o possui e-mail ou telefone com formato v\xE1lido.");
-      rows.push({ source_line, client_name, client_document: null, emails, phones, notes: null });
+      rows.push({ source_line, client_name, client_document: null, emails, phones, notes });
     } else {
       const contract = bounded(clean(cells[2]), 300, "contract") || null;
       const document = bounded(clean(cells[3]), 150, "document");
@@ -143,7 +186,7 @@ for (let i = 0; i < 256; i++) {
 }
 
 // supabase/functions/collection-reference-import/handler.mjs
-var COLLECTION_REFERENCE_GATEWAY_SCHEMA = "collection-reference-import/2026-10-27.1";
+var COLLECTION_REFERENCE_GATEWAY_SCHEMA = "collection-reference-import/2026-10-28.1";
 var REFERENCE_REQUEST_BUDGET_MS = 5e4;
 var MAX_ORIGINAL_BYTES = 16 * 1024 * 1024;
 var MAX_CHUNK_BYTES = 256 * 1024;

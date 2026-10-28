@@ -208,6 +208,21 @@ test('CSV stage derives canonical contacts from bytes and archives the same byte
   assert(!app.calls.some(item => item.path.startsWith('/storage/')));
 });
 
+test('new grouped contact layout is independently derived with explicit WhatsApp while raw fields remain archived', async () => {
+  const csv = 'source_line;Entidade: nome;E-mails;Telefones;WhatsApp cadastrado\r\n'
+    + '8;Órgão de atualização;"Financeiro@example.invalid\nlicitacao@example.invalid";"(31) 3333-4444\n(31) 98888-7777";"(31) 98888-7777"\r\n';
+  const app = setup();
+  assert.equal((await app.send(stage(csv))).status, 200);
+  const data = app.calls.at(-1).data;
+  assert.deepEqual(data.p_rows[0].emails, ['financeiro@example.invalid', 'licitacao@example.invalid']);
+  assert.deepEqual(data.p_rows[0].phones, ['3133334444', '31988887777']);
+  assert.match(data.p_rows[0].notes, /WhatsApp cadastrado: \(31\) 98888-7777/);
+  assert.doesNotMatch(data.p_rows[0].notes, /3333-4444/);
+  assert.equal(data.p_rows[0].source_line, 8);
+  assert.equal(data.p_chunk_sha256, hash(csv)); assert.equal(data.p_chunk_base64, encode(csv));
+  assert.deepEqual(data.p_problems, []);
+});
+
 test('description identifiers and literal formula-looking text are preserved without execution or external requests', async () => {
   const description = '=HYPERLINK("https://example.invalid/private";"texto")';
   const csv = DESCRIPTION_HEADER + `21;Órgão Sintético;Contrato A;0000123;"${description.replaceAll('"', '""')}";4\r\n`;
