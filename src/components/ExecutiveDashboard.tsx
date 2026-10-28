@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { ASSETS_FORMULA, directorAccounts, displayMillions, exactMillions, excelMillions, reportAmount, type DirectorReport } from '../lib/director-report';
 import { displayDate, displayDateTime, money, officialToday, accountName, accountType, cashCoverage, type CashPosition, type StockPosition } from './Treasury';
+import DelinquencyComparison from './DelinquencyComparison';
 import '../financial.css';
 
 type PeriodMode = 'today' | 'week' | 'month';
@@ -324,12 +325,7 @@ export default function ExecutiveDashboard({ canManage, canReadDirectorSummary =
         <p className="financial-caption">O caixa consolidado e o total a receber entram uma única vez. O estoque mantém a data de referência informada. As etapas do cálculo não são arredondadas.</p>
       </details>
       {report && report.missing_sources.length > 0 && <details className="director-calculation director-pending"><summary>Informações pendentes ({report.missing_sources.length})</summary><ul>{report.missing_sources.map((source, index) => <li key={`${index}:${source}`}>{source}</li>)}</ul></details>}
-      <div className="director-cash-detail"><h3>Caixa detalhado por empresa / conta</h3>
-        {summaryCash ? <div className="table-scroll"><table><thead><tr><th>Empresa</th><th>Conta / Caixa</th><th>Data do saldo</th><th className="financial-numeric">Saldo</th></tr></thead>
-          <tbody>{summaryAccounts.map(account => <tr key={account.id}><td>{account.company}</td><td><strong>{accountName(account)}</strong><small className="financial-caption bank-account-label">{accountType(account)}</small></td><td>{displayDate(account.balance_date)}</td><td className="financial-numeric"><MoneyValue cents={account.amount_cents} caption={CASH_PENDING} /></td></tr>)}</tbody>
-          <tfoot><tr><th colSpan={3}>Total caixa / bancos</th><td className="financial-numeric"><strong><MoneyValue cents={summaryCash.total_cents} caption={CASH_PENDING} /></strong></td></tr></tfoot>
-        </table></div> : <p className="financial-caption">{loading ? 'Carregando saldos…' : CASH_PENDING}</p>}
-      </div>
+      <DelinquencyComparison today={today} refreshKey={revision} />
       {historyOpen && <div className="director-history"><h3>Histórico das posições</h3>
         {historyLoading && <p className="financial-loading" role="status">Carregando histórico…</p>}{historyError && <p className="alert error" role="alert">{historyError}</p>}
         {!historyLoading && !historyError && history.length === 0 && <p className="empty-state">Nenhuma posição salva.</p>}

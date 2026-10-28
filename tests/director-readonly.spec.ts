@@ -36,7 +36,7 @@ async function setup(page: Page, stalePermissions = true, retiredStatus?: 'OPEN'
     payable_macros: [{ name: 'FIXO' }], payable_plan_mappings: [], payable_imports: [{ id: payable.last_import_id, created_at: now }], director_positions: [], receivable_imports: [],
     receivable_collection_events: [{ id: uuid(15), title_id: pending.id, action: 'PAID', collector_id: agent.id, contact_date: '2026-10-18', observation: 'Pagamento informado pela responsável', return_note: null, payment_date: pending.payment_reported_date, next_action: null, next_date: null, created_at: now }], effective_receivable_receipts: [], receivable_receipts: [],
   };
-  const unavailableReads = new Set(['payables_management_summary', 'receivables_management_summary', 'collections_overdue_summary', 'director_report', 'payables_forecast', 'get_payable_month_status', 'payables_month_status', 'list_payable_month_closures', 'collection_customer_contact_report']);
+  const unavailableReads = new Set(['payables_management_summary', 'receivables_management_summary', 'receivables_daily_delinquency', 'collections_overdue_summary', 'director_report', 'payables_forecast', 'get_payable_month_status', 'payables_month_status', 'list_payable_month_closures', 'collection_customer_contact_report']);
   await page.route(`${project}/**`, async route => {
     const request = route.request(), url = new URL(request.url()), name = url.pathname.split('/').at(-1)!;
     const headers = { 'access-control-allow-origin': 'http://127.0.0.1:4173', 'access-control-allow-headers': 'apikey,content-type,authorization,x-client-info,prefer,range,range-unit', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-expose-headers': 'content-range' };

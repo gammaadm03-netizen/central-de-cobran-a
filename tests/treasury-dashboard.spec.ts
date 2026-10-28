@@ -11,8 +11,9 @@ test('the complete Director report renders the official sources, prior-month tax
   await summary.getByText('Memória do cálculo do Ativo Circulante', { exact: true }).click();
   await expect(summary.locator('.director-calculation').first()).toContainText('Faturamento geral × 14%');
   await expect(summary.locator('.director-calculation').first()).not.toContainText('M49');
-  await expect(summary.locator('.director-cash-detail tbody tr')).toHaveCount(17);
-  await expect(summary.locator('.director-cash-detail tbody tr').first()).toContainText('BRADESCO ECOPLAST');
+  await expect(summary.locator('.director-cash-detail')).toHaveCount(0);
+  await expect(summary.getByText('Caixa detalhado por empresa / conta', { exact: true })).toHaveCount(0);
+  await expect(summary.locator('.delinquency-comparison')).toBeVisible();
   await page.screenshot({ path: '/tmp/central-diretoria-formula.png', fullPage: true });
 });
 
@@ -102,7 +103,20 @@ function reportFixture(cash: ReturnType<typeof cashFixture>, mode = 'complete') 
   return { as_of_date: '2026-10-15', inputs, indicators, cash, stock: { value_cents: indicators.stock_cents, reference_date: '2026-10-15', source: 'MANUAL' }, missing_sources: mode === 'partial' ? ['Estoque aguardando atualização.'] : [], complete: mode !== 'partial', formula_version: '2026-10-sem-m49' };
 }
 
-interface FixtureOptions { role?: 'gerente_geral' | 'diretor' | 'contas_pagar' | 'contas_receber'; imported?: boolean; complete?: boolean; fail?: boolean; failOldWeek?: boolean; receivableImported?: boolean; receivableFailure?: string; expanded?: boolean; negatives?: boolean; panelOnly?: boolean; report?: 'complete' | 'partial' | 'fail' | 'zero' | 'tiny' | 'huge'; noDirectorWrite?: boolean }
+const delinquencyBandKeys = ['1_30', '31_60', '61_90', '91_180', '181_365', 'ACIMA_365'];
+function delinquencyFixture(previousDate: string, currentDate: string, mode?: string) {
+  const previous = [75054227, 19954686, 10315022, 22716216, 10098862, 4505084];
+  const current = [64431645, 13499276, 7901329, 14480311, 19628729, 4516217];
+  if (mode === 'zero') { previous[0] = 0; current[0] = 1700; previous[1] = 0; current[1] = 0; }
+  const position = (date: string, amounts: number[], available: boolean) => ({ date, available, partial: date === '2026-10-15',
+    total_cents: available ? amounts.reduce((sum, amount) => sum + amount, 0) : null,
+    title_count: available ? amounts.filter(amount => amount > 0).length : null,
+    bands: delinquencyBandKeys.map((key, index) => ({ key, amount_cents: available ? amounts[index] : null, title_count: available ? (amounts[index] > 0 ? 1 : 0) : null })) });
+  return { as_of_date: '2026-10-15', timezone: 'America/Sao_Paulo', first_available_date: mode === 'unavailable' ? '2026-10-15' : '2026-10-01',
+    previous: position(previousDate, previous, mode !== 'unavailable'), current: position(currentDate, current, true) };
+}
+
+interface FixtureOptions { delinquency?: 'complete' | 'unavailable' | 'zero' | 'missing' | 'fail' | 'invalid'; role?: 'gerente_geral' | 'diretor' | 'contas_pagar' | 'contas_receber'; imported?: boolean; complete?: boolean; fail?: boolean; failOldWeek?: boolean; receivableImported?: boolean; receivableFailure?: string; expanded?: boolean; negatives?: boolean; panelOnly?: boolean; report?: 'complete' | 'partial' | 'fail' | 'zero' | 'tiny' | 'huge'; noDirectorWrite?: boolean }
 async function setup(page: Page, options: FixtureOptions = {}) {
   await page.clock.setFixedTime(fixedTime);
   const role = options.role ?? 'gerente_geral';
@@ -129,6 +143,13 @@ async function setup(page: Page, options: FixtureOptions = {}) {
     const name = url.pathname.split('/').at(-1)!;
     calls.push({ name, body });
     if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
+    if (name === 'receivables_daily_delinquency') {
+      if (options.delinquency === 'missing') return reply({ code: 'PGRST202', message: 'private SQL secret trace' }, 404);
+      if (options.delinquency === 'fail') return reply({ code: '57014', message: 'private SQL secret trace' }, 504);
+      const report = delinquencyFixture(body.p_previous ?? '2026-10-14', body.p_current ?? '2026-10-15', options.delinquency);
+      if (options.delinquency === 'invalid') report.current.total_cents! += 1;
+      return reply(report);
+    }
     if (name === 'current_access') return reply(access);
     if (name === 'cash_position') {
       if (options.fail) return reply({ message: 'private SQL secret trace' }, 500);
@@ -354,10 +375,8 @@ test('director sees the total of all seventeen bank and company cash accounts an
   await expect(page.locator('.financial-kpi').nth(0)).toContainText('R$ 1.700,00');
   await expect(page.locator('.financial-kpi').nth(0)).toContainText('17 contas');
   await expect(page.locator('.financial-kpi').nth(1)).toContainText('R$ 5.465,44');
-  const details = page.locator('.director-cash-detail'); await expect(details.locator('tbody tr')).toHaveCount(17);
-  await expect(details.getByText('BANCO CORA ECO PLAST', { exact: true })).toBeVisible();
-  await expect(details.getByText('BRADESCO GAMMA IND', { exact: true })).toBeVisible();
-  for (const company of ['ECOPLAST', 'LIMPE FACIL', 'GAMMA', 'FAST CLEAN', 'EASY CLEAN']) await expect(details.getByText(`CAIXA ${company}`, { exact: true })).toBeVisible();
+  await expect(page.locator('.director-cash-detail')).toHaveCount(0);
+  await expect(page.locator('.delinquency-comparison')).toBeVisible();
   const downloadPromise = page.waitForEvent('download'); await page.getByRole('button', { name: 'Baixar Excel', exact: true }).click();
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile((await (await downloadPromise).path())!);
   const sheet = workbook.getWorksheet('Caixa por empresa e banco')!; expect(sheet.rowCount).toBe(18);
@@ -368,6 +387,9 @@ test('director sees the total of all seventeen bank and company cash accounts an
   await page.getByRole('button', { name: 'Abrir Caixa →', exact: true }).click();
   await expect(page.getByText('17 de 17 contas com saldo informado')).toBeVisible();
   await expect(page.locator('.bank-company tbody tr')).toHaveCount(17);
+  await expect(page.locator('.bank-company').getByText('BANCO CORA ECO PLAST', { exact: true })).toBeVisible();
+  await expect(page.locator('.bank-company').getByText('BRADESCO GAMMA IND', { exact: true })).toBeVisible();
+  for (const company of ['ECOPLAST', 'LIMPE FACIL', 'GAMMA', 'FAST CLEAN', 'EASY CLEAN']) await expect(page.locator('.bank-company').getByText(`CAIXA ${company}`, { exact: true })).toBeVisible();
   await expect(page.locator('.bank-company').filter({ has: page.getByRole('heading', { name: 'ECOPLAST', exact: true }) })).toContainText('Subtotal: R$ 400,00');
   await expect(page.getByRole('heading', { name: 'Registrar saldo de conta', exact: true })).toHaveCount(0);
   expect(calls.some(call => call.name === 'set_bank_balance' || call.name === 'save_bank_position')).toBe(false);
@@ -425,4 +447,135 @@ test('aggregate-only dashboard access never claims that hidden negative account 
   await expect(page.getByRole('button', { name: 'Abrir Caixa →', exact: true })).toHaveCount(0);
   await expect(page.getByText('BRADESCO F2G', { exact: true })).toHaveCount(0);
   await expect(page.getByText('BRADESCO EASY CLEAN', { exact: true })).toHaveCount(0);
+});
+
+
+test('daily delinquency replaces duplicate bank detail and compares all six historical aging bands', async ({ page }) => {
+  const { calls } = await setup(page, { report: 'complete', delinquency: 'complete', complete: true });
+  const comparison = page.locator('.delinquency-comparison');
+  await expect(comparison.getByRole('heading', { name: 'Variação diária da inadimplência', exact: true })).toBeVisible();
+  await expect(comparison.getByLabel('Data anterior', { exact: true })).toHaveValue('2026-10-14');
+  await expect(comparison.getByLabel('Data atual', { exact: true })).toHaveValue('2026-10-15');
+  await expect(comparison.locator('tbody tr')).toHaveCount(6);
+  const first = comparison.locator('tbody tr').nth(0);
+  await expect(first).toContainText('1–30 dias');
+  await expect(first).toContainText('R$ 750.542,27');
+  await expect(first).toContainText('R$ 644.316,45');
+  await expect(first).toContainText('-R$ 106.225,82');
+  await expect(first).toContainText('-14,15%');
+  await expect(first).toContainText('Muito positivo');
+  await expect(comparison.locator('tbody tr').nth(1)).toContainText('Excelente');
+  const increase = comparison.locator('tbody tr').nth(4);
+  await expect(increase).toContainText('R$ 95.298,67');
+  await expect(increase).toContainText('94,37%');
+  await expect(increase).toContainText('Atenção');
+  await expect(increase).not.toContainText('migração');
+  await expect(comparison.locator('tfoot')).toContainText('R$ 1.426.440,97');
+  await expect(comparison.locator('tfoot')).toContainText('R$ 1.244.575,07');
+  await expect(comparison.locator('tfoot')).toContainText('-R$ 181.865,90');
+  await expect(comparison.locator('tfoot')).toContainText('-12,75%');
+  await expect(page.locator('.director-cash-detail')).toHaveCount(0);
+  expect(calls.find(call => call.name === 'receivables_daily_delinquency')?.body).toEqual({ p_previous: null, p_current: null });
+  await comparison.screenshot({ path: '/tmp/central-variacao-inadimplencia.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await comparison.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  const horizontalTable = comparison.locator('.table-scroll');
+  expect(await horizontalTable.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  await horizontalTable.evaluate(element => { element.scrollLeft = element.scrollWidth; });
+  expect(await horizontalTable.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+});
+
+test('changing delinquency dates clears old positions and explicitly compares selected dates', async ({ page }) => {
+  const { calls } = await setup(page, { report: 'complete' });
+  const comparison = page.locator('.delinquency-comparison');
+  await expect(comparison.locator('tbody tr')).toHaveCount(6);
+  await comparison.getByLabel('Data anterior', { exact: true }).fill('2026-10-07');
+  await expect(comparison.locator('table')).toHaveCount(0);
+  await comparison.getByLabel('Data atual', { exact: true }).fill('2026-10-14');
+  await comparison.getByRole('button', { name: 'Comparar datas', exact: true }).click();
+  await expect(comparison.getByRole('columnheader', { name: '07/10/2026', exact: true })).toBeVisible();
+  await expect(comparison.getByRole('columnheader', { name: '14/10/2026', exact: true })).toBeVisible();
+  expect(calls.filter(call => call.name === 'receivables_daily_delinquency').at(-1)?.body).toEqual({ p_previous: '2026-10-07', p_current: '2026-10-14' });
+  await page.getByRole('button', { name: 'Mês', exact: true }).click();
+  await expect(comparison.getByLabel('Data anterior', { exact: true })).toHaveValue('2026-10-07');
+  await expect(comparison.getByLabel('Data atual', { exact: true })).toHaveValue('2026-10-14');
+});
+
+test('a first-day portfolio does not invent zero historical debt or percentage reductions', async ({ page }) => {
+  await setup(page, { report: 'complete', delinquency: 'unavailable' });
+  const comparison = page.locator('.delinquency-comparison');
+  await expect(comparison.locator('tbody tr')).toHaveCount(6);
+  const first = comparison.locator('tbody tr').first();
+  await expect(first).toContainText('Sem histórico');
+  await expect(first).toContainText('R$ 644.316,45');
+  await expect(first).not.toContainText('-100,00%');
+  await expect(first).not.toContainText('R$ 0,00');
+  await expect(comparison.locator('tfoot')).not.toContainText('-12,75%');
+});
+
+test('zero previous debt has no invented percentage while two zero balances have zero variation', async ({ page }) => {
+  await setup(page, { report: 'complete', delinquency: 'zero' });
+  const comparison = page.locator('.delinquency-comparison');
+  const first = comparison.locator('tbody tr').first();
+  await expect(first).toContainText('R$ 17,00');
+  await expect(first).toContainText('Sem base anterior');
+  await expect(first).not.toContainText('Infinity');
+  await expect(comparison.locator('tbody tr').nth(1)).toContainText('0,00%');
+});
+
+for (const failure of ['missing', 'fail', 'invalid'] as const) test(`delinquency ${failure} is isolated from the dashboard and never renders uncertain amounts`, async ({ page }) => {
+  await setup(page, { report: 'complete', delinquency: failure, complete: true, imported: true });
+  const comparison = page.locator('.delinquency-comparison');
+  await expect(comparison).toContainText(failure === 'missing' ? 'SQL 051' : 'Não foi possível');
+  await expect(comparison.locator('table')).toHaveCount(0);
+  await expect(comparison).not.toContainText('R$ 0,00');
+  await expect(page.locator('.financial-kpis')).toContainText('R$ 1.234,56');
+  await expect(page.getByText('private SQL secret trace')).toHaveCount(0);
+});
+
+
+test('a late comparison response cannot restore a report after the dates are edited', async ({ page }) => {
+  await setup(page, { report: 'complete' });
+  const comparison = page.locator('.delinquency-comparison');
+  await expect(comparison.locator('tbody tr')).toHaveCount(6);
+  let releaseRequest!: () => void;
+  let markStarted!: () => void;
+  let markDelivered!: () => void;
+  const held = new Promise<void>(resolve => { releaseRequest = resolve; });
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  const delivered = new Promise<void>(resolve => { markDelivered = resolve; });
+  await page.route('**/rest/v1/rpc/receivables_daily_delinquency', async route => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': 'http://127.0.0.1:4173', 'access-control-allow-headers': 'apikey,content-type,authorization,x-client-info', 'access-control-allow-methods': 'POST,OPTIONS' } });
+    const body = route.request().postDataJSON();
+    markStarted();
+    await held;
+    try {
+      await route.fulfill({ status: 200, headers: { 'access-control-allow-origin': 'http://127.0.0.1:4173' }, json: delinquencyFixture(body.p_previous, body.p_current) });
+    } catch { /* Editing the date can abort the superseded request. */ }
+    finally { markDelivered(); }
+  });
+  await comparison.getByLabel('Data anterior', { exact: true }).fill('2026-10-07');
+  await comparison.getByRole('button', { name: 'Comparar datas', exact: true }).click();
+  await started;
+  await comparison.getByLabel('Data anterior', { exact: true }).fill('2026-10-06');
+  await expect(comparison.locator('table')).toHaveCount(0);
+  releaseRequest();
+  await delivered;
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(comparison.getByLabel('Data anterior', { exact: true })).toHaveValue('2026-10-06');
+  await expect(comparison.locator('table')).toHaveCount(0);
+  await expect(comparison).toContainText('Clique em Comparar datas');
+});
+
+test('equal comparison dates are rejected locally without another database request', async ({ page }) => {
+  const { calls } = await setup(page, { report: 'complete' });
+  const comparison = page.locator('.delinquency-comparison');
+  await expect(comparison.locator('tbody tr')).toHaveCount(6);
+  const originalCalls = calls.filter(call => call.name === 'receivables_daily_delinquency').length;
+  await comparison.getByLabel('Data anterior', { exact: true }).fill('2026-10-15');
+  await comparison.getByRole('button', { name: 'Comparar datas', exact: true }).click();
+  await expect(comparison.getByRole('alert')).toContainText('com a data anterior antes da data atual');
+  await expect(comparison.locator('table')).toHaveCount(0);
+  expect(calls.filter(call => call.name === 'receivables_daily_delinquency')).toHaveLength(originalCalls);
 });

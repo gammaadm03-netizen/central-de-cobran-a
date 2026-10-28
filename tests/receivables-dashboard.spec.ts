@@ -31,7 +31,7 @@ async function setup(page: Page, options: Options = {}) {
     if (name === 'current_stock') return reply({ value_cents: null, reference_date: null, source: null });
     if (name === 'payables_summary') return reply({ open_cents: 0, overdue_cents: 0, period_cents: 0, active_count: 0, latest_import_at: null });
     if (name === 'receivables_summary') return reply({ open_cents: 99900, overdue_cents: 22200, period_cents: 40000, received_period_cents: 99999, active_count: 7, pending_count: 0, unassigned_count: 0, overdue_bps: 2222, overdue_comlurb_cents: null, latest_import_at: mode === 'no-base' ? null : stamp });
-    if (name === 'director_report') return reply({ code: 'PGRST202' }, 404);
+    if (name === 'director_report' || name === 'receivables_daily_delinquency') return reply({ code: 'PGRST202' }, 404);
     if (name === 'receivables_management_summary') {
       if (mode === 'missing') return reply({ code: 'PGRST202', message: 'private missing function details' }, 404);
       if (mode === 'permission') return reply({ code: '42501', message: 'private SQL and secret trace' }, 403);
