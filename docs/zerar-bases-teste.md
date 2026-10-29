@@ -6,7 +6,7 @@ Esta rotina atende à limpeza solicitada antes da carga oficial. Ela remove as b
 
 ## O que será limpo
 
-A rotina contempla as 59 tabelas operacionais do modelo atual, conforme as atualizações instaladas:
+A rotina contempla as 64 tabelas operacionais do modelo atual, conforme as atualizações instaladas:
 
 - Contas a Pagar: importações, títulos, pagamentos, estornos, baixas, conciliações, correções e fechamentos mensais.
 - Contas a Receber: importações, títulos abertos e quitados, recebimentos, correções de quitações e registros de títulos ausentes dos relatórios completos.

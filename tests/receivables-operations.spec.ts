@@ -7,7 +7,7 @@ const ownAgent = '20000000-0000-4000-8000-000000000001';
 const otherAgent = '20000000-0000-4000-8000-000000000002';
 const titleId = '30000000-0000-4000-8000-000000000001';
 const workflow = { version: '029', normal_pause: true, finish_requires_started: true, pending_read_only: true, returns_priority: true };
-type Options = { role?: 'gerente_geral' | 'diretor' | 'contas_receber' | 'cobradora_1'; unbound?: boolean; unassigned?: boolean; pending?: boolean; stale?: boolean; pages?: boolean; exportChange?: boolean; dates?: boolean; serverToday?: string; missingCollection?: 'PGRST205' | '42P01'; malformedCollection?: boolean; missingReceipts?: 'PGRST205' | '42P01' | '42501'; correctedReceipt?: boolean };
+type Options = { role?: 'gerente_geral' | 'diretor' | 'contas_receber' | 'cobradora_1'; unbound?: boolean; unassigned?: boolean; pending?: boolean; stale?: boolean; pages?: boolean; exportChange?: boolean; dates?: boolean; serverToday?: string; missingCollection?: 'PGRST205' | '42P01'; malformedCollection?: boolean; missingReceipts?: 'PGRST205' | '42P01' | '42501'; correctedReceipt?: boolean; reversedReceipt?: boolean; malformedReversal?: boolean; missingReversal?: boolean };
 
 async function setup(page: Page, options: Options = {}) {
   const role = options.role ?? 'gerente_geral', collector = role === 'cobradora_1';
@@ -117,9 +117,12 @@ async function setup(page: Page, options: Options = {}) {
       return reply(candidates, 200, candidates.length);
     }
     if (url.pathname === '/rest/v1/receivable_collection_events') return reply(seen.events);
-    if (url.pathname === '/rest/v1/effective_receivable_receipts' || url.pathname === '/rest/v1/receivable_receipts') {
+    if (url.pathname === '/rest/v1/receivable_receipt_reversals') return options.missingReversal ? reply({ code: 'PGRST205' }, 404) : reply(options.reversedReceipt ? [{ id: fixtureId(51), receipt_id: fixtureId(52), reason: 'Validação sintética feita por engano.', original_receipt: { amount_cents: 118500, payment_date: '2026-09-20' }, effective_receipt: { amount_cents: options.malformedReversal ? 'valor inválido' : 120000, payment_date: '2026-09-21' }, created_at: '2026-10-18T12:00:00Z' }] : []);
+    if (url.pathname === '/rest/v1/effective_receivable_receipts' || url.pathname === '/rest/v1/active_receivable_receipts' || url.pathname === '/rest/v1/receivable_receipts') {
       seen.receiptPaths.push(url.pathname);
       if (url.pathname === '/rest/v1/effective_receivable_receipts' && options.missingReceipts) return reply({ code: options.missingReceipts }, options.missingReceipts === '42501' ? 403 : 404);
+      if (url.pathname === '/rest/v1/active_receivable_receipts') return options.reversedReceipt ? reply([]) : reply({ code: 'PGRST205' }, 404);
+      if (options.reversedReceipt) return reply(url.pathname === '/rest/v1/receivable_receipts' ? [{ id: fixtureId(52), title_id: titleId, amount_cents: 118500, payment_date: '2026-09-20', delay_days: 36, delay_band: '31_60', payment_source: 'IMPORTACAO_DIARIA', validated_at: '2026-09-21T12:00:00Z' }] : []);
       if (options.correctedReceipt) return reply([{ id: 'receipt-adjusted', title_id: titleId, amount_cents: url.pathname === '/rest/v1/effective_receivable_receipts' ? 120000 : 123456, payment_date: '2026-10-17', delay_days: 63, delay_band: '61_90', payment_source: 'IMPORTACAO_DIARIA', validated_at: '2026-10-18T10:00:00Z' }]);
       return reply(seen.receipts);
     }
@@ -230,7 +233,7 @@ test('financeiro não localizado exige justificativa, preserva a mesma cobradora
   await page.getByLabel('Decisão da validação').selectOption('NOT_LOCATED'); await page.getByRole('button', { name: 'Devolver à mesma responsável' }).click(); expect(seen.writes).toHaveLength(0);
   await page.getByLabel('Justificativa / observação da validação').fill('Entrada não encontrada no extrato');
   page.once('dialog', dialog => { expect(dialog.message()).toContain('mesma responsável'); expect(dialog.message()).toContain('Nenhum recebimento ou comissão'); return dialog.accept(); }); await page.getByRole('button', { name: 'Devolver à mesma responsável' }).click();
-  await expect(page.getByRole('status')).toContainText('Título devolvido à mesma responsável');
+  await expect(page.getByRole('status')).toContainText('devolução registrada para a mesma responsável');
   expect(seen.writes[0].body).toEqual({ p_title_id: titleId, p_decision: 'NOT_LOCATED', p_payment_date: null, p_received_cents: null, p_adjustment_reason: null, p_observation: 'Entrada não encontrada no extrato', p_expected_revision: 7, p_request_id: expect.any(String) });
   expect(seen.writes[0].body).not.toHaveProperty('p_collector_id'); await page.getByRole('tab', { name: 'Títulos', exact: true }).click(); await expect(page.getByRole('cell', { name: 'Responsável A', exact: true })).toBeVisible(); await expect(page.getByRole('cell', { name: 'Cobrar novamente 18/10/2026', exact: true })).toBeVisible(); expect(seen.receipts).toHaveLength(0);
 });
@@ -370,11 +373,37 @@ for (const code of ['PGRST205', '42P01'] as const) {
   test(`banco anterior à visão efetiva (${code}) preserva consulta do histórico legado`, async ({ page }) => {
     const seen = await setup(page, { role: 'diretor', correctedReceipt: true, missingReceipts: code }); await openDetail(page);
     await expect(page.getByText('Recebimento validado: R$ 1.234,56', { exact: false })).toBeVisible();
-    expect(seen.receiptPaths).toEqual(['/rest/v1/effective_receivable_receipts', '/rest/v1/receivable_receipts']);
+    expect(seen.receiptPaths).toEqual(['/rest/v1/effective_receivable_receipts', '/rest/v1/active_receivable_receipts', '/rest/v1/receivable_receipts']);
   });
 }
 test('permissão negada na visão efetiva não tenta consultar o histórico antigo', async ({ page }) => {
   const seen = await setup(page, { role: 'diretor', missingReceipts: '42501' }); await openDetail(page);
   await expect(page.getByRole('alert')).toContainText('Seu perfil não tem permissão');
   expect(seen.receiptPaths).toEqual(['/rest/v1/effective_receivable_receipts']);
+});
+
+test('histórico preserva o estorno efetivo e o registro inicial sem contar o recebimento antigo como ativo', async ({ page }) => {
+  const seen = await setup(page, { role: 'diretor', reversedReceipt: true, missingReceipts: 'PGRST205' }); await openDetail(page);
+  const detail = page.locator('.receivable-detail');
+  await expect(detail.getByText('Recebimento estornado: R$ 1.200,00', { exact: true })).toBeVisible();
+  await expect(detail).toContainText('21/09/2026');
+  await expect(detail).toContainText('Registro inicial preservado: R$ 1.185,00 em 20/09/2026.');
+  await expect(detail).toContainText('Validação sintética feita por engano.');
+  await expect(detail.getByText('Recebimento validado:', { exact: false })).toHaveCount(0);
+  expect(seen.receiptPaths).toEqual(['/rest/v1/effective_receivable_receipts', '/rest/v1/active_receivable_receipts']);
+  expect(seen.writes).toHaveLength(0);
+});
+
+test('histórico de estorno inválido não apresenta valores como recebimento confirmado', async ({ page }) => {
+  const seen = await setup(page, { role: 'diretor', reversedReceipt: true, malformedReversal: true }); await openDetail(page);
+  await expect(page.getByRole('alert')).toContainText('Não foi possível conferir o histórico de estornos');
+  await expect(page.getByText('Recebimento estornado:', { exact: false })).toHaveCount(0);
+  expect(seen.writes).toHaveLength(0);
+});
+
+test('banco anterior ao estorno conserva o histórico de recebimento existente', async ({ page }) => {
+  const seen = await setup(page, { role: 'diretor', correctedReceipt: true, missingReversal: true }); await openDetail(page);
+  await expect(page.getByText('Recebimento validado: R$ 1.200,00', { exact: false })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(seen.writes).toHaveLength(0);
 });

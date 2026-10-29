@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.18.12",
+  "version": "0.18.13",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -100,7 +100,12 @@
     "bundle:collection-operational-statuses": "node scripts/bundle-collection-operational-statuses.mjs",
     "test:collection-operational-statuses-sql": "node scripts/bundle-collection-operational-statuses.mjs && node scripts/test-collection-operational-statuses-sql.mjs",
     "bundle:receivable-validation-commissions": "node scripts/bundle-receivable-validation-commissions.mjs",
-    "test:receivable-validation-commissions-sql": "node scripts/bundle-receivable-validation-commissions.mjs && node scripts/test-receivable-validation-commissions-sql.mjs"
+    "test:receivable-validation-commissions-sql": "node scripts/bundle-receivable-validation-commissions.mjs && node scripts/test-receivable-validation-commissions-sql.mjs",
+    "bundle:receivable-receipt-reversal": "node scripts/bundle-receivable-receipt-reversal.mjs",
+    "test:receivable-receipt-reversal-sql": "node scripts/bundle-receivable-receipt-reversal.mjs && node scripts/test-receivable-receipt-reversal-sql.mjs",
+    "test:receivable-reversal-consumers-sql": "node scripts/test-receivable-reversal-consumers-sql.mjs",
+    "bundle:receivable-return-approval": "node scripts/bundle-receivable-return-approval.mjs",
+    "test:receivable-return-approval-sql": "node scripts/bundle-receivable-return-approval.mjs && node scripts/test-receivable-return-approval-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

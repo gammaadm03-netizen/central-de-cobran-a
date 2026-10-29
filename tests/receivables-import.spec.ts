@@ -97,10 +97,41 @@ test('erros estruturados do servidor bloqueiam a conclusão sem mostrar stack tr
   await expect(page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'CNPJ deve conter exatamente 14 dígitos. Não complete zeros automaticamente.', exact: true }) }).getByRole('cell').first()).toHaveText('2');
   await expect(page.getByRole('button', { name: 'Concluir importação de abertos e vencidos' })).toHaveCount(0); expect(seen.commits).toHaveLength(0);
 });
-test('quitado que reaparece nos abertos continua quitado e não é reaberto', async ({ page }) => {
+test('prévia antiga com quitado presente exige ativação da aprovação sem reabrir automaticamente', async ({ page }) => {
   const seen = await setup(page, { validatedPresent: true }); await analyze(page);
   await expect(page.getByText('1 título(s) já quitado(s) reaparecem no relatório. A importação não reabre esses títulos.', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Concluir importação de abertos e vencidos' })).toBeEnabled(); expect(seen.commits).toHaveLength(0);
+  await expect(page.getByRole('alert')).toContainText('Ative o SQL 057');
+  await expect(page.getByRole('button', { name: 'Concluir importação de abertos e vencidos' })).toBeDisabled(); expect(seen.commits).toHaveLength(0);
+});
+test('conciliação destaca quitado fora das dez primeiras linhas e separa nominal excluído do valor ainda não quitado no arquivo', async ({ page }) => {
+  const seen = await setup(page, { validatedLines: [47] });
+  const [header, first] = csv.split('\r\n');
+  const content = [header, ...Array.from({ length: 50 }, (_, index) => {
+    const cells = first.split(';'); cells[0] = `NF-RECON-${index + 1}`; cells[4] = index === 46 ? '321,09' : '10,00'; return cells.join(';');
+  })].join('\r\n');
+  await analyze(page, content);
+  const reconciliation = page.getByRole('region', { name: 'Quitados presentes no relatório de abertos', exact: true });
+  await expect(reconciliation.getByText('Valor original do arquivo já quitado na Central: R$ 321,09', { exact: true })).toBeVisible();
+  await expect(reconciliation.getByText('Valor do arquivo ainda não quitado na Central: R$ 490,00', { exact: true })).toBeVisible();
+  const known = reconciliation.getByRole('table', { name: 'Títulos já quitados identificados nesta análise', exact: true });
+  await expect(known.getByRole('cell', { name: 'Cliente sintético · NF-RECON-47', exact: true })).toBeVisible();
+  await expect(known.getByRole('cell', { name: '48', exact: true })).toBeVisible();
+  await expect(page.getByRole('table', { name: 'Conferência das primeiras 10 linhas oficiais', exact: true })).not.toContainText('NF-RECON-47');
+  await expect(page.getByRole('button', { name: 'Concluir importação de abertos e vencidos', exact: true })).toBeDisabled();
+  await expect(page.getByRole('alert')).toContainText('Ative o SQL 057');
+  expect(seen.commits).toHaveLength(0);
+  expect(seen.receipts.size).toBe(0); expect(seen.financialWrites).toEqual([]);
+});
+for (const proof of ['missing', 'other'] as const) test(`conciliação sem vínculo selecionado comprovado (${proof}) informa a contagem e não inventa valor excluído`, async ({ page }) => {
+  const seen = await setup(page, { validatedPresent: true, validatedCandidateProof: proof }); await analyze(page);
+  const reconciliation = page.getByRole('region', { name: 'Quitados presentes no relatório de abertos', exact: true });
+  await expect(reconciliation).toContainText('1 título(s) já quitado(s) reaparecem no relatório.');
+  await expect(reconciliation).toContainText('O valor total excluído não foi calculado.');
+  await expect(reconciliation.getByText(/^Valor original do arquivo já quitado na Central:/)).toHaveCount(0);
+  await expect(reconciliation.getByText(/^Valor do arquivo ainda não quitado na Central:/)).toHaveCount(0);
+  await expect(reconciliation.getByRole('table')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Concluir importação de abertos e vencidos', exact: true })).toBeDisabled();
+  expect(seen.commits).toHaveLength(0); expect(seen.financialWrites).toEqual([]);
 });
 test('vencimento ambíguo exige vínculo explícito e nova análise antes de atualizar a parcela existente', async ({ page }) => {
   const seen = await setup(page, { ambiguous: 1 }); await analyze(page);

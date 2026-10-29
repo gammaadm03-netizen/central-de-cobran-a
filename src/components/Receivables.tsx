@@ -6,7 +6,7 @@ import '../receivables.css';
 
 const scope = 'grupo-consolidado';
 const statuses: Record<string, string> = { NEW: 'Novo', OPEN: 'Aberto', PENDING_VALIDATION: 'Pago — aguardando validação', NOT_LOCATED: 'Pagamento não localizado — cobrar novamente', VALIDATED: 'Quitado — validado' };
-const actions: Record<string, string> = { CONTACT: 'Contato realizado', NO_RESPONSE: 'Sem resposta', PROMISE: 'Promessa de pagamento', RETRY: 'Cobrar novamente', PAID: 'Título pago', NOT_LOCATED_CONTACT: 'Não localizado no contato', OTHER: 'Outros', PAYMENT_DATE: 'Data real de pagamento informada', VALIDATE: 'Pagamento validado pelo financeiro', PAYMENT_NOT_LOCATED: 'Pagamento não localizado pelo financeiro' };
+const actions: Record<string, string> = { CONTACT: 'Contato realizado', NO_RESPONSE: 'Sem resposta', PROMISE: 'Promessa de pagamento', RETRY: 'Cobrar novamente', PAID: 'Título pago', NOT_LOCATED_CONTACT: 'Não localizado no contato', OTHER: 'Outros', PAYMENT_DATE: 'Data real de pagamento informada', VALIDATE: 'Pagamento validado pelo financeiro', PAYMENT_NOT_LOCATED: 'Pagamento não localizado pelo financeiro', RECEIPT_REVERSAL: 'Estorno de recebimento' };
 const contactActions = ['CONTACT', 'NO_RESPONSE', 'PROMISE', 'RETRY', 'PAID', 'NOT_LOCATED_CONTACT', 'OTHER'];
 const nextActions = ['CONTACT', 'NO_RESPONSE', 'PROMISE', 'RETRY', 'OTHER'];
 const columns = 'id,scope,document,client_name,client_document,customer_key,branch,issued_on,due_date,amount_cents,collector_id,status,validation_status,payment_source,payment_reported_date,payment_date,reported_in_collection,collector_locked,in_latest_report,retired_from_report,revision,updated_at,last_action,next_action,next_action_date';
@@ -26,6 +26,7 @@ interface CollectionEvent {
   observation: string | null; return_note: string | null; payment_date: string | null; created_at: string;
 }
 interface Receipt { id: string; amount_cents: number; nominal_amount_cents?: number; payment_date: string; delay_days: number; delay_band: string; payment_source: string; validated_at: string }
+interface ReceiptReversal { id: string; receipt_id: string; reason: string; original_receipt: { amount_cents: number; payment_date: string }; effective_receipt: { amount_cents: number; payment_date: string }; created_at: string }
 export interface ReceivableWorkspaceProps {
   mode: 'receivables' | 'collections'; canWrite: boolean; canManage: boolean; canValidate?: boolean;
   collectorId?: string | null; isCollector?: boolean; onImport?: () => void;
@@ -209,6 +210,7 @@ export function ReceivableWorkspace({ mode, canWrite, canManage, canValidate = f
 
 function TitleDetails({ row, agents, canAssign, canContact, canValidate, onOpenValidation, onClose, onCompleted }: { row: OperationalTitle; agents: Agent[]; canAssign: boolean; canContact: boolean; canValidate: boolean; onOpenValidation?: () => void; onClose: () => void; onCompleted: (message: string) => void }) {
   const [events, setEvents] = useState<CollectionEvent[]>([]), [receipts, setReceipts] = useState<Receipt[]>([]), [loading, setLoading] = useState(true), [historyError, setHistoryError] = useState('');
+  const [reversals, setReversals] = useState<ReceiptReversal[]>([]);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   useEffect(() => { headingRef.current?.scrollIntoView({ block: 'start' }); headingRef.current?.focus({ preventScroll: true }); }, [row.id]);
   useEffect(() => {
@@ -219,12 +221,27 @@ function TitleDetails({ row, agents, canAssign, canContact, canValidate, onOpenV
         const receiptColumns = 'id,amount_cents,payment_date,delay_days,delay_band,payment_source,validated_at';
         const current = await client.from('effective_receivable_receipts').select(`${receiptColumns},nominal_amount_cents`).eq('title_id', row.id).limit(1).abortSignal(abort.signal);
         if (!current.error || !['PGRST205', '42P01'].includes(current.error.code)) return current;
+        const active = await client.from('active_receivable_receipts').select(receiptColumns).eq('title_id', row.id).limit(1).abortSignal(abort.signal);
+        if (!active.error || !['PGRST205', '42P01'].includes(active.error.code)) return active;
         return client.from('receivable_receipts').select(receiptColumns).eq('title_id', row.id).limit(1).abortSignal(abort.signal);
+      })(),
+      (async () => {
+        const result = await client.from('receivable_receipt_reversals').select('id,receipt_id,reason,original_receipt,effective_receipt,created_at').eq('title_id', row.id).order('created_at', { ascending: false }).order('id').limit(50).abortSignal(abort.signal);
+        if (result.error && ['PGRST205', '42P01'].includes(result.error.code)) return { data: [], error: null };
+        return result;
       })(),
     ]).then(results => {
       if (abort.signal.aborted) return;
       const failed = results.find(result => result.error); if (failed) { setHistoryError(operationError(failed.error, 'Não foi possível carregar o histórico. Atualize os títulos e tente novamente.')); return; }
-      setEvents((results[0].data ?? []) as unknown as CollectionEvent[]); setReceipts((results[1].data ?? []) as unknown as Receipt[]);
+      const reversed = results[2].data;
+      if (!Array.isArray(reversed) || reversed.some(value => !value || typeof value.id !== 'string' || typeof value.receipt_id !== 'string'
+        || typeof value.reason !== 'string' || !value.reason.trim() || value.reason.length > 5000
+        || [value.original_receipt, value.effective_receipt].some(receipt => !receipt || !Number.isSafeInteger(receipt.amount_cents) || receipt.amount_cents < 0
+          || typeof receipt.payment_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(receipt.payment_date))
+        || typeof value.created_at !== 'string' || !Number.isFinite(Date.parse(value.created_at)))) {
+        setHistoryError('Não foi possível conferir o histórico de estornos. Atualize os títulos e tente novamente.'); return;
+      }
+      setEvents((results[0].data ?? []) as unknown as CollectionEvent[]); setReceipts((results[1].data ?? []) as unknown as Receipt[]); setReversals(reversed as ReceiptReversal[]);
     }).catch(() => { if (!abort.signal.aborted) setHistoryError('Não foi possível carregar o histórico. Atualize os títulos e tente novamente.'); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
   }, [row.id]);
@@ -238,6 +255,7 @@ function TitleDetails({ row, agents, canAssign, canContact, canValidate, onOpenV
     {historyError && <p className="notice error" role="alert">{historyError}</p>}
     {loading ? <p className="help-text" role="status">Carregando histórico…</p> : <>
       {receipts.map(receipt => <p className="notice success" key={receipt.id}>Recebimento validado: {formatCents(receipt.amount_cents)} · Pagamento real em {dateLabel(receipt.payment_date)} · {receipt.delay_days} dias de atraso no recebimento ({delayLabel(receipt.delay_days)}) · Validado em {dateLabel(receipt.validated_at)} · Origem: {receipt.payment_source === 'IMPORTACAO_DIARIA' ? 'Importação diária' : 'Cobrança'}.{Number.isSafeInteger(receipt.nominal_amount_cents) && receipt.nominal_amount_cents! > receipt.amount_cents && <> Valor original: {formatCents(receipt.nominal_amount_cents!)} · Diferença para o recebido: {formatCents(receipt.nominal_amount_cents! - receipt.amount_cents)}.</>}</p>)}
+      {reversals.map(reversal => <div className="notice" key={reversal.id}><strong>Recebimento estornado: {formatCents(reversal.effective_receipt.amount_cents)}</strong><p>Data registrada no recebimento estornado: {dateLabel(reversal.effective_receipt.payment_date)} · Estorno registrado em {dateLabel(reversal.created_at)}.</p>{(reversal.original_receipt.amount_cents !== reversal.effective_receipt.amount_cents || reversal.original_receipt.payment_date !== reversal.effective_receipt.payment_date) && <p>Registro inicial preservado: {formatCents(reversal.original_receipt.amount_cents)} em {dateLabel(reversal.original_receipt.payment_date)}.</p>}<p>Justificativa: {reversal.reason}</p><p className="help-text">O registro original permanece no histórico. Esse recebimento está fora dos totais atuais e da base atual de comissões.</p></div>)}
       <ol className="receivable-history">{events.map(event => <li key={event.id}><strong>{actions[event.action] ?? 'Ação registrada'}</strong><small>Registrado em {dateLabel(event.created_at)}{event.contact_date ? ` · Contato em ${dateLabel(event.contact_date)}` : ''}</small>{event.observation && <p>{event.observation}</p>}{event.return_note && <p><strong>Retorno:</strong> {event.return_note}</p>}{event.next_action && <p>Próxima ação: {actions[event.next_action]} · {dateLabel(event.next_date)}</p>}{event.payment_date && <p>Data de pagamento: {dateLabel(event.payment_date)}</p>}</li>)}</ol>
       {!events.length && !historyError && <p className="help-text">Nenhum contato ou validação registrado para este título.</p>}
     </>}

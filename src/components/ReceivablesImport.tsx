@@ -13,6 +13,9 @@ interface Collector { id: string; display_name: string; enabled: boolean }
 interface Assignment { customer_key: string; client_name: string; client_document: string | null; collector_id: string | null; collector_name: string | null; row_count: number; requires_selection: boolean; locked: boolean }
 interface PreviewRow extends ReceivableImportRow { line: number; title_id?: string | null; outcome: string; identity_outcome?: string; candidates?: Candidate[]; received_on?: string; received_amount_cents?: number }
 interface RetirementItem { title_id: string; client_name: string; document: string; branch: string; due_date: string; amount_cents: number; collector_id: string | null; worked: boolean }
+interface ReturnItem { line: number; title_id: string; document: string; client_name: string; branch: string; due_date: string; amount_cents: number; reason_kind: 'VALIDATED' | 'RETIRED'; expected_revision: number; retired_from_report: boolean; receipt_id: string | null; receipt_fingerprint: string; received_amount_cents: number | null; payment_date: string | null; source_row: Record<string, unknown>; source_fingerprint: string; approval_id: string | null; approved_by: string | null; approved_at: string | null; can_approve: boolean; collector_id?: string | null; requires_collector_assignment?: boolean }
+interface ReturnApprovalRequest { p_title_id: string; p_expected_revision: number; p_expected_receipt_id: string | null; p_expected_receipt_fingerprint: string; p_source_row: Record<string, unknown>; p_reason: string; p_request_id: string }
+interface PendingReturnApproval { body: ReturnApprovalRequest; fingerprint: string }
 interface Preview {
   format_version?: string; full_report?: boolean; reference_date?: string; retired_count?: number; retired_worked_count?: number; retired_unworked_count?: number; reappeared_count?: number; retirement_items?: RetirementItem[];
   mode: Mode; previous_import_id: string | null; financial_revision: string; row_count: number;
@@ -20,14 +23,87 @@ interface Preview {
   received_count?: number; matched_count?: number; correction_count?: number; historical_count?: number;
   conflict_count: number; can_commit: boolean; errors?: ImportProblem[];
   collector_assignment_version?: string; customer_collector_assignments?: Assignment[]; missing_collector_count?: number;
+  return_approval_version?: string; return_count?: number; return_unapproved_count?: number; return_items?: ReturnItem[];
 }
 interface Analysis { file: File; mode: Mode; base64: string; rows: PreviewRow[]; preview: Preview; nominalTotal: number; receivedTotal: number; titleMappings: Record<string, string>; collectorMappings: Record<string, string>; collectorHints?: ReceivableCollectorHint[]; collectorSummary?: CollectorHintSummary }
 interface ServerPreview { rows: PreviewRow[]; preview: Preview; file_sha256: string }
 const uuid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
+const instant = (value: unknown): value is string => typeof value === 'string' && Number.isFinite(new Date(value).getTime());
 const countFields = ['new_count', 'open_count', 'changed_count', 'pending_count', 'validated_in_source_count', 'received_count', 'matched_count', 'correction_count', 'historical_count', 'conflict_count'] as const;
 const outcomes: Record<string, string> = { NEW: 'Nova parcela', UPDATE: 'Atualizar título', MATCHED: 'Já identificado', AMBIGUOUS: 'Escolher vínculo da parcela', CONFLICT: 'Conflito a conferir', NEW_RECEIPT: 'Confirmar recebimento', CORRECTION: 'Corrigir recebimento importado', HISTORICAL: 'Incluir quitado do histórico' };
 function ambiguous(row: PreviewRow) { return row.outcome === 'AMBIGUOUS' || row.identity_outcome === 'AMBIGUOUS'; }
 function unappliedTitleMappings(analysis: Analysis) { return analysis.rows.some(row => row.outcome !== 'CONFLICT' && ambiguous(row) && Object.hasOwn(analysis.titleMappings, String(row.line))); }
+function returnActivationMissing(analysis: Analysis) { return analysis.mode === 'open' && (analysis.preview.validated_in_source_count ?? 0) > 0 && analysis.preview.return_approval_version !== '057'; }
+function validatedOpenSummary(analysis: Analysis) {
+  const count = analysis.preview.validated_in_source_count ?? 0;
+  const rows = analysis.rows.filter(row => {
+    if (typeof row.title_id !== 'string' || !uuid.test(row.title_id) || !row.candidates) return false;
+    const selected = row.candidates.filter(candidate => candidate.id === row.title_id);
+    return selected.length === 1 && selected[0].status === 'VALIDATED';
+  });
+  const total = rows.reduce((sum, row) => sum + BigInt(row.amount_cents), 0n);
+  const complete = count > 0 && count === rows.length && new Set(rows.map(row => row.title_id)).size === rows.length
+    && total <= BigInt(analysis.nominalTotal);
+  return { count, rows, excluded: complete ? Number(total) : null, unpaid: complete ? analysis.nominalTotal - Number(total) : null };
+}
+function ValidatedOpenReconciliation({ analysis }: { analysis: Analysis }) {
+  const [page, setPage] = useState(0);
+  useEffect(() => setPage(0), [analysis]);
+  const summary = validatedOpenSummary(analysis), pages = Math.max(1, Math.ceil(summary.rows.length / 25)), current = Math.min(page, pages - 1);
+  if (!summary.count) return null;
+  return <section className="notice stack" aria-labelledby="validated-open-reconciliation-title">
+    <h4 id="validated-open-reconciliation-title">Quitados presentes no relatório de abertos</h4>
+    <p>{summary.count} título(s) já quitado(s) reaparecem no relatório. A importação não reabre esses títulos.</p>
+    <p>Esses títulos ficam fora do saldo da carteira ativa. Confira a quitação na Central e a situação no sistema de origem antes de concluir a conciliação.</p>
+    {summary.excluded !== null ? <><p><strong>Valor original do arquivo já quitado na Central: {formatCents(summary.excluded)}</strong></p><p><strong>Valor do arquivo ainda não quitado na Central: {formatCents(summary.unpaid!)}</strong></p><p className="help-text">A diferença usa o valor original dos títulos no arquivo. O valor efetivamente recebido pode ser diferente. Estes valores conferem as linhas deste arquivo; arquivos de inclusão e atualização preservam também os demais títulos da carteira.</p></>
+      : <p>Os vínculos detalhados de todos os títulos quitados não vieram nesta análise. O valor total excluído não foi calculado. Confira os títulos na Central para esclarecer a diferença.</p>}
+    {summary.rows.length > 0 && <><div className="table-wrap"><table><caption>Títulos já quitados identificados nesta análise</caption><thead><tr><th>Linha</th><th>Cliente / NF</th><th>Filial</th><th>Vencimento original</th><th>Valor original no arquivo</th></tr></thead><tbody>{summary.rows.slice(current * 25, (current + 1) * 25).map(row => <tr key={row.line}><td>{row.line + 1}</td><td>{row.client_name} · {row.document}</td><td>{row.branch}</td><td>{dateLabel(row.due_date)}</td><td>{formatCents(row.amount_cents)}</td></tr>)}</tbody></table></div>
+      {pages > 1 && <div className="inline-actions"><button type="button" className="button secondary" disabled={current === 0} onClick={() => setPage(current - 1)}>Quitados anteriores</button><span>Página {current + 1} de {pages}</span><button type="button" className="button secondary" disabled={current === pages - 1} onClick={() => setPage(current + 1)}>Próximos quitados</button></div>}</>}
+  </section>;
+}
+function returnApprovalMessage(failure: unknown) {
+  const code = failure && typeof failure === 'object' && 'code' in failure ? String(failure.code) : '';
+  if (['PGRST202', 'PGRST205', '42P01', '42703', '42883'].includes(code)) return 'Ative o SQL 057 de aprovação dos retornos no banco de dados e analise o arquivo novamente.';
+  if (code === '42501') return 'Somente a Gerência autorizada pode aprovar o retorno. Confira o acesso antes de continuar.';
+  if (code === '40001') return 'O título, o recebimento ou a aprovação mudou. Analise o arquivo novamente antes de aprovar.';
+  if (['PGRST301', 'PGRST303'].includes(code)) return 'Sua sessão expirou. Entre novamente antes de aprovar.';
+  return 'A aprovação foi recusada. Confira o título, a justificativa e a análise atual antes de continuar.';
+}
+function ReturnApprovals({ analysis, isManager, currentUserId, disabled, onPendingChange, onApproved }: { analysis: Analysis; isManager: boolean; currentUserId: string | null; disabled: boolean; onPendingChange: (pending: boolean) => void; onApproved: () => void }) {
+  const [reasons, setReasons] = useState<Record<string, string>>({}), [pending, setPending] = useState<PendingReturnApproval | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const items = analysis.preview.return_items ?? [];
+  async function execute(request: PendingReturnApproval) {
+    if (!isManager || !currentUserId || busy) return;
+    setBusy(true); setPending(request); setError(''); onPendingChange(true);
+    try {
+      if (!supabase) throw { code: 'PGRST301' };
+      const result = await supabase.rpc('approve_receivable_report_return', request.body).retry(false);
+      if (result.error) throw result.error;
+      const proof = result.data, body = request.body;
+      if (!proof || proof.format_version !== '057' || proof.request_id !== body.p_request_id || proof.title_id !== body.p_title_id || proof.title_revision !== body.p_expected_revision
+        || proof.receipt_id !== body.p_expected_receipt_id || proof.receipt_fingerprint !== body.p_expected_receipt_fingerprint || proof.source_fingerprint !== request.fingerprint || proof.approved_by !== currentUserId || !uuid.test(proof.approval_id ?? '') || !instant(proof.approved_at)) throw new Error('invalid_return_approval_result');
+      setPending(null); onPendingChange(false); onApproved();
+    } catch (failure) {
+      const code = failure && typeof failure === 'object' && 'code' in failure ? String(failure.code) : '';
+      if (['22023', '23514', '40001', '42501', 'P0057', 'P0002', '23505', '22003', 'PGRST202', 'PGRST205', '42P01', '42703', '42883', 'PGRST301', 'PGRST303'].includes(code)) { setPending(null); onPendingChange(false); setError(returnApprovalMessage(failure)); }
+      else setError('Não foi possível confirmar o resultado da aprovação. Mantenha esta tela aberta e confira o mesmo protocolo antes de continuar. Nenhum retorno será aplicado antes da importação final.');
+    } finally { setBusy(false); }
+  }
+  function approve(item: ReturnItem) {
+    const reason = reasons[item.title_id]?.trim() ?? '';
+    if (disabled || pending || busy || !isManager || !item.can_approve || !reason || reason.length > 5000) return;
+    if (!window.confirm(`Aprovar o retorno da NF ${item.document}, filial ${item.branch}?\n\nValor original: ${formatCents(item.amount_cents)}.\nMotivo: ${reason}\n\nA aprovação registra sua autorização. O retorno e eventual estorno só serão aplicados ao concluir esta importação.`)) return;
+    void execute({ body: { p_title_id: item.title_id, p_expected_revision: item.expected_revision, p_expected_receipt_id: item.receipt_id, p_expected_receipt_fingerprint: item.receipt_fingerprint, p_source_row: JSON.parse(JSON.stringify(item.source_row)), p_reason: reason, p_request_id: crypto.randomUUID() }, fingerprint: item.source_fingerprint });
+  }
+  return <section className="notice stack" aria-labelledby="return-approvals-title"><h3 id="return-approvals-title">Retornos para conferência da Gerência</h3>
+    <p>{items.length} título(s) quitado(s) ou retirado(s) reaparecem no relatório de abertos. Cada retorno exige aprovação individual e justificativa da Gerência. A aprovação sozinha não altera recebimentos, saldos ou comissões.</p>
+    <p>Depois das aprovações, a Gerência que aprovou deve concluir esta importação. O arquivo, os retornos e eventuais estornos serão aplicados juntos, com o histórico preservado.</p>
+    {!isManager && <p>Conferência da Gerência necessária. Seu perfil não pode aprovar nem concluir uma importação que retorne esses títulos à carteira.</p>}
+    {error && <p className="notice error" role="alert">{error}</p>}
+    {pending && <div className="notice" role="status"><p>A aprovação está pendente de confirmação. Os dados e o protocolo permanecem preservados.</p><button type="button" className="button secondary" disabled={busy} onClick={() => void execute(pending)}>{busy ? 'Conferindo aprovação…' : 'Conferir aprovação pendente'}</button></div>}
+    <div className="table-wrap"><table><caption>Títulos que dependem de aprovação para retornar</caption><thead><tr><th>Linha / título</th><th>Situação atual</th><th>Valores</th><th>Aprovação individual</th></tr></thead><tbody>{items.map(item => <tr key={item.title_id}><td>Linha {item.line + 1}<div>{item.client_name} · NF {item.document} · Filial {item.branch}</div><small>Vencimento {dateLabel(item.due_date)}</small>{item.requires_collector_assignment && <p className="help-text">Sem cobradora vinculada; será necessário atribuir a responsável após o retorno.</p>}</td><td>{item.reason_kind === 'VALIDATED' ? 'Recebimento validado na Central' : 'Retirado pelo relatório completo'}{item.retired_from_report && item.reason_kind === 'VALIDATED' && <small>Também retirado do relatório</small>}</td><td>Original: {formatCents(item.amount_cents)}{item.received_amount_cents !== null && <small>Recebido: {formatCents(item.received_amount_cents)} em {dateLabel(item.payment_date)}</small>}</td><td>{item.approval_id ? <p>Aprovação registrada em {dateLabel(item.approved_at)}. Retorno aguardando a conclusão desta importação.</p> : isManager && item.can_approve ? <><label className="field">Justificativa do retorno da NF {item.document}<textarea aria-label={`Justificativa do retorno da NF ${item.document}`} value={reasons[item.title_id] ?? ''} maxLength={5000} disabled={disabled || !!pending || busy} onChange={event => setReasons(previous => ({ ...previous, [item.title_id]: event.target.value }))} /></label><button type="button" className="button secondary" disabled={disabled || !!pending || busy || !reasons[item.title_id]?.trim()} onClick={() => approve(item)}>Aprovar retorno da NF {item.document}</button></> : <p>{isManager ? 'Resolva o vínculo ou conflito e analise novamente antes de aprovar este retorno.' : 'Aguardando aprovação da Gerência.'}</p>}</td></tr>)}</tbody></table></div>
+  </section>;
+}
 const unappliedMappingsMessage = 'A função de importação não aplicou os vínculos selecionados. Atualize a função receivables-import e analise novamente.';
 function safeProblems(value: unknown): ImportProblem[] {
   if (!Array.isArray(value)) return [];
@@ -57,6 +133,26 @@ function validatePreview(value: ServerPreview, mode: Mode, hash: string, fullRep
       retiredIds.add(item.title_id);
     }
     if (preview.retirement_items.filter(item => item.worked).length !== preview.retired_worked_count) throw new Error('Títulos trabalhados inválidos.');
+    if (preview.return_approval_version !== undefined) {
+      if (preview.return_approval_version !== '057' || !Number.isSafeInteger(preview.return_count) || preview.return_count! < 0 || preview.return_count! > value.rows.length
+        || !Number.isSafeInteger(preview.return_unapproved_count) || preview.return_unapproved_count! < 0 || preview.return_unapproved_count! > preview.return_count!
+        || !Array.isArray(preview.return_items) || preview.return_items.length !== preview.return_count || preview.can_commit && preview.return_unapproved_count! > 0) throw new Error('Conferência de retornos inválida.');
+      const returnIds = new Set<string>();
+      for (const item of preview.return_items) {
+        const row = value.rows.find(candidate => candidate.line === item?.line);
+        if (!item || !Number.isSafeInteger(item.line) || !row || row.title_id !== item.title_id || !uuid.test(item.title_id) || returnIds.has(item.title_id)
+          || item.document !== row.document || item.client_name !== row.client_name || item.branch !== row.branch || item.due_date !== row.due_date || item.amount_cents !== row.amount_cents
+          || !['VALIDATED', 'RETIRED'].includes(item.reason_kind) || !Number.isSafeInteger(item.expected_revision) || item.expected_revision < 1 || typeof item.retired_from_report !== 'boolean'
+          || !(item.receipt_id === null || typeof item.receipt_id === 'string' && uuid.test(item.receipt_id)) || !(item.received_amount_cents === null || Number.isSafeInteger(item.received_amount_cents) && item.received_amount_cents >= 0)
+          || !(item.payment_date === null || typeof item.payment_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.payment_date))
+          || !item.source_row || typeof item.source_row !== 'object' || Array.isArray(item.source_row) || item.source_row.document !== row.document || item.source_row.client_name !== row.client_name || item.source_row.client_document !== row.client_document || item.source_row.branch !== row.branch || item.source_row.issued_on !== row.issued_on || item.source_row.due_date !== row.due_date || item.source_row.amount_cents !== row.amount_cents
+          || !/^[a-f0-9]{64}$/.test(item.source_fingerprint) || !/^[a-f0-9]{64}$/.test(item.receipt_fingerprint) || typeof item.can_approve !== 'boolean'
+          || item.collector_id !== undefined && !(item.collector_id === null || typeof item.collector_id === 'string' && uuid.test(item.collector_id)) || item.requires_collector_assignment !== undefined && typeof item.requires_collector_assignment !== 'boolean'
+          || !(item.approval_id === null && item.approved_by === null && item.approved_at === null || typeof item.approval_id === 'string' && uuid.test(item.approval_id) && typeof item.approved_by === 'string' && uuid.test(item.approved_by) && instant(item.approved_at))) throw new Error('Título de retorno inválido.');
+        returnIds.add(item.title_id);
+      }
+      if (preview.return_unapproved_count !== preview.return_items.filter(item => !item.approval_id).length) throw new Error('Aprovações de retorno inconsistentes.');
+    }
     const groups = preview.customer_collector_assignments;
     if (preview.collector_assignment_version !== '030') throw { code: 'P0030', activation_required: true };
     if (!Array.isArray(groups) || groups.length > 5000 || !Number.isSafeInteger(preview.missing_collector_count) || preview.missing_collector_count! < 0) throw new Error('Carteiras oficiais inválidas.');
@@ -94,9 +190,10 @@ function officialPreview(value: ServerPreview, mode: Mode, hash: string, fullRep
   }
 }
 
-export default function ReceivablesImport({ canImport }: { canImport: boolean }) {
+export default function ReceivablesImport({ canImport, isManager = false, currentUserId = null, onBusyChange }: { canImport: boolean; isManager?: boolean; currentUserId?: string | null; onBusyChange?: (busy: boolean) => void }) {
   const [mode, setMode] = useState<Mode>('open'), [file, setFile] = useState<File | null>(null), [complete, setComplete] = useState(false);
-  const [busy, setBusy] = useState<'analyzing' | 'saving' | null>(null), [uncertain, setUncertain] = useState(false);
+  const [operationBusy, setBusy] = useState<'analyzing' | 'saving' | null>(null), [uncertain, setUncertain] = useState(false), [approvalPending, setApprovalPending] = useState(false), [approvalRevision, setApprovalRevision] = useState(0);
+  const busy = operationBusy ?? (approvalPending ? 'approving' : null);
   const [fullReport, setFullReport] = useState(true), [referenceDate, setReferenceDate] = useState(officialToday());
   const pendingCommit = useRef<ReceivableImportRequestBody | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null), [mappings, setMappings] = useState<Record<string, string>>({}), [mappingsDirty, setMappingsDirty] = useState(false);
@@ -111,6 +208,15 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
   const controller = useRef<AbortController | null>(null), generation = useRef(0), inputRef = useRef<HTMLInputElement | null>(null);
   const problemsRef = useRef<HTMLDivElement | null>(null), focusProblems = useRef(false);
   const errorRef = useRef<HTMLDivElement | null>(null), focusError = useRef(false);
+  useEffect(() => {
+    const locked = approvalPending || operationBusy === 'saving' || uncertain;
+    onBusyChange?.(locked); window.dispatchEvent(new CustomEvent('receivable-validation-pending', { detail: locked }));
+    function warn(event: BeforeUnloadEvent) { event.preventDefault(); event.returnValue = ''; }
+    if (locked) window.addEventListener('beforeunload', warn);
+    return () => { if (locked) window.removeEventListener('beforeunload', warn); };
+  }, [approvalPending, operationBusy, uncertain, onBusyChange]);
+  useEffect(() => () => { onBusyChange?.(false); window.dispatchEvent(new CustomEvent('receivable-validation-pending', { detail: false })); }, [onBusyChange]);
+  useEffect(() => { if (approvalRevision > 0) void analyze(); }, [approvalRevision]);
   useEffect(() => () => { generation.current++; controller.current?.abort(); }, []);
   useEffect(() => {
     if (busy !== null || !problems.length || !focusProblems.current || !problemsRef.current) return;
@@ -205,21 +311,23 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
     } } finally { if (current === generation.current) setBusy(null); }
   }
   async function commit(retry = false) {
-    if (!analysis || !complete || !canImport || busy || !retry && (uncertain || mappingsDirty || unappliedTitleMappings(analysis) || !analysis.preview.can_commit || problems.length)) return;
+    if (!analysis || !complete || !canImport || busy || !retry && (uncertain || mappingsDirty || unappliedTitleMappings(analysis) || !analysis.preview.can_commit || problems.length || returnActivationMissing(analysis) || (analysis.preview.return_count ?? 0) > 0 && !isManager)) return;
     if (retry && !pendingCommit.current) return;
     const p = analysis.preview, corrections = p.correction_count ?? 0;
+    const validatedOpen = analysis.mode === 'open' && analysis.preview.return_approval_version !== '057' ? validatedOpenSummary(analysis) : null;
     const message = analysis.mode === 'received'
       ? `Confirmar o relatório de TÍTULOS QUITADOS?\n\n${p.row_count} títulos; recebido efetivo ${formatCents(analysis.receivedTotal)}.\n${p.new_count} novos títulos; ${p.matched_count ?? 0} recebimentos já registrados; ${corrections} correções de recebimentos importados; ${p.historical_count ?? 0} quitados do histórico.\n\nOs recebimentos conferidos pelo arquivo sairão da carteira ativa e alimentarão a base de apuração de comissões. Correções preservam os registros anteriores. Esta importação não paga comissões.`
-      : `Confirmar o relatório de ABERTOS E VENCIDOS?\n\n${p.row_count} títulos; ${p.new_count} novas parcelas; ${p.changed_count ?? 0} alterações em títulos existentes.\n\nPosição do relatório: ${dateLabel(p.reference_date ?? null)}.\n${p.full_report ? `${p.retired_count} títulos ausentes sairão da carteira ativa: ${p.retired_worked_count} pendentes em Comissões e ${p.retired_unworked_count} sem cobrança, preservados no histórico.` : 'Inclusão/atualização: títulos ausentes continuarão como estão.'}\n${p.reappeared_count} títulos retornarão à carteira. Nenhum recebimento será confirmado por ausência.`;
+      : `Confirmar o relatório de ABERTOS E VENCIDOS?\n\n${p.row_count} títulos; ${p.new_count} novas parcelas; ${p.changed_count ?? 0} alterações em títulos existentes.\n\nPosição do relatório: ${dateLabel(p.reference_date ?? null)}.\n${p.full_report ? `${p.retired_count} títulos ausentes sairão da carteira ativa: ${p.retired_worked_count} pendentes em Comissões e ${p.retired_unworked_count} sem cobrança, preservados no histórico.` : 'Inclusão/atualização: títulos ausentes continuarão como estão.'}\n${p.reappeared_count} títulos retornarão à carteira. Nenhum recebimento será confirmado por ausência.${(p.return_count ?? 0) > 0 ? `\n\n${p.return_count} retorno(s) aprovado(s) pela Gerência serão aplicados com esta importação. Recebimentos anteriores desses títulos serão estornados com histórico preservado; os títulos voltarão à carteira. Aprovar não aplicou essas alterações antes desta confirmação.` : ''}${validatedOpen?.count ? `\n\n${validatedOpen.count} título(s) já quitado(s) permanecerão fora da carteira ativa.${validatedOpen.excluded !== null ? ` Valor original no arquivo: ${formatCents(validatedOpen.excluded)}. Valor do arquivo ainda não quitado na Central: ${formatCents(validatedOpen.unpaid!)}.` : ' O valor total excluído não foi calculado porque os vínculos detalhados estão incompletos.'}` : ''}`;
     if (!retry && !window.confirm(message)) return;
     setBusy('saving'); setError(''); setErrorReference(''); setSuccess(''); const current = generation.current;
     try {
       const body: ReceivableImportRequestBody = retry ? pendingCommit.current! : { action: 'commit', mode: analysis.mode, file_name: analysis.file.name, file_base64: analysis.base64, complete: true, title_mappings: { ...mappings }, previous_import_id: p.previous_import_id, previous_financial_revision: p.financial_revision, ...(analysis.mode === 'received' ? { confirm_corrections: corrections > 0 } : { collector_mappings: { ...analysis.collectorMappings }, full_report: p.full_report, reference_date: p.reference_date, request_id: crypto.randomUUID() }) };
       if (analysis.mode === 'open') pendingCommit.current = body;
-      const summary = await receivableImportRequest<{ import_id: string; row_count: number; request_id?: string; full_report?: boolean; reference_date?: string; retired_count?: number; retired_worked_count?: number; retired_unworked_count?: number; reappeared_count?: number }>(body);
+      const summary = await receivableImportRequest<{ import_id: string; row_count: number; request_id?: string; full_report?: boolean; reference_date?: string; retired_count?: number; retired_worked_count?: number; retired_unworked_count?: number; reappeared_count?: number; return_approval_version?: string; returned_count?: number }>(body);
       if (current !== generation.current) return;
       if (!summary || typeof summary.import_id !== 'string' || !uuid.test(summary.import_id) || summary.row_count !== p.row_count || analysis.mode === 'open' && (summary.request_id !== body.request_id || summary.full_report !== p.full_report || summary.reference_date !== p.reference_date || summary.retired_count !== p.retired_count || summary.retired_worked_count !== p.retired_worked_count || summary.retired_unworked_count !== p.retired_unworked_count || summary.reappeared_count !== p.reappeared_count)) throw makeReceivableFailure({ phase: 'commit', status: 200, code: 'CR_INVALID_RESPONSE' });
-      setSuccess(analysis.mode === 'received' ? `Importação concluída: ${summary.row_count} títulos quitados conferidos. Recebimentos disponíveis no resumo e na base de apuração de comissões; títulos validados fora da carteira ativa.` : `Importação concluída: ${summary.row_count} títulos conferidos. ${summary.retired_count} ausentes retirados da carteira ativa; ${summary.retired_worked_count} pendentes em Comissões, aguardando o relatório de quitados. Nenhum recebimento foi presumido.`);
+      if (analysis.mode === 'open' && p.return_approval_version === '057' && (summary.return_approval_version !== '057' || summary.returned_count !== p.return_count)) throw makeReceivableFailure({ phase: 'commit', status: 200, code: 'CR_INVALID_RESPONSE' });
+      setSuccess(analysis.mode === 'received' ? `Importação concluída: ${summary.row_count} títulos quitados conferidos. Recebimentos disponíveis no resumo e na base de apuração de comissões; títulos validados fora da carteira ativa.` : `Importação concluída: ${summary.row_count} títulos conferidos. ${summary.retired_count} ausentes retirados da carteira ativa; ${summary.retired_worked_count} pendentes em Comissões, aguardando o relatório de quitados. Nenhum recebimento foi presumido.${summary.returned_count ? ` ${summary.returned_count} retorno(s) aprovado(s) pela Gerência aplicados com histórico preservado.` : ''}`);
       pendingCommit.current = null; setUncertain(false); setAnalysis(null); setComplete(false); setFile(null); setMappings({}); setCollectorMappings({}); setUseFileCollectors(true); setBulkCollector(''); setCustomerSearch(''); setCustomerPage(1); setMappingsDirty(false); setProblems([]); setRefresh(value => value + 1); if (inputRef.current) inputRef.current.value = '';
     } catch (failure) { if (current === generation.current) {
       const code = failure && typeof failure === 'object' && 'code' in failure ? String(failure.code) : '';
@@ -303,10 +411,12 @@ export default function ReceivablesImport({ canImport }: { canImport: boolean })
       {analysis && <div className="stack"><h3>Conferência de Contas a Receber</h3>{mappingsDirty && <p className="notice">Prévia anterior preservada. Valide o mesmo arquivo e as escolhas novamente antes de confirmar a importação.</p>}<p>{analysis.preview.row_count} títulos · total original {formatCents(analysis.nominalTotal)} · {analysis.preview.new_count} novos títulos.</p>
         {mode === 'received' ? <><p><strong>Total recebido efetivo: {formatCents(analysis.receivedTotal)}</strong></p><p>{analysis.preview.received_count ?? 0} recebimentos novos · {analysis.preview.matched_count ?? 0} já registrados · {analysis.preview.correction_count ?? 0} correções · {analysis.preview.historical_count ?? 0} quitados do histórico.</p><p className="notice">A confirmação deste arquivo valida os recebimentos conferidos. A apuração de comissões usa o valor efetivamente recebido; importar não significa pagar comissão.</p></> : <div className="notice"><p>{analysis.preview.changed_count ?? 0} títulos com alterações · {analysis.preview.reappeared_count ?? 0} retornando à carteira.</p><p>{analysis.preview.full_report ? `${analysis.preview.retired_count} títulos ausentes sairão da carteira ativa: ${analysis.preview.retired_worked_count} ficarão pendentes em Comissões e ${analysis.preview.retired_unworked_count} permanecerão somente no histórico.` : 'Somente inclusão e atualização: títulos ausentes serão preservados.'}</p><p>Nenhum recebimento ou comissão será calculado por ausência.</p></div>}
         {mode === 'open' && !!analysis.preview.retirement_items?.length && <details><summary>Conferir {analysis.preview.retired_count} títulos ausentes do relatório completo</summary><div className="table-wrap"><table><caption>Títulos que sairão da carteira ativa</caption><thead><tr><th>Cliente / NF</th><th>Filial</th><th>Vencimento</th><th>Valor de referência</th><th>Destino</th></tr></thead><tbody>{analysis.preview.retirement_items.map(item => <tr key={item.title_id}><td>{item.client_name} · {item.document}</td><td>{item.branch}</td><td>{dateLabel(item.due_date)}</td><td>{formatCents(item.amount_cents)}</td><td>{item.worked ? 'Pendente em Comissões — aguardando quitados' : 'Histórico, sem recebimento confirmado'}</td></tr>)}</tbody></table></div></details>}
-        {(analysis.preview.validated_in_source_count ?? 0) > 0 && <p className="notice">{analysis.preview.validated_in_source_count} título(s) já quitado(s) reaparecem no relatório. A importação não reabre esses títulos.</p>}
+        {mode === 'open' && analysis.preview.return_approval_version === '057' && (analysis.preview.return_count ?? 0) > 0 && <ReturnApprovals analysis={analysis} isManager={isManager} currentUserId={currentUserId} disabled={operationBusy !== null || uncertain || mappingsDirty} onPendingChange={setApprovalPending} onApproved={() => { setApprovalPending(false); setMappingsDirty(true); setApprovalRevision(value => value + 1); }} />}
+        {mode === 'open' && analysis.preview.return_approval_version !== '057' && <ValidatedOpenReconciliation analysis={analysis} />}
+        {returnActivationMissing(analysis) && <p className="notice error" role="alert">Ative o SQL 057 de aprovação individual dos retornos e analise o arquivo novamente. Títulos quitados não podem retornar sem a conferência da Gerência.</p>}
         <div className="table-wrap"><table><caption>Conferência das primeiras {Math.min(10, analysis.rows.length)} linhas oficiais</caption><thead><tr><th>Cliente / NF</th><th>Filial</th><th>Vencimento original</th><th>Valor original</th>{mode === 'received' && <><th>Recebido em</th><th>Valor recebido</th></>}<th>Resultado</th></tr></thead><tbody>{analysis.rows.slice(0, 10).map(row => <tr key={row.line}><td>{row.client_name} · {row.document}</td><td>{row.branch}</td><td>{dateLabel(row.due_date)}</td><td>{formatCents(row.amount_cents)}</td>{mode === 'received' && <><td>{dateLabel(row.received_on ?? null)}</td><td>{formatCents(row.received_amount_cents ?? 0)}</td></>}<td>{outcomes[row.outcome]}</td></tr>)}</tbody></table></div>
         {!analysis.preview.can_commit && !problems.length && <p className="notice error" role="alert">Este arquivo ainda precisa de conferência. Resolva os vínculos ou conflitos e analise novamente.</p>}
-        <button className="button" type="button" disabled={busy !== null || uncertain || !complete || mappingsDirty || unappliedTitleMappings(analysis) || !analysis.preview.can_commit || problems.length > 0} onClick={() => void commit()}>{busy === 'saving' ? 'Concluindo importação…' : mode === 'received' ? 'Confirmar importação de títulos quitados' : 'Concluir importação de abertos e vencidos'}</button>
+        <button className="button" type="button" disabled={busy !== null || uncertain || !complete || mappingsDirty || unappliedTitleMappings(analysis) || !analysis.preview.can_commit || problems.length > 0 || returnActivationMissing(analysis) || (analysis.preview.return_count ?? 0) > 0 && !isManager} onClick={() => void commit()}>{busy === 'saving' ? 'Concluindo importação…' : mode === 'received' ? 'Confirmar importação de títulos quitados' : 'Concluir importação de abertos e vencidos'}</button>
       </div>}
     </section>
     <section className="panel" aria-labelledby="receivable-import-history"><div className="panel-header"><div><h2 id="receivable-import-history">Histórico de importações de Contas a Receber</h2><p className="muted">20 arquivos mais recentes. Os contadores descrevem cada lote e não substituem o saldo atual.</p></div><button className="button secondary" type="button" disabled={busy !== null || historyLoading} onClick={() => setRefresh(value => value + 1)}>Atualizar histórico de CR</button></div>

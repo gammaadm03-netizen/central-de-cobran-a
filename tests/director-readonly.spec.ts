@@ -34,7 +34,7 @@ async function setup(page: Page, stalePermissions = true, retiredStatus?: 'OPEN'
     profiles: [profile, { id: uuid(14), username: 'CobradoraSintetica', display_name: 'Operadora de teste', role_key: 'cobradora_1', enabled: true, updated_at: now }],
     collection_agents: [agent], collector_bindings: [{ user_id: uuid(14), agent_id: agent.id }], audit_events: [audit], management_messages: [message],
     payable_macros: [{ name: 'FIXO' }], payable_plan_mappings: [], payable_imports: [{ id: payable.last_import_id, created_at: now }], director_positions: [], receivable_imports: [],
-    receivable_collection_events: [{ id: uuid(15), title_id: pending.id, action: 'PAID', collector_id: agent.id, contact_date: '2026-10-18', observation: 'Pagamento informado pela responsável', return_note: null, payment_date: pending.payment_reported_date, next_action: null, next_date: null, created_at: now }], effective_receivable_receipts: [], receivable_receipts: [],
+    receivable_collection_events: [{ id: uuid(15), title_id: pending.id, action: 'PAID', collector_id: agent.id, contact_date: '2026-10-18', observation: 'Pagamento informado pela responsável', return_note: null, payment_date: pending.payment_reported_date, next_action: null, next_date: null, created_at: now }], effective_receivable_receipts: [], receivable_receipts: [], receivable_receipt_reversals: [],
   };
   const unavailableReads = new Set(['payables_management_summary', 'receivables_management_summary', 'receivables_daily_delinquency', 'collections_overdue_summary', 'director_report', 'payables_forecast', 'get_payable_month_status', 'payables_month_status', 'list_payable_month_closures', 'collection_customer_contact_report']);
   await page.route(`${project}/**`, async route => {

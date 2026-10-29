@@ -16,10 +16,10 @@ export const retirementItems = [
   { title_id: '70000000-0000-4000-8000-000000000002', client_name: 'Cliente ausente sem atendimento', document: 'AUS-002', branch: 'Filial sintética B', due_date: '2026-10-02', amount_cents: 34567, collector_id: null, worked: false },
 ];
 export function receivableCustomerKey(row: { client_document: string | null; client_name: string }) { return row.client_document ? `cnpj:${row.client_document}` : `name:${row.client_name.trim().replace(/\s+/g, ' ').toUpperCase()}`; }
-export interface FixtureOptions { stale?: boolean; serverInvalid?: boolean; validatedPresent?: boolean; ambiguous?: number; ambiguousLines?: number[]; ignoreTitleMappings?: boolean; mappingConflict?: boolean; invalidMappedPreview?: boolean; correction?: boolean; matched?: boolean; historical?: boolean; conflict?: boolean; activationMissing?: boolean; uncertainCommit?: boolean; deferCommit?: boolean; legacyPreview?: boolean; tamperHash?: boolean; unassignedCustomers?: 'all' | string[]; missingCollectorMetadata?: boolean; agentsEmpty?: boolean; agentsFailure?: boolean; collectorAgents?: { id: string; display_name: string; enabled: boolean }[]; collectorOwners?: Record<string, string>; paidAfterUncertainCommit?: boolean; inactiveAfterUncertainCommit?: boolean; retireMissing?: boolean; reappeared?: number; missingOpenReportMetadata?: boolean; invalidOpenReportCounts?: boolean; tamperFirstCommitEcho?: boolean }
+export interface FixtureOptions { manager?: boolean; returnLines?: { line: number; kind: 'VALIDATED' | 'RETIRED' }[]; approvalUncertain?: 'after-commit' | 'proof'; invalidReturnPreview?: boolean; stale?: boolean; serverInvalid?: boolean; validatedPresent?: boolean; validatedLines?: number[]; validatedCandidateProof?: 'missing' | 'other'; ambiguous?: number; ambiguousLines?: number[]; ignoreTitleMappings?: boolean; mappingConflict?: boolean; invalidMappedPreview?: boolean; correction?: boolean; matched?: boolean; historical?: boolean; conflict?: boolean; activationMissing?: boolean; uncertainCommit?: boolean; deferCommit?: boolean; legacyPreview?: boolean; tamperHash?: boolean; unassignedCustomers?: 'all' | string[]; missingCollectorMetadata?: boolean; agentsEmpty?: boolean; agentsFailure?: boolean; collectorAgents?: { id: string; display_name: string; enabled: boolean }[]; collectorOwners?: Record<string, string>; paidAfterUncertainCommit?: boolean; inactiveAfterUncertainCommit?: boolean; retireMissing?: boolean; reappeared?: number; missingOpenReportMetadata?: boolean; invalidOpenReportCounts?: boolean; tamperFirstCommitEcho?: boolean }
 export async function setupReceivableImport(page: Page, options: FixtureOptions = {}) {
   const id = '10000000-0000-4000-8000-000000000001';
-  const access = { profile: { id, username: 'UsuarioTeste', display_name: 'Pessoa Teste', role_key: 'contas_receber', enabled: true }, permissions: [{ resource: 'painel', action: 'read' }, { resource: 'contas_receber', action: 'read' }, { resource: 'contas_receber', action: 'write' }, { resource: 'contas_receber', action: 'import' }, { resource: 'importar_bases', action: 'read' }], collector_id: null };
+  const access = { profile: { id, username: 'UsuarioTeste', display_name: 'Pessoa Teste', role_key: options.manager ? 'gerente_geral' : 'contas_receber', enabled: true }, permissions: [{ resource: 'painel', action: 'read' }, { resource: 'contas_receber', action: 'read' }, { resource: 'contas_receber', action: 'write' }, { resource: 'contas_receber', action: 'import' }, { resource: 'importar_bases', action: 'read' }, ...(options.manager ? [{ resource: 'contas_receber', action: 'validate' }] : [])], collector_id: null };
   const claims = { sub: id, session_id: '20000000-0000-4000-8000-000000000001', exp: Math.floor(Date.now() / 1000) + 3600, iat: Math.floor(Date.now() / 1000), role: 'authenticated' };
   const token = [Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'), Buffer.from(JSON.stringify(claims)).toString('base64url'), 'synthetic-test-only'].join('.');
   const user = { id, aud: 'authenticated', role: 'authenticated', email: 'synthetic@test.invalid', created_at: new Date().toISOString(), app_metadata: {}, user_metadata: {} };
@@ -27,10 +27,12 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
   const completedOpenRequests = new Map<string, any>();
   const scenario = { paid: false, inactiveChoice: false };
   const receipts = new Map<string, { title_id: string; amount_cents: number; payment_date: string }>();
-  const seen = { owners, imports: importHashes, receipts, rejectedCollectorPreviews: 0, assignmentApplications: [] as { customer_key: string; collector_id: string; row_count: number }[], retirementApplications: [] as typeof retirementItems, reads: [] as { path: string; query: string }[], previews: [] as any[], commits: [] as any[], financialWrites: [] as string[], releaseCommit: () => {} };
+  const approvals = new Map<string, any>(), approvalRequests = new Map<string, { body: string; proof: any }>(), returned = new Set<string>();
+  const seen = { owners, imports: importHashes, receipts, approvals, reversedReceiptIds: new Set<string>(), approvalCalls: [] as any[], returnApplications: [] as any[], rejectedCollectorPreviews: 0, assignmentApplications: [] as { customer_key: string; collector_id: string; row_count: number }[], retirementApplications: [] as typeof retirementItems, reads: [] as { path: string; query: string }[], previews: [] as any[], commits: [] as any[], financialWrites: [] as string[], releaseCommit: () => {} };
   let imported = false, lastCount = 1, lastMode = 'open';
   let lastOpenReport: Record<string, unknown> = {};
   let lastGroups: { customer_key: string; client_name: string; client_document: string | null; row_count: number }[] = [];
+  let lastReturnItems: any[] = [];
   const commitGate = new Promise<void>(resolve => { seen.releaseCommit = resolve; });
   await page.route(`${project}/**`, async route => {
     const req = route.request(), url = new URL(req.url()), body = req.postDataJSON();
@@ -48,6 +50,21 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
     if (req.method() === 'GET') seen.reads.push({ path: url.pathname, query: url.search });
     if (url.pathname === '/rest/v1/collection_agents') return options.agentsFailure ? reply({ code: '42501' }, 403) : reply(options.agentsEmpty ? [] : options.collectorAgents ? options.collectorAgents.filter(item => item.enabled) : [...(!scenario.inactiveChoice ? [{ id: collectorA, display_name: collectorNames[collectorA], enabled: true }] : []), { id: collectorB, display_name: collectorNames[collectorB], enabled: true }]);
     if (url.pathname === '/rest/v1/receivable_imports') return reply(imported ? [{ id: '40000000-0000-4000-8000-000000000001', created_at: '2026-10-17T12:00:00Z', file_name: 'cr.csv', row_count: lastCount, new_count: 1, open_count: 0, pending_count: 0, validated_in_source_count: 0, import_mode: lastMode === 'received' ? 'RECEIVED' : 'OPEN' }] : []);
+    if (url.pathname === '/rest/v1/rpc/approve_receivable_report_return') {
+      seen.approvalCalls.push(body);
+      if (!options.manager) return reply({ code: '42501' }, 403);
+      const saved = approvalRequests.get(body.p_request_id);
+      if (saved) return saved.body === JSON.stringify(body) ? reply(saved.proof) : reply({ code: '23505' }, 409);
+      const item = lastReturnItems.find(item => item.title_id === body.p_title_id);
+      if (!item || body.p_expected_revision !== item.expected_revision || body.p_expected_receipt_id !== item.receipt_id || JSON.stringify(body.p_source_row) !== JSON.stringify(item.source_row)) return reply({ code: '40001' }, 409);
+      const receiptFingerprint = createHash('sha256').update(JSON.stringify(item.receipt_id ? receipts.get(item.title_id) : null)).digest('hex');
+      if (body.p_expected_receipt_fingerprint !== receiptFingerprint) return reply({ code: '40001' }, 409);
+      if (!body.p_reason?.trim()) return reply({ code: '23514' }, 422);
+      const proof = { format_version: '057', request_id: body.p_request_id, approval_id: `80000000-0000-4000-8000-${String(approvals.size + 1).padStart(12, '0')}`, title_id: item.title_id, title_revision: item.expected_revision, receipt_id: item.receipt_id, receipt_fingerprint: receiptFingerprint, source_fingerprint: item.source_fingerprint, approved_by: id, approved_at: '2026-10-19T15:00:00Z' };
+      approvals.set(item.title_id, proof); approvalRequests.set(body.p_request_id, { body: JSON.stringify(body), proof });
+      if (options.approvalUncertain === 'after-commit' && seen.approvalCalls.length === 1) return reply({ code: 'upstream_unavailable' }, 503);
+      return reply(options.approvalUncertain === 'proof' && seen.approvalCalls.length === 1 ? { ...proof, source_fingerprint: '0'.repeat(64) } : proof);
+    }
     if (url.pathname === '/functions/v1/receivables-import') {
       if (body.action === 'preview') {
         seen.previews.push(body);
@@ -69,16 +86,24 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
         if (parsed.errors.length) return reply({ errors: parsed.errors }, 422);
         const rows = parsed.rows.map((row, index) => {
           const line = index + 1, hasCandidate = options.ambiguousLines?.includes(line) ?? index < (options.ambiguous ?? 0);
+          const returnSpec = body.mode === 'open' ? options.returnLines?.find(item => item.line === line) : undefined;
+          const returnTitleId = `50000000-0000-4000-8000-${String(line).padStart(12, '0')}`;
+          const isReturning = !!returnSpec && !returned.has(returnTitleId);
+          const validated = body.mode === 'open' && (options.validatedPresent || scenario.paid || options.validatedLines?.includes(line) || isReturning && returnSpec?.kind === 'VALIDATED');
           const ambiguous = hasCandidate && (options.ignoreTitleMappings || !body.title_mappings?.[String(line)]);
-          const outcome = options.conflict || options.mappingConflict && body.title_mappings?.[String(line)] ? 'CONFLICT' : ambiguous ? 'AMBIGUOUS' : body.mode === 'received' ? options.correction ? 'CORRECTION' : options.historical || body.title_mappings?.[String(line)] === 'NEW' ? 'HISTORICAL' : options.matched || imported ? 'MATCHED' : 'NEW_RECEIPT' : options.validatedPresent || imported ? 'MATCHED' : body.title_mappings?.[String(line)] && body.title_mappings[String(line)] !== 'NEW' ? 'UPDATE' : 'NEW';
-          return { ...row, customer_key: receivableCustomerKey(row), line, title_id: outcome === 'NEW' || outcome === 'HISTORICAL' ? null : candidateId, outcome, candidates: hasCandidate ? [{ id: candidateId, due_date: '2026-10-15', amount_cents: row.amount_cents, status: 'OPEN', collector_id: null }] : [] };
+          const outcome = options.conflict || options.mappingConflict && body.title_mappings?.[String(line)] ? 'CONFLICT' : ambiguous ? 'AMBIGUOUS' : body.mode === 'received' ? options.correction ? 'CORRECTION' : options.historical || body.title_mappings?.[String(line)] === 'NEW' ? 'HISTORICAL' : options.matched || imported ? 'MATCHED' : 'NEW_RECEIPT' : validated || isReturning || imported ? 'MATCHED' : body.title_mappings?.[String(line)] && body.title_mappings[String(line)] !== 'NEW' ? 'UPDATE' : 'NEW';
+          const titleId = returnSpec || validated && options.validatedLines ? returnTitleId : candidateId;
+          const candidates = validated ? options.validatedCandidateProof === 'missing' ? [] : [{ id: options.validatedCandidateProof === 'other' ? '50000000-0000-4000-8000-999999999999' : titleId, due_date: row.due_date, amount_cents: row.amount_cents, status: 'VALIDATED', collector_id: null }]
+            : hasCandidate ? [{ id: candidateId, due_date: '2026-10-15', amount_cents: row.amount_cents, status: 'OPEN', collector_id: null }] : [];
+          return { ...row, customer_key: receivableCustomerKey(row), line, title_id: outcome === 'NEW' || outcome === 'HISTORICAL' ? null : titleId, outcome, candidates };
         });
         const ambiguous = rows.filter(row => row.outcome === 'AMBIGUOUS').length;
         const conflict = rows.filter(row => row.outcome === 'CONFLICT').length;
-        const preview: any = { mode: body.mode, previous_import_id: imported ? '40000000-0000-4000-8000-000000000001' : null, financial_revision: imported ? '18' : '17', row_count: rows.length,
+        const validatedCount = body.mode === 'open' ? rows.filter(row => options.validatedPresent || scenario.paid || options.validatedLines?.includes(row.line) || options.returnLines?.some(item => item.line === row.line && item.kind === 'VALIDATED' && !returned.has(row.title_id!))).length : 0;
+        const preview: any = { mode: body.mode, previous_import_id: imported ? '40000000-0000-4000-8000-000000000001' : null, financial_revision: `${imported ? '18' : '17'}${approvals.size ? `-approval-${approvals.size}` : ''}`, row_count: rows.length,
           new_count: body.mode === 'received' ? rows.filter(row => row.outcome === 'HISTORICAL').length : rows.filter(row => row.outcome === 'NEW').length,
-          open_count: options.validatedPresent || scenario.paid ? 0 : rows.filter(row => row.outcome === 'UPDATE' || row.outcome === 'MATCHED').length, changed_count: rows.filter(row => row.outcome === 'UPDATE').length,
-          pending_count: 0, validated_in_source_count: options.validatedPresent || scenario.paid ? rows.length : 0,
+          open_count: Math.max(0, rows.filter(row => row.outcome === 'UPDATE' || row.outcome === 'MATCHED').length - validatedCount), changed_count: rows.filter(row => row.outcome === 'UPDATE').length,
+          pending_count: 0, validated_in_source_count: validatedCount,
           received_count: rows.filter(row => ['NEW_RECEIPT', 'HISTORICAL'].includes(row.outcome)).length, matched_count: rows.filter(row => row.outcome === 'MATCHED').length,
           correction_count: rows.filter(row => row.outcome === 'CORRECTION').length, historical_count: rows.filter(row => row.outcome === 'HISTORICAL').length,
           conflict_count: conflict, can_commit: ambiguous === 0 && conflict === 0,
@@ -107,6 +132,20 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
             retired_unworked_count: items.filter(item => !item.worked).length, reappeared_count: options.reappeared ?? 0 };
           if (!options.missingOpenReportMetadata) Object.assign(preview, lastOpenReport, { retirement_items: items });
           if (options.invalidOpenReportCounts) preview.retired_worked_count = preview.retired_count + 1;
+          if (options.returnLines) {
+            lastReturnItems = options.returnLines.flatMap(spec => {
+              const row = rows.find(row => row.line === spec.line);
+              if (!row?.title_id || returned.has(row.title_id)) return [];
+              const source = { document: row.document, client_name: row.client_name, client_document: row.client_document, branch: row.branch, issued_on: row.issued_on, due_date: row.due_date, amount_cents: row.amount_cents };
+              const proof = options.manager ? approvals.get(row.title_id) : null;
+              if (spec.kind === 'VALIDATED' && !receipts.has(row.title_id)) receipts.set(row.title_id, { title_id: row.title_id, amount_cents: row.amount_cents - 100, payment_date: '2026-10-17' });
+              return [{ line: row.line, title_id: row.title_id, document: row.document, client_name: row.client_name, branch: row.branch, due_date: row.due_date, amount_cents: row.amount_cents, reason_kind: spec.kind, expected_revision: 7, retired_from_report: spec.kind === 'RETIRED', receipt_id: spec.kind === 'VALIDATED' ? `90000000-0000-4000-8000-${String(row.line).padStart(12, '0')}` : null, receipt_fingerprint: createHash('sha256').update(JSON.stringify(spec.kind === 'VALIDATED' ? receipts.get(row.title_id) : null)).digest('hex'), received_amount_cents: spec.kind === 'VALIDATED' ? row.amount_cents - 100 : null, payment_date: spec.kind === 'VALIDATED' ? '2026-10-17' : null, source_row: source, source_fingerprint: createHash('sha256').update(JSON.stringify(source)).digest('hex'), approval_id: proof?.approval_id ?? null, approved_by: proof?.approved_by ?? null, approved_at: proof?.approved_at ?? null, can_approve: !!options.manager && !['AMBIGUOUS', 'CONFLICT'].includes(row.outcome) }];
+            });
+            const unapproved = lastReturnItems.filter(item => !item.approval_id).length;
+            Object.assign(preview, { return_approval_version: '057', return_count: lastReturnItems.length, return_unapproved_count: unapproved, return_items: lastReturnItems, conflict_count: preview.conflict_count + unapproved, can_commit: preview.can_commit && unapproved === 0 });
+            preview.errors.push(...lastReturnItems.filter(item => !item.approval_id).map(item => ({ line: item.line, column: 'Retorno à carteira', problem: 'Título quitado ou retirado exige aprovação individual da Gerência para retornar.', correction: 'Confira a entrada bancária e a parcela, informe a justificativa e aprove o retorno antes de analisar novamente.' })));
+            if (options.invalidReturnPreview && lastReturnItems.length) preview.return_items = [{ ...lastReturnItems[0], source_fingerprint: 'invalid' }, ...lastReturnItems.slice(1)];
+          }
         }
         if (options.invalidMappedPreview && Object.keys(body.title_mappings ?? {}).length) { preview.errors = []; preview.can_commit = true; }
         lastCount = rows.length; lastMode = body.mode;
@@ -119,6 +158,7 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
       if (options.inactiveAfterUncertainCommit && seen.commits.length === 1) { scenario.inactiveChoice = true; return reply({ error: 'unavailable' }, 503); }
       if (body.mode === 'open' && scenario.inactiveChoice && Object.values(body.collector_mappings ?? {}).includes(collectorA)) return reply({ code: 'P0030' }, 409);
       if (body.mode === 'open') {
+        if (lastReturnItems.length && (!options.manager || lastReturnItems.some(item => !approvals.has(item.title_id)))) return reply({ code: 'P0047' }, 409);
         for (const group of lastGroups) {
           const existing = owners.get(group.customer_key), selected = body.collector_mappings?.[group.customer_key];
           if (existing && selected && selected !== existing) return reply({ code: '23514' }, 409);
@@ -131,9 +171,10 @@ export async function setupReceivableImport(page: Page, options: FixtureOptions 
       }
       importHashes.add(createHash('sha256').update(Buffer.from(body.file_base64, 'base64')).digest('hex'));
       if (body.mode === 'open' && body.full_report && !imported && options.retireMissing) seen.retirementApplications.push(...retirementItems);
+      if (body.mode === 'open') for (const item of lastReturnItems) { seen.returnApplications.push({ title_id: item.title_id, approval_id: approvals.get(item.title_id).approval_id, kind: item.reason_kind }); returned.add(item.title_id); if (item.receipt_id) seen.reversedReceiptIds.add(item.receipt_id); }
       imported = true;
       const summary = { import_id: '40000000-0000-4000-8000-000000000001', row_count: lastCount, new_count: 1, open_count: 0, pending_count: 0, validated_in_source_count: 0, idempotent: seen.commits.length > 1,
-        ...(body.mode === 'open' ? { ...lastOpenReport, request_id: body.request_id } : {}) };
+        ...(body.mode === 'open' ? { ...lastOpenReport, request_id: body.request_id, ...(options.returnLines ? { return_approval_version: '057', returned_count: lastReturnItems.length } : {}) } : {}) };
       if (body.mode === 'open') completedOpenRequests.set(body.request_id, summary);
       if (options.paidAfterUncertainCommit && seen.commits.length === 1) { scenario.paid = true; receipts.set(candidateId, { title_id: candidateId, amount_cents: 120000, payment_date: '2026-10-17' }); }
       if ((options.uncertainCommit || options.paidAfterUncertainCommit) && seen.commits.length === 1) return reply({ error: 'unavailable' }, 503);

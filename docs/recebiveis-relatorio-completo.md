@@ -8,7 +8,7 @@ Na análise, confira os títulos presentes, as responsáveis e eventuais víncul
 - Ausente sem cobrança: sai das filas e dos saldos ativos; permanece no histórico.
 - Ausência não confirma pagamento. A fila pendente não soma valores em recebido, comissão ou apuração salva.
 - **Títulos quitados** confirma o valor e a data efetivamente recebidos e resolve a pendência. A atualização **0.18.12 / SQL 055** também permite confirmar títulos retirados com movimento de cobrança em **Contas a Receber → Validação financeira**, conferindo a entrada bancária. A comissão continua sujeita às regras de elegibilidade e vigência existentes.
-- Se o título reaparecer em abertos, volta à carteira com o mesmo vínculo e histórico. Um recebimento já validado não é reaberto.
+- Desde **0.18.13 / SQL 057**, um título retirado ou quitado que reaparece em abertos exige [aprovação individual da Gerência para retornar](conciliacao-retornos-recebiveis.md). Uma quitação incorreta só é estornada após essa aprovação e a confirmação do arquivo; os registros anteriores são preservados.
 
 A classificação como trabalhado segue a regra já utilizada pela apuração: atendimento iniciado, ação de cobrança ou indicação de que houve cobrança. Nenhum evento, recebimento, data ou valor é inventado a partir de uma ausência. Contatos e histórico de trabalho permanecem preservados. Um intervalo em andamento no título retirado é encerrado com motivo próprio, preservando o tempo decorrido.
 

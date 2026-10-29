@@ -2,6 +2,8 @@
 
 Em **Contas a Receber → Validação financeira**, o financeiro informa a data real e o valor efetivamente recebido. O relato original da cobradora permanece disponível e não é convertido automaticamente em valores financeiros.
 
+Desde **0.18.13 / SQL 057**, uma quitação incorreta que reaparece no relatório de abertos pode ser corrigida pela [aprovação individual de retorno na importação](conciliacao-retornos-recebiveis.md). O estorno preserva o recebimento anterior e seu histórico; a decisão da Gerência só altera a situação financeira ao confirmar a importação.
+
 ## Conferir um recebimento
 
 1. Abra a fila e clique em **Conferir** no título desejado.

@@ -60,6 +60,9 @@ async function seed() {
   for (const name of names) await db.exec(await file(name));
   await db.exec(await file('050_paid_bank_rules.sql'));
   await db.exec(await file('053_receivable_financial_validation.sql'));
+  await db.exec(await file('055_receivable_validation_commissions.sql'));
+  await db.exec(await file('056_receivable_receipt_reversal.sql'));
+  await db.exec(await file('057_receivable_return_approval.sql'));
   await db.query('INSERT INTO cf_private.payable_paid_bank_aliases(source_key,official_bank_name) VALUES($1,$2)', [paidBankAlias.source_key, paidBankAlias.official_bank_name]);
   ({ today, older, month } = (await db.query("SELECT d::text today,(d-90)::text older,date_trunc('month',d)::date::text AS \"month\" FROM(SELECT(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date d)s")).rows[0]);
   await db.query('INSERT INTO public.collection_agents(id,display_name) VALUES($1,$2)', [id(101), 'Responsável sintética de preparação']);
@@ -91,8 +94,14 @@ async function seed() {
   const stay = { ...paid, document: 'CR-PRESENTE-SYN', client_name: 'Cliente sintético presente' };
   const validated = { ...paid, document: 'CR-VALIDACAO-SYN', client_name: 'Cliente sintético de validação', amount_cents: 15000 };
   async function open(rows, full) {
-    const collectors = Object.fromEntries(rows.map(row => ['name:' + row.client_name.toUpperCase(), id(101)]));
-    const preview = await scalar('SELECT public.preview_receivables_open_report($1,$2,$3,$4,$5,$6) r', ['grupo-consolidado', JSON.stringify(rows), full, today, '{}', JSON.stringify(collectors)]);
+    await actor('manager');
+    let preview = await scalar('SELECT public.preview_receivables_open_report($1,$2,$3,$4,$5,$6) r', ['grupo-consolidado', JSON.stringify(rows), full, today, '{}', '{}']);
+    const collectors = Object.fromEntries((preview.customer_collector_assignments ?? []).filter(item => item.requires_selection && !item.collector_id).map(item => [item.customer_key, id(101)]));
+    if (Object.keys(collectors).length) preview = await scalar('SELECT public.preview_receivables_open_report($1,$2,$3,$4,$5,$6) r', ['grupo-consolidado', JSON.stringify(rows), full, today, '{}', JSON.stringify(collectors)]);
+    for (const item of preview.return_items ?? []) {
+      if (!item.approval_id) await scalar('SELECT public.approve_receivable_report_return(p_title_id=>$1,p_expected_revision=>$2,p_expected_receipt_id=>$3,p_source_row=>$4,p_reason=>$5,p_request_id=>$6,p_expected_receipt_fingerprint=>$7) r', [item.title_id, item.expected_revision, item.receipt_id, JSON.stringify(item.source_row), 'Retorno sintético para verificar cópia e restauração', randomUUID(), item.receipt_fingerprint]);
+    }
+    if (preview.return_count) preview = await scalar('SELECT public.preview_receivables_open_report($1,$2,$3,$4,$5,$6) r', ['grupo-consolidado', JSON.stringify(rows), full, today, '{}', JSON.stringify(collectors)]);
     return gateway('commit_receivables_open_report_from_gateway', [users.manager.id, users.manager.session, 'grupo-consolidado', ...sourceArgs(`receber-abertos-${++sequence}`), JSON.stringify(rows), '{}', preview.previous_import_id, preview.financial_revision, JSON.stringify(collectors), full, today, randomUUID()]);
   }
   await open([paid, retired, stay, validated], false);
@@ -111,6 +120,9 @@ async function seed() {
   const sync = await scalar('SELECT public.get_receivables_sync_revision() r');
   await gateway('commit_receivables_received_import_from_gateway', [users.manager.id, users.manager.session, 'grupo-consolidado', ...sourceArgs('recebidos-sinteticos'), JSON.stringify([{ ...paid, received_on: today, received_amount_cents: 11500 }]), '{}', sync.import_id, sync.financial_revision, false]);
   await open([stay], true);
+  // Um retorno aprovado estorna o recebido anterior sem apagar o livro original.
+  await open([stay, paid], true);
+  await open([retired], false);
 
   await owner();
   const job = id(201), path = `${users.manager.id}/${job}/original.xlsx`, artifact = Buffer.from([0, 1, 255, 128, 97]);
@@ -149,6 +161,10 @@ async function seed() {
   assert.equal(manualReceipt.manual_adjustment_cents, 500);
   assert.equal(manualReceipt.manual_adjustment_reason, 'Retenção sintética');
   assert.equal(manualReceipt.manual_original_due_date, older);
+  assert.equal(baseline['public.receivable_receipt_reversals'].length, 1);
+  assert.equal(baseline['cf_private.receivable_active_receipts'].length, 1);
+  assert.equal(baseline['cf_private.receivable_return_approvals'].length, 2);
+  assert.equal(baseline['cf_private.receivable_return_consumptions'].length, 2);
   console.log('Synthetic fixture:', filled.length, 'populated target tables, all', scope.targets.length, 'targets installed.');
 }
 
@@ -270,6 +286,8 @@ try {
         assert(Object.keys(run.counts).length < scope.targets.length);
         assert(!Object.hasOwn(run.counts, 'public.receivable_report_retirement_events'));
         assert(!Object.hasOwn(run.counts, 'cf_private.receivable_financial_validation_requests'));
+        assert(!Object.hasOwn(run.counts, 'public.receivable_receipt_reversals'));
+        assert(!Object.hasOwn(run.counts, 'cf_private.receivable_return_approvals'));
         assert.equal((await partial.scalar("SELECT public.list_commercial_items('2026-10-01') r")).count, 0);
         await partial.db.exec(restoreSql);
         assert.equal((await partial.scalar("SELECT public.list_commercial_items('2026-10-01') r")).count, 1);

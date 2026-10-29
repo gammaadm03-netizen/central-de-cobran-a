@@ -11,6 +11,7 @@ async function setup(page: Page, options: Options = {}) {
   const access = { profile: { id: id(1), username: 'TesteSecundario', display_name: 'Pessoa sintética', role_key: role, enabled: true }, permissions, collector_id: collector ? own : null };
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify({ sub: id(1), session_id: id(2), exp: 4070908800, role: 'authenticated' })).toString('base64url'), 'synthetic-test-only'].join('.');
   const title = { id: titleId, scope: 'grupo-consolidado', document: 'NF-SEC-1', client_name: 'Cliente sintético pendente', branch: 'Filial sintética', due_date: '2026-09-01', amount_cents: 123456, collector_id: options.unassigned ? null : own, status: 'PENDING_VALIDATION', validation_status: 'PENDING', retired_from_report: false, payment_source: options.sourceCollection ? 'COBRANCA' : 'IMPORTACAO_DIARIA', payment_reported_date: null as string | null, revision: 4 };
+  const receipts: { id: string; title_id: string; amount_cents: number; payment_date: string; validated_at: string }[] = options.existingReceipt ? [{ id: id(90), title_id: titleId, amount_cents: 120000, payment_date: '2026-10-17', validated_at: '2026-10-18T10:00:00Z' }] : [];
   const calls: { name: string; body: any; query: string }[] = [], writes: { name: string; body: any }[] = [];
   await page.route(`${project}/**`, async route => {
     const request = route.request(), url = new URL(request.url()), name = url.pathname.split('/').at(-1)!, body = request.postDataJSON();
@@ -34,7 +35,7 @@ async function setup(page: Page, options: Options = {}) {
       else if (filter?.startsWith('eq.')) rows = rows.filter(row => row.collector_id === filter.slice(3));
       return reply(rows, 200, rows.length);
     }
-    if (name === 'effective_receivable_receipts') return options.receiptDenied ? reply({ code: '42501', message: 'private details' }, 403) : reply(options.existingReceipt ? [{ id: id(90), title_id: titleId, amount_cents: 120000, payment_date: '2026-10-17', validated_at: '2026-10-18T10:00:00Z' }] : []);
+    if (name === 'effective_receivable_receipts') return options.receiptDenied ? reply({ code: '42501', message: 'private details' }, 403) : reply(receipts);
     if (name === 'collection_work_summary') {
       if (options.timeMissing) return reply({ code: 'PGRST202', message: 'private SQL' }, 404);
       const selected = collector ? own : body.p_collector_id || own;
@@ -51,7 +52,10 @@ async function setup(page: Page, options: Options = {}) {
       if (body.p_payment_date && body.p_payment_date > '2026-10-18') return reply({ code: 'PV004', message: 'private date constraint' }, 400);
       title.revision++;
       if (name === 'set_receivable_payment_date') title.payment_reported_date = body.p_payment_date;
-      else { title.status = body.p_decision === 'CONFIRM' ? 'VALIDATED' : 'NOT_LOCATED'; title.validation_status = body.p_decision === 'CONFIRM' ? 'VALIDATED' : 'NONE'; }
+      else {
+        title.status = body.p_decision === 'CONFIRM' ? 'VALIDATED' : 'NOT_LOCATED'; title.validation_status = body.p_decision === 'CONFIRM' ? 'VALIDATED' : 'NONE';
+        if (body.p_decision === 'CONFIRM') receipts.push({ id: id(90), title_id: titleId, amount_cents: body.p_received_cents, payment_date: body.p_payment_date, validated_at: '2026-10-18T15:00:00Z' });
+      }
       return reply(name === 'set_receivable_payment_date' ? null : { format_version: '053', request_id: body.p_request_id, title_id: titleId, decision: body.p_decision, receipt_id: body.p_decision === 'CONFIRM' ? id(90) : null, payment_date: body.p_payment_date, nominal_cents: title.amount_cents, received_cents: body.p_decision === 'CONFIRM' ? body.p_received_cents : null, adjustment_cents: body.p_decision === 'CONFIRM' ? title.amount_cents - body.p_received_cents : null, adjustment_reason: body.p_adjustment_reason, title_revision: title.revision });
     }
     throw new Error(`Unexpected offline secondary request ${name}`);
@@ -83,7 +87,7 @@ test('não localizado exige justificativa e volta para a mesma responsável sem 
   await page.getByRole('button', { name: 'Devolver à mesma responsável', exact: true }).click(); expect(seen.writes).toHaveLength(0);
   await page.getByLabel('Justificativa / observação da validação', { exact: true }).fill('Entrada não localizada no extrato');
   page.once('dialog', dialog => { expect(dialog.message()).toContain('mesma responsável'); return dialog.accept(); }); await page.getByRole('button', { name: 'Devolver à mesma responsável', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Título devolvido à mesma responsável'); expect(seen.writes[0].body).toMatchObject({ p_title_id: titleId, p_decision: 'NOT_LOCATED', p_payment_date: null, p_observation: 'Entrada não localizada no extrato' }); expect(seen.writes[0].body).not.toHaveProperty('p_collector_id'); expect(seen.title.collector_id).toBe(own);
+  await expect(page.getByRole('status')).toContainText('devolução registrada para a mesma responsável'); expect(seen.writes[0].body).toMatchObject({ p_title_id: titleId, p_decision: 'NOT_LOCATED', p_payment_date: null, p_observation: 'Entrada não localizada no extrato' }); expect(seen.writes[0].body).not.toHaveProperty('p_collector_id'); expect(seen.title.collector_id).toBe(own);
 });
 for (const role of ['diretor', 'cobradora_1'] as const) {
   test(`${role}: consulta validação sem poder confirmar, devolver ou alterar data`, async ({ page }) => {

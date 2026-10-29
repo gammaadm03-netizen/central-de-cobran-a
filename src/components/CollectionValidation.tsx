@@ -180,6 +180,10 @@ function ValidationDetail({ row, agents, canReadFinance, collectorId, canWrite, 
     let query = supabase.from('effective_receivable_receipts').select(receiptColumns).eq('title_id', row.id).limit(1);
     let result = await (signal ? query.abortSignal(signal) : query).retry(false);
     if (result.error && ['PGRST205', '42P01'].includes(result.error.code)) {
+      query = supabase.from('active_receivable_receipts').select(receiptColumns).eq('title_id', row.id).limit(1);
+      result = await (signal ? query.abortSignal(signal) : query).retry(false);
+    }
+    if (result.error && ['PGRST205', '42P01'].includes(result.error.code)) {
       query = supabase.from('receivable_receipts').select(receiptColumns).eq('title_id', row.id).limit(1);
       result = await (signal ? query.abortSignal(signal) : query).retry(false);
     }
@@ -258,10 +262,23 @@ function ValidationDetail({ row, agents, canReadFinance, collectorId, canWrite, 
       const result = await supabase.rpc('validate_receivable_payment_v2', { ...request }).retry(false);
       if (result.error) throw result.error;
       if (!validResult(result.data, request, row.amount_cents, row.retired_from_report)) throw new Error('invalid_validation_result');
+      let currentSettlement: boolean | null = null;
+      if (request.p_decision === 'CONFIRM') {
+        try {
+          const signal = AbortSignal.timeout(15_000);
+          const [currentTitle, activeReceipts] = await Promise.all([readTitle(signal), readReceipts(signal)]);
+          currentSettlement = currentTitle?.status === 'VALIDATED' && currentTitle.validation_status === 'VALIDATED'
+            && activeReceipts.some(receipt => receipt.id === result.data.receipt_id && receipt.amount_cents === request.p_received_cents && receipt.payment_date === request.p_payment_date);
+        } catch { currentSettlement = null; }
+      }
       setPending(null); onPendingChange(false);
       onCompleted(request.p_decision === 'CONFIRM'
-        ? `Recebimento validado: ${formatCents(request.p_received_cents!)} em ${dateLabel(request.p_payment_date)}. O título saiu da carteira ativa e das pendências de recebimento. Havendo movimento de cobrança, integra a base de comissões no período da data real do recebimento, conforme as regras vigentes.`
-        : 'Pagamento não localizado. Título devolvido à mesma responsável, sem recebimento confirmado.');
+        ? currentSettlement === true
+          ? `Recebimento validado: ${formatCents(request.p_received_cents!)} em ${dateLabel(request.p_payment_date)}. O título saiu da carteira ativa e das pendências de recebimento. Havendo movimento de cobrança, integra a base de comissões no período da data real do recebimento, conforme as regras vigentes.`
+          : currentSettlement === false
+            ? 'Protocolo de validação anterior confirmado no histórico. A situação atual do título mudou após essa validação; consulte a carteira e o histórico antes de outra operação. Nenhum novo recebimento foi enviado.'
+            : 'Protocolo de validação confirmado no histórico. Não foi possível conferir a situação atual do título. Atualize a carteira e o histórico antes de outra operação; não repita a confirmação como um novo recebimento.'
+        : 'Pagamento não localizado: devolução registrada para a mesma responsável, sem recebimento confirmado por este protocolo. A fila foi atualizada; confira a situação atual do título.');
     } catch (failure) {
       const code = failure && typeof failure === 'object' && 'code' in failure ? String(failure.code) : '';
       if (['PV001', 'PV002', 'PV003', 'PV004', 'PV005', 'PV006', '40001', '22023', '23514', '23505', 'P0002', '42501', 'PGRST202', 'PGRST205', '42P01', '42703', '42883', 'PGRST301', 'PGRST303'].includes(code)) {

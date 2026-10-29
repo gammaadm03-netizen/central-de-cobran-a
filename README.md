@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.12**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.13**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Aprovação de retorno na importação de recebíveis — 0.18.13
+
+Títulos quitados ou retirados do relatório anterior exigem aprovação individual da Gerência para voltar à carteira. A conferência apresenta a parcela, o recebimento existente e a justificativa do retorno. Aprovar registra a decisão; somente confirmar a importação aplica o retorno e eventual estorno, na mesma transação. Os registros originais e as apurações salvas permanecem no histórico. [Ativação do SQL 057 e rotina de conciliação](docs/conciliacao-retornos-recebiveis.md).
 
 ## Confirmação financeira das pendências de comissões — 0.18.12
 
