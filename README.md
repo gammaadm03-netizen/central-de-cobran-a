@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.14**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.15**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Abertura da conferência financeira — 0.18.15
+
+Ao clicar em **Conferir** na validação financeira, a tela leva o usuário ao formulário e posiciona o foco no título da conferência. O comportamento atende às filas de títulos ativos e retirados, inclusive durante o carregamento dos dados. Clicar novamente no mesmo título traz a conferência à vista sem apagar o preenchimento; fechar retorna ao botão de origem. A correção é da interface e não exige SQL ou atualização de função.
 
 ## Conciliação diária de títulos e cheques — 0.18.14
 

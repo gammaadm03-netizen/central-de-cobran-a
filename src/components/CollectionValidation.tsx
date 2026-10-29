@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import { dateLabel, formatCents } from '../lib/payables';
 import { collectionDateTime } from '../lib/collection-workbench';
@@ -81,6 +81,8 @@ export default function CollectionValidation({ canRead, canReadFinance = false, 
   const [rows, setRows] = useState<Title[]>([]), [count, setCount] = useState(0), [page, setPage] = useState(0);
   const [refresh, setRefresh] = useState(0), [loading, setLoading] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [selected, setSelected] = useState<Title | null>(null);
+  const [openSequence, setOpenSequence] = useState(0);
+  const selectedTrigger = useRef<HTMLButtonElement | null>(null);
   const [pendingValidation, setPendingValidation] = useState(false);
   function lockValidation(pending: boolean) { setPendingValidation(pending); window.dispatchEvent(new CustomEvent('receivable-validation-pending', { detail: pending })); }
   useEffect(() => () => { window.dispatchEvent(new CustomEvent('receivable-validation-pending', { detail: false })); }, []);
@@ -112,19 +114,28 @@ export default function CollectionValidation({ canRead, canReadFinance = false, 
   if (!canRead) return <p className="notice">Seu perfil não permite consultar a fila de validação.</p>;
   if (!allowed) return <p className="notice">A consulta depende do vínculo com sua carteira ou da permissão de Contas a Receber. Procure a Gerência Geral.</p>;
   function completed(text: string) { setNotice(text); setSelected(null); setRefresh(value => value + 1); onChange?.(); }
+  function openDetail(row: Title, trigger: HTMLButtonElement) {
+    selectedTrigger.current = trigger;
+    setSelected(row); setNotice(''); setOpenSequence(value => value + 1);
+  }
+  function closeDetail() {
+    setSelected(null);
+    const trigger = selectedTrigger.current;
+    if (trigger?.isConnected) { trigger.focus({ preventScroll: true }); trigger.scrollIntoView({ block: 'nearest' }); }
+  }
   return <section className="panel collection-secondary collection-validation" aria-labelledby="collection-validation-title">
     <div className="panel-header"><div><h2 id="collection-validation-title">Validação financeira</h2><p className="muted">Confira a entrada real antes de confirmar. Pagamento informado pela cobrança permanece pendente até a validação financeira.</p></div><button type="button" className="button secondary" disabled={loading || pendingValidation} onClick={() => { setNotice(''); setRefresh(value => value + 1); }}>Atualizar fila</button></div>
     {(!canReadFinance || !canValidate) && <p className="notice">Consulta em leitura. Somente um acesso autorizado do financeiro pode confirmar ou devolver pagamentos.</p>}
     {error && <p className="notice error" role="alert">{error}</p>}{notice && <p className="notice success" role="status">{notice}</p>}
     {canReadFinance && <label className="field collection-secondary-filter">Responsável pela carteira<select aria-label="Responsável pela carteira" value={collector} disabled={pendingValidation} onChange={event => { setCollector(event.target.value); setPage(0); }}><option value="">Todas as responsáveis</option><option value="unassigned">Sem responsável definida</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.display_name}</option>)}</select></label>}
-    <div className="table-wrap" aria-busy={loading}><table className="data-table"><caption>Pagamentos aguardando validação financeira</caption><thead><tr><th>Cliente / NF</th><th>Responsável</th><th>Vencimento</th><th>Valor original</th><th>Pagamento informado</th><th>Origem</th><th>Conferência</th></tr></thead><tbody>{loading ? <tr><td colSpan={7} className="empty-state">Carregando fila…</td></tr> : rows.length ? rows.map(row => <tr key={row.id}><td><strong>{row.client_name}</strong><div>{row.document} · Filial {row.branch}</div></td><td>{agents.find(agent => agent.id === row.collector_id)?.display_name ?? (row.collector_id ? 'Responsável atribuída' : 'Sem responsável definida')}</td><td>{dateLabel(row.due_date)}</td><td>{formatCents(row.amount_cents)}</td><td>{dateLabel(row.payment_reported_date)}</td><td>{row.payment_source === 'COBRANCA' ? 'Cobrança' : row.payment_source === 'IMPORTACAO_DIARIA' ? 'Importação diária' : 'Origem pendente'}</td><td><button type="button" className="button secondary" disabled={pendingValidation} onClick={() => { setSelected(row); setNotice(''); }}>Conferir {row.document}</button></td></tr>) : <tr><td colSpan={7} className="empty-state">{error ? 'Fila indisponível.' : 'Nenhum pagamento pendente para este filtro.'}</td></tr>}</tbody></table></div>
+    <div className="table-wrap" aria-busy={loading}><table className="data-table"><caption>Pagamentos aguardando validação financeira</caption><thead><tr><th>Cliente / NF</th><th>Responsável</th><th>Vencimento</th><th>Valor original</th><th>Pagamento informado</th><th>Origem</th><th>Conferência</th></tr></thead><tbody>{loading ? <tr><td colSpan={7} className="empty-state">Carregando fila…</td></tr> : rows.length ? rows.map(row => <tr key={row.id}><td><strong>{row.client_name}</strong><div>{row.document} · Filial {row.branch}</div></td><td>{agents.find(agent => agent.id === row.collector_id)?.display_name ?? (row.collector_id ? 'Responsável atribuída' : 'Sem responsável definida')}</td><td>{dateLabel(row.due_date)}</td><td>{formatCents(row.amount_cents)}</td><td>{dateLabel(row.payment_reported_date)}</td><td>{row.payment_source === 'COBRANCA' ? 'Cobrança' : row.payment_source === 'IMPORTACAO_DIARIA' ? 'Importação diária' : 'Origem pendente'}</td><td><button type="button" className="button secondary" disabled={pendingValidation} aria-expanded={selected?.id === row.id} aria-controls="collection-validation-detail" onClick={event => openDetail(row, event.currentTarget)}>Conferir {row.document}</button></td></tr>) : <tr><td colSpan={7} className="empty-state">{error ? 'Fila indisponível.' : 'Nenhum pagamento pendente para este filtro.'}</td></tr>}</tbody></table></div>
     <div className="pagination"><span>{count.toLocaleString('pt-BR')} pendentes · página {page + 1} de {Math.max(1, Math.ceil(count / 25))}</span><button type="button" className="button secondary" disabled={loading || pendingValidation || !page} onClick={() => setPage(value => value - 1)}>Página anterior da fila</button><button type="button" className="button secondary" disabled={loading || pendingValidation || (page + 1) * 25 >= count} onClick={() => setPage(value => value + 1)}>Próxima página da fila</button></div>
-    {canReadFinance && <RetiredValidationQueue refreshKey={refresh + refreshKey} pending={pendingValidation} onSelect={row => { setSelected(row); setNotice(''); }} />}
-    {selected && <ValidationDetail key={`${selected.id}:${selected.revision}`} row={selected} agents={agents} canReadFinance={canReadFinance} collectorId={collectorId} canWrite={canReadFinance && canWrite} canValidate={canReadFinance && canValidate} onClose={() => setSelected(null)} onPendingChange={lockValidation} onCompleted={completed} />}
+    {canReadFinance && <RetiredValidationQueue refreshKey={refresh + refreshKey} pending={pendingValidation} selectedId={selected?.id} onSelect={openDetail} />}
+    {selected && <ValidationDetail key={`${selected.id}:${selected.revision}`} row={selected} openSequence={openSequence} agents={agents} canReadFinance={canReadFinance} collectorId={collectorId} canWrite={canReadFinance && canWrite} canValidate={canReadFinance && canValidate} onClose={closeDetail} onPendingChange={lockValidation} onCompleted={completed} />}
   </section>;
 }
 
-function RetiredValidationQueue({ refreshKey, pending, onSelect }: { refreshKey: number; pending: boolean; onSelect: (row: Title) => void }) {
+function RetiredValidationQueue({ refreshKey, pending, selectedId, onSelect }: { refreshKey: number; pending: boolean; selectedId?: string; onSelect: (row: Title, trigger: HTMLButtonElement) => void }) {
   const [search, setSearch] = useState(''), [filter, setFilter] = useState(''), [page, setPage] = useState(0), [refresh, setRefresh] = useState(0);
   const [rows, setRows] = useState<Title[]>([]), [count, setCount] = useState(0), [loading, setLoading] = useState(true), [error, setError] = useState('');
   useEffect(() => {
@@ -146,12 +157,17 @@ function RetiredValidationQueue({ refreshKey, pending, onSelect }: { refreshKey:
   return <section className="stack" aria-labelledby="retired-validation-title"><div className="panel-header"><div><h3 id="retired-validation-title">Títulos retirados aguardando confirmação financeira</h3><p className="help-text">Títulos com movimento de cobrança que saíram do relatório completo. Confira a entrada bancária, a data e o valor recebidos para confirmar. A ausência no relatório não confirma pagamento.</p></div><button type="button" className="button secondary" disabled={pending || loading} onClick={() => setRefresh(value => value + 1)}>Atualizar títulos retirados</button></div>
     <form className="form-grid" onSubmit={event => { event.preventDefault(); if (!pending && !loading) { setFilter(search.trim()); setPage(0); setRefresh(value => value + 1); } }}><label className="field">Buscar título retirado<input value={search} disabled={pending} maxLength={500} onChange={event => setSearch(event.target.value)} placeholder="Cliente, documento ou filial" /></label><button className="button secondary" disabled={pending || loading}>Consultar títulos retirados</button></form>
     {error && <p className="notice error" role="alert">{error}</p>}
-    <div className="table-wrap" aria-busy={loading}><table className="data-table"><caption>Títulos retirados com movimento de cobrança</caption><thead><tr><th>Cliente / NF</th><th>Filial</th><th>Vencimento</th><th>Valor original</th><th>Conferência</th></tr></thead><tbody>{loading ? <tr><td colSpan={5}>Consultando títulos retirados…</td></tr> : rows.length ? rows.map(row => <tr key={row.id}><td>{row.client_name}<div>{row.document}</div></td><td>{row.branch}</td><td>{dateLabel(row.due_date)}</td><td>{formatCents(row.amount_cents)}</td><td><button type="button" className="button secondary" disabled={pending} onClick={() => onSelect(row)}>Conferir retirado {row.document}</button></td></tr>) : <tr><td colSpan={5}>{error ? 'Fila de retirados indisponível.' : 'Nenhum título retirado aguardando confirmação neste filtro.'}</td></tr>}</tbody></table></div>
+    <div className="table-wrap" aria-busy={loading}><table className="data-table"><caption>Títulos retirados com movimento de cobrança</caption><thead><tr><th>Cliente / NF</th><th>Filial</th><th>Vencimento</th><th>Valor original</th><th>Conferência</th></tr></thead><tbody>{loading ? <tr><td colSpan={5}>Consultando títulos retirados…</td></tr> : rows.length ? rows.map(row => <tr key={row.id}><td>{row.client_name}<div>{row.document}</div></td><td>{row.branch}</td><td>{dateLabel(row.due_date)}</td><td>{formatCents(row.amount_cents)}</td><td><button type="button" className="button secondary" disabled={pending} aria-expanded={selectedId === row.id} aria-controls="collection-validation-detail" onClick={event => onSelect(row, event.currentTarget)}>Conferir retirado {row.document}</button></td></tr>) : <tr><td colSpan={5}>{error ? 'Fila de retirados indisponível.' : 'Nenhum título retirado aguardando confirmação neste filtro.'}</td></tr>}</tbody></table></div>
     <div className="pagination"><span>{count.toLocaleString('pt-BR')} retirado(s) · página {page + 1} de {Math.max(1, Math.ceil(count / 25))}</span><button type="button" className="button secondary" disabled={pending || loading || !page} onClick={() => setPage(value => value - 1)}>Retirados anteriores</button><button type="button" className="button secondary" disabled={pending || loading || (page + 1) * 25 >= count} onClick={() => setPage(value => value + 1)}>Próximos retirados</button></div>
   </section>;
 }
 
-function ValidationDetail({ row, agents, canReadFinance, collectorId, canWrite, canValidate, onClose, onPendingChange, onCompleted }: { row: Title; agents: Agent[]; canReadFinance: boolean; collectorId: string | null; canWrite: boolean; canValidate: boolean; onClose: () => void; onPendingChange: (pending: boolean) => void; onCompleted: (text: string) => void }) {
+function ValidationDetail({ row, openSequence, agents, canReadFinance, collectorId, canWrite, canValidate, onClose, onPendingChange, onCompleted }: { row: Title; openSequence: number; agents: Agent[]; canReadFinance: boolean; collectorId: string | null; canWrite: boolean; canValidate: boolean; onClose: () => void; onPendingChange: (pending: boolean) => void; onCompleted: (text: string) => void }) {
+  const heading = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    heading.current?.focus({ preventScroll: true });
+    heading.current?.scrollIntoView({ block: 'start' });
+  }, [openSequence]);
   const [date, setDate] = useState(row.payment_reported_date ?? ''), [decision, setDecision] = useState('CONFIRM'), [observation, setObservation] = useState('');
   const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [readReady, setReadReady] = useState(false), [receipts, setReceipts] = useState<Receipt[]>([]), [error, setError] = useState('');
   const [report, setReport] = useState<PaymentReport | null>(null);
@@ -306,7 +322,7 @@ function ValidationDetail({ row, agents, canReadFinance, collectorId, canWrite, 
       p_received_cents: confirm ? receivedCents : null, p_adjustment_reason: confirm && adjustmentCents! > 0 ? adjustmentReason.trim() : null,
       p_observation: observation.trim(), p_expected_revision: row.revision, p_request_id: crypto.randomUUID() });
   }
-  return <section className="collection-validation-detail" aria-label={`Conferência financeira de ${row.document}`}><div className="panel-header"><h3>Conferência de {row.document}</h3><button type="button" className="button secondary" disabled={busy || !!pending} onClick={onClose}>Fechar conferência</button></div>
+  return <section id="collection-validation-detail" className="collection-validation-detail" aria-label={`Conferência financeira de ${row.document}`}><div className="panel-header"><h3 ref={heading} tabIndex={-1}>Conferência de {row.document}</h3><button type="button" className="button secondary" disabled={busy || !!pending} onClick={onClose}>Fechar conferência</button></div>
     <p>{row.client_name} · Valor original {formatCents(row.amount_cents)} · Vencimento {dateLabel(row.due_date)}</p>
     {row.retired_from_report && <p className="notice">Título retirado do relatório completo, com movimento de cobrança registrado. A confirmação financeira com data e valor reais encerra a pendência e inclui o recebimento na base de comissões do período correspondente, conforme as regras vigentes.</p>}
     {row.payment_source === 'COBRANCA' && <section className="notice" aria-label="Relato original da cobrança"><strong>Relato original da cobrança</strong>{loading ? <p>Consultando o relato registrado…</p> : report ? <>

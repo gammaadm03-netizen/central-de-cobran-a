@@ -4,7 +4,7 @@ const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const id = (value: number) => `98000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const userId = id(1), sessionId = id(2), agentId = id(20), titleId = id(30);
 const originalObservation = 'Cliente informou pagamento e enviou comprovante.\nConferir a entrada bancária antes da baixa.';
-interface Options { role?: 'contas_receber' | 'diretor' | 'cobradora_1'; reportDenied?: boolean; wrongReport?: boolean; noReport?: boolean; receiptExists?: boolean; stale?: boolean; unassigned?: boolean; retired?: boolean; ignoreRetiredFilter?: boolean; missingRetirement?: boolean; detailRetired?: boolean; detailDenied?: boolean; wrongDetail?: boolean; missing053?: boolean; netExample?: boolean; commitRace?: 'retired' | 'validated'; uncertain?: 'lost-after-commit' | 'proof'; retiredQueue?: boolean; retiredSourceMissing?: boolean; retiredQueueUnsafe?: boolean; retiredProofOld?: boolean; format055?: boolean; reversedAfterCommit?: boolean; postCommitReadUnavailable?: boolean }
+interface Options { role?: 'contas_receber' | 'diretor' | 'cobradora_1'; reportDenied?: boolean; wrongReport?: boolean; noReport?: boolean; receiptExists?: boolean; stale?: boolean; unassigned?: boolean; retired?: boolean; ignoreRetiredFilter?: boolean; missingRetirement?: boolean; detailRetired?: boolean; detailDenied?: boolean; wrongDetail?: boolean; missing053?: boolean; netExample?: boolean; commitRace?: 'retired' | 'validated'; uncertain?: 'lost-after-commit' | 'proof'; retiredQueue?: boolean; retiredSourceMissing?: boolean; retiredQueueUnsafe?: boolean; retiredProofOld?: boolean; format055?: boolean; reversedAfterCommit?: boolean; postCommitReadUnavailable?: boolean; queueSize?: number; deferDetailRead?: boolean }
 
 async function setup(page: Page, options: Options = {}) {
   await page.clock.setFixedTime(new Date('2026-10-18T15:00:00Z'));
@@ -20,6 +20,9 @@ async function setup(page: Page, options: Options = {}) {
   const reported = { id: id(40), title_id: options.wrongReport ? id(999) : titleId, action: 'PAID', collector_id: agentId, contact_date: '2026-10-18', next_action: null, next_date: null, observation: originalObservation, return_note: 'Status operacional: TÍTULO PAGO; próxima ação: VALIDAÇÃO FINANCEIRA', payment_date: '2026-10-17', created_at: '2026-10-18T14:10:00Z' };
   const receipts: Record<string, unknown>[] = options.receiptExists ? [{ id: id(50), title_id: titleId, amount_cents: title.amount_cents, payment_date: '2026-10-17', delay_days: 63, delay_band: '61_90', payment_source: 'COBRANCA', validated_at: '2026-10-18T14:30:00Z' }] : [];
   const results = new Map<string, Record<string, unknown>>();
+  let releaseDetailReads!: () => void;
+  const detailGate = new Promise<void>(resolve => { releaseDetailReads = resolve; });
+  const queued = (row: typeof title) => Array.from({ length: options.queueSize ?? 1 }, (_, index) => index === 0 ? { ...row } : { ...row, id: id(100 + index), document: `NF-EXTRA-${index}`, client_name: `Órgão sintético adicional ${index}` });
   const calls: { name: string; query: string; body: any }[] = [], writes: { name: string; body: any }[] = [];
   await page.route(`${project}/**`, async route => {
     const request = route.request(), url = new URL(request.url()), name = url.pathname.split('/').at(-1)!, body = request.postDataJSON();
@@ -35,14 +38,16 @@ async function setup(page: Page, options: Options = {}) {
     if (name === 'collection_agents') return reply([{ id: agentId, display_name: 'Cobradora sintética responsável', enabled: true }]);
     if (name === 'receivable_retired_validation_queue') {
       const eligible = options.retiredQueue && title.retired_from_report && title.status !== 'VALIDATED' && !receipts.length && (!body.p_search || `${title.document} ${title.client_name}`.includes(body.p_search));
-      const rows = eligible ? [{ ...title, collection_worked: !options.retiredQueueUnsafe }] : [];
+      const rows = eligible ? queued(title).map(row => ({ ...row, collection_worked: !options.retiredQueueUnsafe })) : [];
       return reply({ format_version: '055', count: rows.length, rows });
     }
     if (name === 'receivable_titles' || name === 'collection_overdue_titles') {
+      if (options.deferDetailRead && url.searchParams.has('id')) await detailGate;
       if (results.size && options.postCommitReadUnavailable) return reply({ code: '503', message: 'private state read details' }, 503);
       if (url.searchParams.has('id') && options.detailDenied) return reply({ code: '42501', message: 'private title details' }, 403);
       if (url.searchParams.has('id') && options.detailRetired) title.retired_from_report = true;
       let rows = [{ ...title, ...(options.missingRetirement ? { retired_from_report: undefined } : {}), ...(url.searchParams.has('id') && options.wrongDetail ? { id: id(999) } : {}), ...(name === 'collection_overdue_titles' ? { collection_as_of_date: '2026-10-18' } : {}) }];
+      if (!url.searchParams.has('id') && options.queueSize) rows = queued(title);
       const status = url.searchParams.get('status'), validation = url.searchParams.get('validation_status'), owner = url.searchParams.get('collector_id');
       if (status?.startsWith('eq.')) rows = rows.filter(row => row.status === status.slice(3));
       else if (status === 'neq.VALIDATED') rows = rows.filter(row => row.status !== 'VALIDATED');
@@ -93,7 +98,7 @@ async function setup(page: Page, options: Options = {}) {
   await page.goto('/'); await page.getByLabel('Usuário', { exact: true }).fill('FinanceiroSintetico'); await page.getByLabel('Senha', { exact: true }).fill('synthetic-password'); await page.getByRole('button', { name: 'Entrar na Central', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeVisible();
   if (!collector) await page.getByRole('navigation').getByRole('button', { name: 'Contas a Receber', exact: true }).click();
-  return { calls, writes, title, reported, receipts };
+  return { calls, writes, title, reported, receipts, releaseDetailReads };
 }
 const validationPanel = (page: Page) => page.getByRole('tabpanel', { name: 'Validação financeira', exact: true });
 async function openValidation(page: Page) {
@@ -101,6 +106,70 @@ async function openValidation(page: Page) {
   await validationPanel(page).getByRole('button', { name: 'Conferir NF-FIN-1', exact: true }).click();
   await expect(validationPanel(page).getByRole('region', { name: 'Relato original da cobrança', exact: true })).toContainText(originalObservation);
 }
+
+for (const retiredQueue of [false, true]) test(`Conferir ${retiredQueue ? 'retirado' : 'pendente'} leva a conferência ao foco e à área visível, inclusive ao reabrir pelo teclado`, async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 650 });
+  const seen = await setup(page, { queueSize: 25, retiredQueue });
+  await page.getByRole('tab', { name: 'Validação financeira', exact: true }).click();
+  const trigger = validationPanel(page).getByRole('button', { name: retiredQueue ? 'Conferir retirado NF-FIN-1' : 'Conferir NF-FIN-1', exact: true });
+  const heading = validationPanel(page).getByRole('heading', { name: 'Conferência de NF-FIN-1', exact: true });
+  await trigger.click();
+  await expect(heading).toBeFocused();
+  await expect(heading).toBeInViewport({ ratio: 1 });
+  expect(seen.writes).toEqual([]);
+  await validationPanel(page).getByRole('button', { name: 'Fechar conferência', exact: true }).click();
+  await expect(heading).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toBeInViewport({ ratio: 1 });
+  await trigger.press('Enter');
+  await expect(heading).toBeFocused();
+  await expect(heading).toBeInViewport({ ratio: 1 });
+  expect(seen.writes).toEqual([]);
+});
+
+test('Conferir o mesmo título novamente traz o formulário à tela e preserva o rascunho sem novas leituras ou validações', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 650 });
+  const seen = await setup(page, { queueSize: 25 });
+  await openValidation(page);
+  const panel = validationPanel(page), heading = panel.getByRole('heading', { name: 'Conferência de NF-FIN-1', exact: true });
+  await expect(heading).toBeFocused();
+  const amount = panel.getByLabel('Valor efetivamente recebido (R$)', { exact: true });
+  const observation = panel.getByRole('textbox', { name: 'Justificativa / observação da validação', exact: true });
+  await amount.fill('1.200,00');
+  await observation.fill('Rascunho sintético ainda em conferência.');
+  const detailReads = () => seen.calls.filter(call => call.name === 'receivable_titles' && new URLSearchParams(call.query).get('id') === `eq.${titleId}`).length;
+  const before = detailReads(), trigger = panel.getByRole('button', { name: 'Conferir NF-FIN-1', exact: true });
+  await trigger.scrollIntoViewIfNeeded();
+  await expect(heading).not.toBeInViewport();
+  await trigger.click();
+  await expect(heading).toBeFocused();
+  await expect(heading).toBeInViewport({ ratio: 1 });
+  await expect(amount).toHaveValue('1.200,00');
+  await expect(observation).toHaveValue('Rascunho sintético ainda em conferência.');
+  expect(detailReads()).toBe(before);
+  expect(seen.writes).toEqual([]);
+});
+
+test('a conferência fica visível enquanto consulta e mostra o erro de leitura sem enviar recebimento', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 650 });
+  const seen = await setup(page, { queueSize: 25, deferDetailRead: true, reportDenied: true });
+  try {
+    await page.getByRole('tab', { name: 'Validação financeira', exact: true }).click();
+    const panel = validationPanel(page), heading = panel.getByRole('heading', { name: 'Conferência de NF-FIN-1', exact: true });
+    await panel.getByRole('button', { name: 'Conferir NF-FIN-1', exact: true }).click();
+    await expect(heading).toBeFocused();
+    await expect(heading).toBeInViewport({ ratio: 1 });
+    await expect(panel.getByRole('status').filter({ hasText: 'Conferindo recebimentos registrados…' })).toBeInViewport({ ratio: 1 });
+    await expect(panel.getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true })).toBeDisabled();
+    seen.releaseDetailReads();
+    await expect(panel.getByRole('alert')).toContainText('Seu perfil não permite esta consulta ou validação financeira.');
+    await expect(panel.getByRole('alert')).toBeInViewport({ ratio: 1 });
+    await expect(heading).toBeFocused();
+    await expect(panel.getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true })).toBeDisabled();
+    await expect(page.getByText('private SQL and another customer must never appear', { exact: true })).toHaveCount(0);
+    expect(seen.writes).toEqual([]);
+  } finally { seen.releaseDetailReads(); }
+});
 
 test('Contas a Receber abre a fila dedicada e exibe o último PAID original sem reutilizar sua observação como decisão financeira', async ({ page }) => {
   const seen = await setup(page);
