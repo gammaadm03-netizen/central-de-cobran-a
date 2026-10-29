@@ -92,7 +92,10 @@ DECLARE
   'public.receivable_receipt_reversals',
   'cf_private.receivable_active_receipts',
   'cf_private.receivable_return_approvals',
-  'cf_private.receivable_return_consumptions'
+  'cf_private.receivable_return_consumptions',
+  'cf_private.payable_daily_reports',
+  'cf_private.payable_daily_requests',
+  'cf_private.payable_daily_actions'
  ];
  v_preserved text[] := ARRAY[
   'public.profiles',

@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.13**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.14**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Conciliação diária de títulos e cheques — 0.18.14
+
+Selecionar o relatório completo da manhã inicia a conferência de Contas a Pagar. A confirmação aplica inclusões, atualizações e os pagamentos dos títulos ausentes: títulos comuns na data do vencimento e cheques na data oficial da importação. Cada fluxo mantém sua própria posição; a primeira carga de cheques estabelece a referência. Marcadores de R$ 0,01 exigem confirmação individual sem gerar realizado. Contas já vinculadas são reaproveitadas; exceções permanecem visíveis. Reenvios, correções posteriores e histórico são protegidos pelo protocolo da importação. [Ativar o SQL 058, atualizar payables-import e usar a rotina diária](docs/conciliacao-diaria-contas-pagar.md).
 
 ## Aprovação de retorno na importação de recebíveis — 0.18.13
 

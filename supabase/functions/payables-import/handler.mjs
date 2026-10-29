@@ -1,8 +1,9 @@
 import {
-  MAX_FILE_BYTES, MAX_ROWS, parseCivilDate, parseCsv, validateWorkbookExpandedSize, validatePayableRows, validatePayablePaidRows,
+  MAX_FILE_BYTES, MAX_ROWS, parseCivilDate, parseCsv, validateWorkbookExpandedSize, validatePayableRows, validatePayablePaidRows, validatePayableDailyRows,
 } from '../../../src/lib/payables-parser.mjs';
 import { validReconciliationPreview, validResolutionChoices } from './reconciliation.mjs';
 import { isInternalCashBank } from '../../../src/lib/payable-bank-rules.mjs';
+import { validDailyRequest, validDailyPreview, validDailyCommit, dailyReportSourceRows } from './daily-reconciliation.mjs';
 
 const MAX_BODY_BYTES = 12 * 1024 * 1024;
 const MAX_BASE64_LENGTH = 4 * Math.ceil(MAX_FILE_BYTES / 3);
@@ -40,6 +41,7 @@ const SAFE_MESSAGES = new Set([
   'A data do pagamento é futura.', 'A data de referência da conferência é inválida.',
   'O relatório de pagamentos contém situação incompatível com pagamento confirmado.',
   'Lançamento repetido no relatório de pagamentos.',
+  'O relatório contém títulos. Desmarque a declaração de posição sem cheques pendentes.',
 ]);
 const safeMessage = message => SAFE_MESSAGES.has(message) || /^Limite de (?:150|300|1500) caracteres excedido\.$/.test(message) ? message : PARSE_FAILURE;
 
@@ -165,6 +167,9 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
       if (code === 'P0042') return respond(409, { code, error: 'Confira a baixa sem pagamento e os dados atuais do título antes de confirmar.' });
       if (code === 'P0043') return respond(409, { code, error: 'Confira as escolhas da conciliação e atualize o banco e a função de importação quando solicitado.' });
       if (code === 'P0050') return respond(409, { code, activation_required: true, error: 'Ative as regras de bancos e baixas de Caixa Interno no banco e na função payables-import antes de importar.' });
+      if (code === 'P0058') return result.payload?.activation_required === true
+        ? respond(409, { code, activation_required: true, error: 'Ative a conciliação diária de títulos e cheques no banco e atualize a função payables-import.' })
+        : respond(409, { code, activation_required: false, error: 'Confira as exceções e use o relatório completo atualizado antes de concluir a conciliação diária.' });
       if (code === '22023' || code === '23514') return respond(400, { code, error: 'A importação foi recusada. Confira as linhas, a origem completa e a classificação de todos os planos.' });
       if (result.status === 401) return respond(401, { error: 'Sua sessão expirou. Entre novamente.' });
       log('upstream_unavailable');
@@ -191,9 +196,11 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
       try { body = await readBody(request); }
       catch { return respond(400, { error: INVALID_REQUEST }); }
       const reconciled = body.reconciliation_version === '043';
+      const daily = body.mode === 'daily';
       const useExplicitPaymentDate = body.payment_date_version === PAYMENT_DATE_VERSION;
       const useBankRules = body.bank_rules_version === '050';
-      if (Object.keys(body).some(key => !['action', 'file_name', 'file_base64', 'mappings', 'complete', 'previous_import_id', 'mode', 'bank_mappings', 'confirm_corrections', 'previous_financial_revision', 'reconciliation_version', 'full_report', 'resolution_choices', 'request_id', 'payment_date_version', 'bank_rules_version'].includes(key))
+      if (daily && !validDailyRequest(body)) return respond(400, { error: INVALID_REQUEST });
+      if (!daily && (Object.keys(body).some(key => !['action', 'file_name', 'file_base64', 'mappings', 'complete', 'previous_import_id', 'mode', 'bank_mappings', 'confirm_corrections', 'previous_financial_revision', 'reconciliation_version', 'full_report', 'resolution_choices', 'request_id', 'payment_date_version', 'bank_rules_version'].includes(key))
         || !['preview', 'commit'].includes(body.action)
         || (Object.hasOwn(body, 'mode') && !['forecast', 'payments'].includes(body.mode))
         || (Object.hasOwn(body, 'payment_date_version') && (body.mode !== 'payments' || !useExplicitPaymentDate))
@@ -206,7 +213,7 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
           || body.mode === 'payments' && Object.hasOwn(body, 'full_report') && body.full_report !== false))
         || (body.mode !== 'payments' && (Object.hasOwn(body, 'bank_mappings') || Object.hasOwn(body, 'confirm_corrections') || !reconciled && Object.hasOwn(body, 'previous_financial_revision')))
         || typeof body.file_name !== 'string' || body.file_name.length < 1 || body.file_name.length > 250
-        || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name)) return respond(400, { error: INVALID_REQUEST });
+        || body.file_name !== body.file_name.trim() || /[/\\\u0000-\u001f\u007f]/.test(body.file_name))) return respond(400, { error: INVALID_REQUEST });
       const validPlanMappings = mappings => mappings && typeof mappings === 'object' && !Array.isArray(mappings)
         && Object.keys(mappings).length <= MAX_ROWS
         && !Object.entries(mappings).some(([key, value]) => !key.trim() || key.length > 300 || typeof value !== 'string' || !value.trim() || value.length > 100);
@@ -217,12 +224,13 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
         || (Object.hasOwn(body, 'confirm_corrections') && typeof body.confirm_corrections !== 'boolean')
         || (Object.hasOwn(body, 'previous_financial_revision') && body.previous_financial_revision !== null
           && (typeof body.previous_financial_revision !== 'string' || !body.previous_financial_revision || body.previous_financial_revision !== body.previous_financial_revision.trim() || body.previous_financial_revision.length > 256))) return respond(400, { error: INVALID_REQUEST });
-      if ((body.mode === 'payments' || reconciled) && !['read', 'write'].every(action => access.payload.permissions.some(permission => permission?.resource === 'contas_pagar' && permission.action === action))) {
+      if ((body.mode === 'payments' || reconciled || daily) && !['read', 'write'].every(action => access.payload.permissions.some(permission => permission?.resource === 'contas_pagar' && permission.action === action))
+        || daily && !access.payload.permissions.some(permission => permission?.resource === 'importar_bases' && permission.action === 'read')) {
         return respond(403, { code: '42501', error: 'Seu perfil não tem permissão para esta operação.' });
       }
       if (/\.xls$/i.test(body.file_name)) return respond(400, { error: 'O formato .xls antigo ainda não é aceito. No Excel, salve uma cópia como .xlsx.' });
       if (!/\.(xlsx|xlsm|csv)$/i.test(body.file_name)) return respond(400, { error: 'Selecione um arquivo .xlsx, .xlsm ou .csv.' });
-      if (body.action === 'commit' && (body.complete !== true
+      if (!daily && body.action === 'commit' && (body.complete !== true
         || (body.mode !== 'payments' && !validPlanMappings(body.mappings))
         || ((body.mode === 'payments' || reconciled) && (typeof body.previous_financial_revision !== 'string' || !body.previous_financial_revision))
         || (reconciled && (typeof body.request_id !== 'string' || !UUID.test(body.request_id)))
@@ -246,12 +254,50 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
         }
         // The service supplies the reference day. Browser clocks and the
         // forecast due date cannot establish that a payment already happened.
-        parsed = body.mode === 'payments' ? validatePayablePaidRows(matrix, { excel1904, today: officialToday(now()), useExplicitPaymentDate, allowInternalCashWriteoff: useBankRules }) : validatePayableRows(matrix, { excel1904 });
+        parsed = body.mode === 'payments' ? validatePayablePaidRows(matrix, { excel1904, today: officialToday(now()), useExplicitPaymentDate, allowInternalCashWriteoff: useBankRules })
+          : daily ? validatePayableDailyRows(matrix, { excel1904, allowEmptyCheques: body.empty_cheques_confirmed === true }) : validatePayableRows(matrix, { excel1904 });
       } catch (error) {
         return respond(422, { code: 'SOURCE_VALIDATION_FAILED', error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: [{ line: 0, column: 'Arquivo', problem: safeMessage(error instanceof Error ? error.message : ''), correction: CORRECTION }] });
       }
       if (parsed.errors.length) return respond(422, { code: 'SOURCE_VALIDATION_FAILED', error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: problemsFor(parsed.errors) });
       if (reconciled && !validResolutionChoices(body.resolution_choices ?? {}, parsed.rows.length)) return respond(400, { error: INVALID_REQUEST });
+      const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+      if (signal.aborted) throw new Error('request_timed_out');
+      if (daily) {
+        const selectedRows = dailyReportSourceRows(parsed.rows, body.report_kind);
+        if (!selectedRows.length && body.empty_cheques_confirmed !== true || body.report_kind === 'CHEQUES' && selectedRows.length !== parsed.rows.length) {
+          return respond(422, { code: 'SOURCE_VALIDATION_FAILED', error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: [{ line: 0, column: 'Tipo do relatório',
+            problem: body.report_kind === 'CHEQUES' ? 'O relatório de cheques deve conter somente títulos identificados como CHEQUE ou com número de cheque informado.' : 'O relatório selecionado não contém títulos comuns. Escolha o relatório completo de títulos ou a opção Cheques.',
+            correction: 'Confira o conteúdo e selecione o tipo correto de relatório antes de importar.' }] });
+        }
+        if (!validResolutionChoices(body.resolution_choices ?? {}, selectedRows.length)) return respond(400, { error: INVALID_REQUEST });
+        const capabilities = await call('/rest/v1/rpc/payables_import_capabilities', { data: {} });
+        const missingSchema = !capabilities.ok && ['PGRST202', '42883', '42P01'].includes(capabilities.payload?.code);
+        if (missingSchema || capabilities.ok && (capabilities.payload?.daily_reports !== true || capabilities.payload?.daily_report_version !== '058')) {
+          return upstreamFailure({ status: 409, payload: { code: 'P0058', activation_required: true } });
+        }
+        if (!capabilities.ok) return upstreamFailure(capabilities);
+        const data = { p_scope: 'grupo-consolidado', p_rows: parsed.rows, p_report_kind: body.report_kind,
+          p_mappings: body.mappings ?? {}, p_bank_mappings: body.bank_mappings ?? {}, p_resolution_choices: body.resolution_choices ?? {},
+          p_empty_cheques_confirmed: body.empty_cheques_confirmed ?? false };
+        const path = body.action === 'preview' ? 'preview_payables_daily_report' : 'commit_payables_daily_report_from_gateway';
+        const previewStartedOn = officialToday(now());
+        const result = await call(`/rest/v1/rpc/${path}`, { service: body.action === 'commit', data: {
+          ...data, ...(body.action === 'commit' ? { p_user_id: auth.payload.id, p_session_id: sessionId,
+            p_file_name: body.file_name, p_file_sha256: hash, p_file_base64: body.file_base64,
+            p_previous_import_id: body.previous_import_id, p_previous_financial_revision: body.previous_financial_revision,
+            p_expected_report_date: body.expected_report_date, p_request_id: body.request_id } : {}),
+        } });
+        if (!result.ok && ['PGRST202', '42883', '42P01'].includes(result.payload?.code)) return upstreamFailure({ status: 409, payload: { code: 'P0058', activation_required: true } });
+        if (!result.ok) return upstreamFailure(result);
+        if (body.action === 'preview') {
+          if (!validDailyPreview(result.payload, { sourceRows: parsed.rows, reportKind: body.report_kind, resolutionChoices: body.resolution_choices ?? {}, emptyChequesConfirmed: body.empty_cheques_confirmed ?? false })
+            || ![previewStartedOn, officialToday(now())].includes(result.payload.report_date)) throw new Error('invalid_daily_preview');
+          return respond(200, { rows: result.payload.rows, preview: result.payload, file_sha256: hash });
+        }
+        if (!validDailyCommit(result.payload, { sourceRows: parsed.rows, request: body })) throw new Error('invalid_daily_commit');
+        return respond(200, result.payload);
+      }
       // Older clients without an explicit mode retain their reviewed import
       // contract. New modes must never fall back to disappearance settlement.
       const hasCheque = parsed.rows.some(row => Object.hasOwn(row, 'cheque_number'));
@@ -272,7 +318,6 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
         if (!capabilities.ok) return upstreamFailure(capabilities);
         if (hasCheque && capabilities.payload?.cheque_number !== true) return upstreamFailure({ status: 409, payload: { code: 'P0019' } });
       }
-      const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
       if (signal.aborted) throw new Error('request_timed_out');
       if (body.action === 'preview') {
         const path = body.mode === 'payments' ? reconciled ? 'preview_payables_paid_import_v2' : 'preview_payables_paid_import' : body.mode === 'forecast' ? reconciled ? 'preview_payables_forecast_import_v2' : 'preview_payables_forecast_import' : 'preview_payables_import';

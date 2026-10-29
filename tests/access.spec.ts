@@ -64,6 +64,7 @@ async function setup(page:Page,role='gerente_geral',options:PermissionFixtureOpt
   if(url.pathname==='/rest/v1/rpc/receivables_summary')return reply({open_cents:0,overdue_cents:0,period_cents:0,active_count:0,pending_count:0,unassigned_count:0,received_period_cents:0,latest_import_at:null,overdue_bps:null,overdue_comlurb_cents:null});
   if(['/rest/v1/payable_titles','/rest/v1/payable_macros','/rest/v1/payable_plan_mappings','/rest/v1/payable_imports','/rest/v1/receivable_imports','/rest/v1/director_positions','/rest/v1/stock_positions'].includes(url.pathname))return route.fulfill({status:200,headers:{...headers,'content-range':'*/0'},json:[]});
   if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
+  if (url.pathname === '/rest/v1/rpc/receivables_daily_delinquency') return reply({ code: 'PGRST202' }, 404);
   if(url.pathname==='/rest/v1/rpc/current_access'){
    accessCalls++;if(accessCalls>1&&options.holdAccess)await options.holdAccess();return reply(data.access);
   }
@@ -136,6 +137,7 @@ test('CR com liberação individual acessa as nove bases e os formulários opera
   'Contas a Pagar','Contas a Receber','Contatos e descrições','Caixa / Bancos','Estoque',
   'Resumo da Diretoria','Fechamento / Faturamento','RH / DP','Custos',
  ]);
+ await page.getByRole('button',{name:'Previsões / novos títulos',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Importar Contas a Pagar',exact:true})).toBeVisible();
  await tabs.getByRole('tab',{name:'Estoque',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Registrar posição de estoque',exact:true})).toBeVisible();
@@ -205,6 +207,7 @@ test('limite individual de CP mostra somente três módulos e uma única base de
  const tabs=page.getByRole('tablist',{name:'Bases para atualização'});
  await expect(tabs.getByRole('tab')).toHaveCount(1);
  await expect(tabs.getByRole('tab')).toHaveText(['Contas a Pagar']);
+ await page.getByRole('button',{name:'Previsões / novos títulos',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Importar Contas a Pagar',exact:true})).toBeVisible();
  await nav.getByRole('button',{name:'Contas a Pagar',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Contas a Pagar',level:1,exact:true})).toBeVisible();

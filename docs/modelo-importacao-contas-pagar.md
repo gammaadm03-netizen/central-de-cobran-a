@@ -1,5 +1,7 @@
 # Modelo de importação de Contas a Pagar — 0.8.0
 
+> O [fluxo diário de títulos e cheques — 0.18.14](conciliacao-diaria-contas-pagar.md) utiliza as colunas de previsões abaixo e acrescenta a comparação entre relatórios completos. As regras deste documento para previsões incrementais e quitações continuam disponíveis nos modos anteriores.
+
 Os nomes abaixo foram confirmados pelo usuário. As colunas podem aparecer em outra ordem. A mesma estrutura é utilizada em dois contextos, escolhidos explicitamente em Importar Bases.
 
 | Coluna do relatório | Previsões / novos títulos | Pagamentos realizados |

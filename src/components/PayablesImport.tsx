@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import PayablePaidImport from './PayablePaidImport';
+import PayableDailyImport from './PayableDailyImport';
 import PayableImportReconciliation, { resolutionChoices, validReconciliationItems, payableUuid, type ReconciliationItem, type ImportBank, type ResolutionDraft, type ResolutionChoice } from './PayableImportReconciliation';
 import { officialToday } from './Treasury';
 import { analyzePayableFile, dateLabel, formatCents, normalizePlan, PAYABLE_SCOPE, payableError, payableImportRequest, type ImportPreview, type ImportProblem, type PayableImportRow } from '../lib/payables';
@@ -12,21 +13,31 @@ interface Analysis { file: File; hash: string; base64: string; rows: PayableImpo
 type ForecastRequest = Parameters<typeof payableImportRequest>[0] & { reconciliation_version: '043'; full_report: boolean; resolution_choices: Record<string, ResolutionChoice>; request_id?: string };
 interface FrozenForecast { body: ForecastRequest; rowCount: number }
 
-export default function PayablesImport({ canImport }: { canImport: boolean }) {
-  const [mode, setMode] = useState<'forecast' | 'payments'>('forecast');
+export default function PayablesImport({ canImport, onBusyChange }: { canImport: boolean; onBusyChange?: (busy: boolean) => void }) {
+  const [mode, setMode] = useState<'daily' | 'cheques' | 'forecast' | 'payments'>('daily');
   const [importBusy, setImportBusy] = useState(false);
+  useEffect(() => {
+    onBusyChange?.(importBusy);
+    window.dispatchEvent(new CustomEvent('receivable-validation-pending', { detail: importBusy }));
+  }, [importBusy, onBusyChange]);
+  useEffect(() => () => {
+    onBusyChange?.(false);
+    window.dispatchEvent(new CustomEvent('receivable-validation-pending', { detail: false }));
+  }, [onBusyChange]);
   if (!canImport) return <p className="notice">Seu perfil não permite importar bases de Contas a Pagar.</p>;
   return <>
     <section className="panel" aria-label="Tipo de importação de Contas a Pagar">
       <h2>Atualizar Contas a Pagar pelo relatório</h2>
-      <p>Escolha o conteúdo do arquivo. A primeira base e os novos títulos alimentam a previsão; o relatório dos pagos atualiza o realizado e concilia os títulos automaticamente.</p>
+      <p>Envie o relatório completo da manhã para atualizar a previsão e conciliar os títulos que deixaram de aparecer. Os cheques possuem uma conferência separada.</p>
       <div className="inline-actions">
+        <button type="button" className={`button${mode === 'daily' ? '' : ' secondary'}`} aria-pressed={mode === 'daily'} disabled={importBusy} onClick={() => setMode('daily')}>Relatório diário de títulos</button>
+        <button type="button" className={`button${mode === 'cheques' ? '' : ' secondary'}`} aria-pressed={mode === 'cheques'} disabled={importBusy} onClick={() => setMode('cheques')}>Relatório diário de cheques</button>
         <button type="button" className={`button${mode === 'forecast' ? '' : ' secondary'}`} aria-pressed={mode === 'forecast'} disabled={importBusy} onClick={() => setMode('forecast')}>Previsões / novos títulos</button>
         <button type="button" className={`button${mode === 'payments' ? '' : ' secondary'}`} aria-pressed={mode === 'payments'} disabled={importBusy} onClick={() => setMode('payments')}>Pagamentos realizados</button>
       </div>
-      <p className="help-text">Rotina: segunda-feira, novos títulos e alterações da previsão; terça a sexta, pagamentos realizados. Você também pode reprocessar um arquivo em outro dia. Na previsão, identifique se o relatório é completo ou contém somente inclusões e atualizações.</p>
+      <p className="help-text">Rotina diária: títulos ausentes são conciliados no vencimento; cheques ausentes são conciliados na data da importação. Para arquivos parciais ou comprovantes de pagamentos, use as opções de previsões e pagamentos realizados.</p>
     </section>
-    {mode === 'forecast' ? <ForecastImport canImport={canImport} onBusyChange={setImportBusy} /> : <PayablePaidImport canImport={canImport} onBusyChange={setImportBusy} />}
+    {mode === 'daily' || mode === 'cheques' ? <PayableDailyImport key={mode} canImport={canImport} reportKind={mode === 'cheques' ? 'CHEQUES' : 'NORMAL'} onBusyChange={setImportBusy} /> : mode === 'forecast' ? <ForecastImport canImport={canImport} onBusyChange={setImportBusy} /> : <PayablePaidImport canImport={canImport} onBusyChange={setImportBusy} />}
   </>;
 }
 

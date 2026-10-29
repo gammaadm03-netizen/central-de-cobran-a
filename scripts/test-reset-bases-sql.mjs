@@ -63,6 +63,7 @@ async function seed() {
   await db.exec(await file('055_receivable_validation_commissions.sql'));
   await db.exec(await file('056_receivable_receipt_reversal.sql'));
   await db.exec(await file('057_receivable_return_approval.sql'));
+  await db.exec(await file('058_payable_daily_reports.sql'));
   await db.query('INSERT INTO cf_private.payable_paid_bank_aliases(source_key,official_bank_name) VALUES($1,$2)', [paidBankAlias.source_key, paidBankAlias.official_bank_name]);
   ({ today, older, month } = (await db.query("SELECT d::text today,(d-90)::text older,date_trunc('month',d)::date::text AS \"month\" FROM(SELECT(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date d)s")).rows[0]);
   await db.query('INSERT INTO public.collection_agents(id,display_name) VALUES($1,$2)', [id(101), 'Responsável sintética de preparação']);
@@ -143,6 +144,22 @@ async function seed() {
   await gateway('commit_product_cost_recalculation_from_gateway', [users.manager.id, users.manager.session, costSource.import_id, '2026-10-01', commercial.import_id, randomUUID()]);
   const payroll = [{ source_row: 2, branch: 'FILIAL SINTÉTICA', employee: 'Pessoa sintética de preparação', sector: 'OPERAÇÃO', admitted_on: '2020-01-01', birthday_on: '1990-01-01', salary_base_cents: 200000, payroll_salary_cents: 170000, transport_cents: 12000, advance_cents: 20000, cost_allowance_cents: 10000, total_cents: 212000, count_label: null }];
   await gateway('commit_hr_sheet_import_from_gateway', [users.rh.id, users.rh.session, ...sourceArgs('folha-sintetica'), JSON.stringify(payroll), today, null, null]);
+  await actor();
+  const dailyBank = await scalar('SELECT display_name r FROM public.bank_accounts WHERE id=$1', [bank]);
+  const chequeA = { ...payable, entry_number: 'CP-CHQ-SYN-A', description: 'Cheque sintético de preparação A', bank_account: dailyBank, source_status: 'CHEQUE', cheque_number: '000001' };
+  const chequeB = { ...chequeA, entry_number: 'CP-CHQ-SYN-B', description: 'Cheque sintético de preparação B', cheque_number: '000002' };
+  async function dailyCheques(rows, empty = false) {
+    await actor();
+    const preview = await scalar('SELECT public.preview_payables_daily_report($1,$2,$3,$4,$5,$6,$7) r', ['grupo-consolidado', JSON.stringify(rows), 'CHEQUES', '{}', '{}', '{}', empty]);
+    assert.equal(preview.can_commit, true, JSON.stringify(preview.errors));
+    return gateway('commit_payables_daily_report_from_gateway', [users.manager.id, users.manager.session, 'grupo-consolidado', ...sourceArgs(`cheques-diarios-${++sequence}`), JSON.stringify(rows), 'CHEQUES', '{}', '{}', '{}', preview.previous_import_id, preview.financial_revision, preview.report_date, randomUUID(), empty]);
+  }
+  await dailyCheques([chequeA, chequeB]);
+  const dailyResult = await dailyCheques([chequeB]);
+  assert.equal(dailyResult.paid_count, 1);
+  const emptyDailyResult = await dailyCheques([], true);
+  assert.equal(emptyDailyResult.paid_count, 1);
+  assert.equal(emptyDailyResult.row_count, 0);
   await actor(); await scalar('SELECT public.save_director_position($1,$1) r', [today]);
   await owner();
   await db.exec('ALTER TABLE public.receivable_report_retirement_events DISABLE TRIGGER receivable_report_event_immutable; ALTER TABLE public.collection_description_references ENABLE ALWAYS TRIGGER collection_description_immutable;');
@@ -165,6 +182,10 @@ async function seed() {
   assert.equal(baseline['cf_private.receivable_active_receipts'].length, 1);
   assert.equal(baseline['cf_private.receivable_return_approvals'].length, 2);
   assert.equal(baseline['cf_private.receivable_return_consumptions'].length, 2);
+  assert.equal(baseline['cf_private.payable_daily_reports'].length, 3);
+  assert.equal(baseline['cf_private.payable_daily_requests'].length, 3);
+  assert.equal(baseline['cf_private.payable_daily_actions'].length, 2);
+  assert.equal(baseline['public.payable_imports'].filter(row => row.row_count === 0).length, 1);
   console.log('Synthetic fixture:', filled.length, 'populated target tables, all', scope.targets.length, 'targets installed.');
 }
 

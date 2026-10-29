@@ -84,6 +84,7 @@ async function setup(page:Page, options:Options={}) {
 const csv='Nº Lançamento;Histórico;Vencimento;Valor;Plano de Contas;Filial\r\n14;Fornecedor sintético;16/10/2026;1.234,56;ENERGIA;3';
 async function analyze(page:Page,content=csv,full=false) {
   await page.getByRole('navigation').getByRole('button',{name:'Importar Bases',exact:true}).click();
+  await page.getByRole('button', { name: 'Previsões / novos títulos', exact: true }).click();
   await page.getByRole('radio',{name:full?'Relatório completo de títulos em aberto':'Somente novos títulos e atualizações',exact:true}).check();
   await page.getByLabel('Relatório de previsões de Contas a Pagar',{exact:true}).setInputFiles({name:'cp.csv',mimeType:'text/csv',buffer:Buffer.from(content)});
   await page.getByRole('checkbox',{name:'Confirmo o conteúdo do relatório e o tipo de importação selecionado.',exact:true}).check();await page.getByRole('button',{name:'Analisar arquivo',exact:true}).click();
@@ -109,6 +110,7 @@ test('XLSX real com data Excel e valor numérico passa análise isolada e manté
   const seen=await setup(page);const workbook=new ExcelJS.Workbook(),sheet=workbook.addWorksheet('CP');
   sheet.addRow(['Nº Lançamento','Histórico','Vencimento','Valor','Plano de Contas','Filial']);sheet.addRow(['14','Fornecedor sintético',new Date('2026-10-16T00:00:00Z'),1234.56,'ENERGIA','3']);sheet.getCell('C2').numFmt='dd/mm/yyyy';
   const bytes=await workbook.xlsx.writeBuffer();await page.getByRole('navigation').getByRole('button',{name:'Importar Bases',exact:true}).click();
+  await page.getByRole('button', { name: 'Previsões / novos títulos', exact: true }).click();
   await page.getByRole('radio',{name:'Somente novos títulos e atualizações',exact:true}).check();
   await page.getByLabel('Relatório de previsões de Contas a Pagar',{exact:true}).setInputFiles({name:'cp.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:Buffer.from(bytes)});
   await page.getByRole('checkbox',{name:'Confirmo o conteúdo do relatório e o tipo de importação selecionado.',exact:true}).check();await page.getByRole('button',{name:'Analisar arquivo',exact:true}).click();
@@ -142,6 +144,7 @@ test('ERP XLSX maps account separately from cost plan and previews the original 
   sheet.getCell('F2').numFmt = 'dd/mm/yyyy hh:mm'; sheet.getCell('G2').numFmt = 'dd/mm/yyyy hh:mm';
   const bytes = await workbook.xlsx.writeBuffer();
   await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click();
+  await page.getByRole('button', { name: 'Previsões / novos títulos', exact: true }).click();
   await page.getByRole('radio',{name:'Somente novos títulos e atualizações',exact:true}).check();
   await page.getByLabel('Relatório de previsões de Contas a Pagar', { exact: true }).setInputFiles({ name: 'modelo-erp.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from(bytes) });
   await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Analisar arquivo', exact: true }).click();
@@ -180,6 +183,7 @@ test('cheque numbers have their own title column and CSV preserves leading zeros
 test('o tipo de relatório não é presumido e precisa ser escolhido explicitamente antes da análise', async ({ page }) => {
   const seen = await setup(page, { knownPlan: true });
   await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click();
+  await page.getByRole('button', { name: 'Previsões / novos títulos', exact: true }).click();
   await expect(page.getByRole('radio', { name: 'Relatório completo de títulos em aberto', exact: true })).not.toBeChecked();
   await expect(page.getByRole('radio', { name: 'Somente novos títulos e atualizações', exact: true })).not.toBeChecked();
   await page.getByLabel('Relatório de previsões de Contas a Pagar', { exact: true }).setInputFiles({ name: 'cp.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
@@ -255,11 +259,17 @@ test('resposta incerta congela bytes, tipo, escolhas e protocolo e repete exatam
   await expect(page.getByRole('radio', { name: 'Relatório completo de títulos em aberto', exact: true })).toBeDisabled(); await expect(cent).toBeDisabled();
   await expect(page.getByLabel('Macro para ENERGIA', { exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Validar escolhas da importação', exact: true })).toBeDisabled();
+  await expect(page.getByRole('navigation').getByRole('button', { name: 'Contas a Pagar', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeDisabled();
+  await expect(page.getByRole('tab', { name: 'Contas a Pagar', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Pagamentos realizados', exact: true })).toBeDisabled();
   const request = seen.commits[0]; expect(request.request_id).toMatch(/^[a-f\d-]{36}$/i); expect(seen.writeoffs).toEqual(['row:1']);
   await page.getByRole('button', { name: 'Repetir confirmação pendente', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Importação concluída' })).toBeVisible();
   expect(seen.commits).toHaveLength(2); expect(seen.commits[1]).toEqual(request); expect(seen.writeoffs).toEqual(['row:1']); expect(seen.ledger).toEqual([]);
   await expect(page.getByLabel('Relatório de previsões de Contas a Pagar', { exact: true })).toBeEnabled();
+  await expect(page.getByRole('navigation').getByRole('button', { name: 'Contas a Pagar', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeEnabled();
 });
 
 test('serviço antigo sem contrato043 bloqueia a importação sem usar o fluxo anterior', async ({ page }) => {

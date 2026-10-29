@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.18.13",
+  "version": "0.18.14",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -105,7 +105,10 @@
     "test:receivable-receipt-reversal-sql": "node scripts/bundle-receivable-receipt-reversal.mjs && node scripts/test-receivable-receipt-reversal-sql.mjs",
     "test:receivable-reversal-consumers-sql": "node scripts/test-receivable-reversal-consumers-sql.mjs",
     "bundle:receivable-return-approval": "node scripts/bundle-receivable-return-approval.mjs",
-    "test:receivable-return-approval-sql": "node scripts/bundle-receivable-return-approval.mjs && node scripts/test-receivable-return-approval-sql.mjs"
+    "test:receivable-return-approval-sql": "node scripts/bundle-receivable-return-approval.mjs && node scripts/test-receivable-return-approval-sql.mjs",
+    "bundle:payable-daily-reports": "node scripts/bundle-payable-daily-reports.mjs",
+    "test:payable-daily-reports-sql": "node scripts/test-payable-daily-reports-sql.mjs",
+    "test:payable-daily-paid-consumers-sql": "node scripts/test-payable-daily-paid-consumers-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

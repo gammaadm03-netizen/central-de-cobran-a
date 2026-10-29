@@ -1,12 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
-import { parseCivilDate, parseMoneyCents, parseCsv, inspectWorkbookZip, validateWorkbookExpandedSize, validatePayableRows, validatePayablePaidRows, isChequeNumberHeader, readPayableChequeCell } from './payables-parser.mjs';
+import { parseCivilDate, parseMoneyCents, parseCsv, inspectWorkbookZip, validateWorkbookExpandedSize, validatePayableRows, validatePayableDailyRows, validatePayablePaidRows, isChequeNumberHeader, readPayableChequeCell } from './payables-parser.mjs';
 
 const header = ['Nº Lançamento','Histórico','Vencimento','Valor','Plano de Contas','Filial'];
 const row = ['14','Fornecedor sintético','16/10/2026','1.234,56','ENERGIA','3'];
 const erpHeader = ['Lançamento', 'Histórico', 'Plano cp - Conta: nome', 'Plano cc - Conta: nome', 'Emissão: valor do lançamento', 'Emissão: data', 'Vencimento: data', 'Filial', 'Situação'];
 const erpRow = ['80', 'Fornecedor de teste', 'ENERGIA - FIXO', 'BANCO TESTE - CONTA 1', '125,90', '16/10/2026 15:03', '20/10/2026 00:00', '7', 'CHEQUE'];
+test('posição de cheques zerada exige declaração explícita e cabeçalhos completos válidos', () => {
+  for (const matrix of [[erpHeader], [erpHeader, [], Array(erpHeader.length).fill(' ')]]) {
+    assert.deepEqual(validatePayableDailyRows(matrix, { allowEmptyCheques: true }), { rows: [], errors: [] });
+    for (const flag of [undefined, false, 'true']) assert.ok(validatePayableDailyRows(matrix, { allowEmptyCheques: flag }).errors.length);
+    assert.ok(validatePayableRows(matrix).errors.length);
+    assert.ok(validatePayablePaidRows(matrix).errors.length);
+  }
+});
+test('declaração de cheques zerados não oculta títulos, fórmulas ou erros de cabeçalho', () => {
+  const containsTitles = validatePayableDailyRows([erpHeader, erpRow], { allowEmptyCheques: true });
+  assert.deepEqual(containsTitles.rows, []); assert.match(containsTitles.errors[0].problem, /contém títulos/);
+  for (const matrix of [[], [[]], [erpHeader.slice(1)], [[...erpHeader, erpHeader[0]]],
+    [erpHeader, ['TOTAL']], [erpHeader, [{ formula: '""', result: '' }]], [erpHeader, ['\u200B']]]) {
+    assert.ok(validatePayableDailyRows(matrix, { allowEmptyCheques: true }).errors.length);
+  }
+  assert.deepEqual(validatePayableDailyRows([erpHeader, erpRow]), validatePayableRows([erpHeader, erpRow]));
+});
+test('XLSX somente com cabeçalho permite posição zerada sem transformar uma linha incompleta em ausência', async () => {
+  const book = new ExcelJS.Workbook(), sheet = book.addWorksheet('Cheques sintéticos');
+  sheet.addRow(erpHeader); sheet.getCell('A2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
+  const loaded = new ExcelJS.Workbook(); await loaded.xlsx.load(await book.xlsx.writeBuffer());
+  const data = loaded.worksheets[0], matrix = [];
+  for (let index = 1; index <= data.rowCount; index++) matrix.push(data.getRow(index).values.slice(1));
+  assert.deepEqual(validatePayableDailyRows(matrix, { allowEmptyCheques: true }), { rows: [], errors: [] });
+  matrix.push(['Fornecedor sem lançamento']);
+  assert.ok(validatePayableDailyRows(matrix, { allowEmptyCheques: true }).errors.some(error => error.line === 3));
+});
 test('CSV brasileiro preserva delimitadores, aspas e quebras de linha entre aspas', () => {
   const matrix = parseCsv('\uFEFF' + header.join(';') + '\r\n14;"Fornecedor; A ""B""\nUnidade";16/10/2026;"1.234,56";ENERGIA;3\r\n');
   assert.equal(matrix[1][1], 'Fornecedor; A "B"\nUnidade');

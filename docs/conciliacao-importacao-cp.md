@@ -1,5 +1,7 @@
 # Conciliar na importação de Contas a Pagar — 0.16.0
 
+> Para a rotina diária com baixas calculadas por ausência, use o [fluxo diário de títulos e cheques — 0.18.14](conciliacao-diaria-contas-pagar.md). Este documento descreve a conciliação manual mantida em **Previsões / novos títulos** e **Pagamentos realizados**.
+
 A importação passa a distinguir um relatório completo de uma atualização com somente alguns títulos. Quando o arquivo é completo, a Central apresenta os títulos que deixaram de aparecer para que a responsável informe **Pago** ou **Somente baixado**. Os títulos identificados por **R$ 0,01** exigem confirmação individual de baixa sem pagamento. As escolhas são verificadas antes de concluir e aplicadas junto com o arquivo, em uma única confirmação final.
 
 Uma ausência no relatório não comprova pagamento. Para registrar valor realizado, continuam obrigatórios a data, o valor e a conta efetivamente usados. A informação verbal de que um título foi pago, sem esses dados, não cria um pagamento na Central.
