@@ -95,9 +95,9 @@ function csv(rows: OperationalTitle[], agents: Agent[], name: string) {
   const link = document.createElement('a'); link.href = url; link.download = name; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export default function Receivables({ canWrite, canValidate, onImport }: { canWrite: boolean; canValidate: boolean; onImport?: () => void }) {
-  const [active, setActive] = useState<'titles' | 'validation'>('titles');
-  const [validationVisited, setValidationVisited] = useState(false), [revision, setRevision] = useState(0);
+export default function Receivables({ canWrite, canValidate, onImport, initialValidation = false }: { canWrite: boolean; canValidate: boolean; onImport?: () => void; initialValidation?: boolean }) {
+  const [active, setActive] = useState<'titles' | 'validation'>(initialValidation ? 'validation' : 'titles');
+  const [validationVisited, setValidationVisited] = useState(initialValidation), [revision, setRevision] = useState(0);
   const titlesTab = useRef<HTMLButtonElement | null>(null), validationTab = useRef<HTMLButtonElement | null>(null);
   function openValidation() { setValidationVisited(true); setActive('validation'); }
   function changed() { setRevision(value => value + 1); }
@@ -229,7 +229,7 @@ function TitleDetails({ row, agents, canAssign, canContact, canValidate, onOpenV
     return () => abort.abort();
   }, [row.id]);
   return <section className="receivable-detail" aria-labelledby="receivable-detail-title"><div className="panel-header"><div><h3 ref={headingRef} tabIndex={-1} id="receivable-detail-title">Título {row.document} · {row.client_name}</h3><p className="muted">{formatCents(row.amount_cents)} · Vencimento {dateLabel(row.due_date)} · {statuses[row.status]}</p></div><button type="button" className="button secondary" onClick={onClose}>Fechar detalhes</button></div>
-    {row.retired_from_report && <p className="notice">{row.status === 'VALIDATED' ? 'Título retirado anteriormente por ausência no relatório completo. O recebimento foi confirmado; o histórico permanece disponível.' : 'Título ausente do relatório completo, retirado da carteira ativa. O histórico permanece disponível. O relatório de quitados confirma o recebimento e libera a apuração da comissão quando houver cobrança.'}</p>}
+    {row.retired_from_report && <p className="notice">{row.status === 'VALIDATED' ? 'Título retirado anteriormente por ausência no relatório completo. O recebimento foi confirmado; o histórico permanece disponível.' : 'Título ausente do relatório completo, retirado da carteira ativa. O histórico permanece disponível. O financeiro pode confirmar o recebimento na Validação financeira ou pelo relatório de quitados; havendo movimento de cobrança, o recebimento entra na base de comissões pela data real e pelas regras vigentes.'}</p>}
     {!row.retired_from_report && row.status === 'PENDING_VALIDATION' && <p className="notice">{row.payment_source === 'IMPORTACAO_DIARIA' ? 'Quitado na origem — aguardando validação. O título desapareceu do relatório completo. Informe a data real do pagamento após conferir a entrada bancária.' : 'Pagamento informado pela cobrança — aguardando validação financeira.'} A responsável permanece vinculada até a validação.</p>}
     {canAssign && !row.collector_id && !row.collector_locked && row.status !== 'VALIDATED' && <AssignmentForm row={row} agents={agents.filter(agent => agent.enabled)} onCompleted={onCompleted} />}
     {canContact && row.status !== 'VALIDATED' && <ContactForm row={row} onCompleted={onCompleted} />}

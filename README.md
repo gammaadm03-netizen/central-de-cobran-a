@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.11**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.12**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Confirmação financeira das pendências de comissões — 0.18.12
+
+Títulos trabalhados retirados pelo relatório completo também podem ter o recebimento confirmado em **Contas a Receber → Validação financeira**. A confirmação grava a data e o valor efetivamente recebidos, retira o título das pendências e o disponibiliza na base de comissão do mês do recebimento, conforme as regras vigentes. O histórico e a retirada pelo relatório são preservados. A importação de Quitados continua disponível. [Ativação e rotina de conferência](docs/validacao-financeira-recebiveis.md).
 
 ## Novos status do atendimento de cobrança — 0.18.11
 

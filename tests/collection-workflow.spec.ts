@@ -32,6 +32,7 @@ async function setup(page: Page, options: Options = {}) {
     if (name === 'auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', expires_in: 86400, token_type: 'bearer' }, access });
     if (name === 'user') return reply({ id: id(1), aud: 'authenticated', role: 'authenticated', email: 'fixture@example.invalid', created_at: initial, app_metadata: {}, user_metadata: {} });
     if (name === 'current_access') return reply(access);
+    if (name === 'receivable_retired_validation_queue') return reply({ format_version: '055', count: 0, rows: [] });
     if (['collections_overdue_summary', 'receivables_management_summary', 'collection_work_summary', 'collection_customer_context'].includes(name)) return reply({ code: 'PGRST202' }, 404);
     if (name === 'collection_agents') return reply([{ id: own, display_name: 'Operadora de teste', enabled: true }]);
     if (name === 'prepare_collection_customer_email') {

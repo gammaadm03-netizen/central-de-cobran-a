@@ -67,6 +67,7 @@ async function setup(page: Page, options: Options = {}) {
     if (name === 'auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', expires_in: 86_400, token_type: 'bearer' }, access });
     if (url.pathname === '/auth/v1/user') return reply({ id: id(1), aud: 'authenticated', role: 'authenticated', email: 'fixture@example.invalid', created_at: initialTime.toISOString(), app_metadata: {}, user_metadata: {} });
     if (name === 'current_access') return reply(access);
+    if (name === 'receivable_retired_validation_queue') return reply({ format_version: '055', count: 0, rows: [] });
     // Previous database remains usable while the optional 027 context is not activated.
     if (name === 'collection_customer_context') return reply({ code: 'PGRST202' }, 404);
     if (name === 'collections_overdue_summary' || name === 'receivables_management_summary') return reply({ code: 'PGRST202' }, 404);

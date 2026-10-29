@@ -25,11 +25,11 @@ function response(body: any, options: { unsafe?: boolean; pages?: boolean; pendi
     rule_versions: pending ? [] : [{ id: ruleId, kind: body.p_kind, subject: seller ? base.subject : '', effective_from: '2026-10-01', created_at: '2026-10-15T12:00:00Z', reason: 'Regra sintética confirmada', config: seller ? { policy: 'COMMERCIAL', minimum_margin_bps: 1000 } : { eligible_collector_ids: [collectorId], bands } }], collector_bands: bands,
     revision: 'a'.repeat(32), assessments: [{ id: savedId, kind: body.p_kind, period_start: body.p_start, period_end: body.p_end, subject: null, band: null, revision: 'b'.repeat(32), created_at: '2026-10-17T12:00:00Z' }] };
 }
-async function setup(page: Page, options: { missing?: boolean; unsafe?: boolean; pages?: boolean; failureOnRefresh?: boolean; manager?: boolean; export?: boolean; pending?: boolean; pendingQueue?: boolean; pendingQueuePages?: boolean; pendingQueueMissing?: boolean; pendingQueueUnsafe?: boolean; pendingQueueFailureOnRefresh?: boolean } = {}) {
-  const access = { profile: { id: userId, username: 'PessoaSintetica', display_name: 'Pessoa sintética', role_key: options.manager ? 'gerente_geral' : 'diretor', enabled: true }, permissions: [{ resource: 'comissoes', action: 'read' }, ...(options.manager ? [{ resource: 'comissoes', action: 'write' }, { resource: 'usuarios', action: 'admin' }] : []), ...(options.export ? [{ resource: 'comissoes', action: 'export' }] : [])], collector_id: null };
+async function setup(page: Page, options: { missing?: boolean; unsafe?: boolean; pages?: boolean; failureOnRefresh?: boolean; manager?: boolean; export?: boolean; pending?: boolean; pendingQueue?: boolean; pendingQueuePages?: boolean; pendingQueueMissing?: boolean; pendingQueueUnsafe?: boolean; pendingQueueFailureOnRefresh?: boolean; financeValidation?: boolean } = {}) {
+  const access = { profile: { id: userId, username: 'PessoaSintetica', display_name: 'Pessoa sintética', role_key: options.manager ? 'gerente_geral' : options.financeValidation ? 'contas_receber' : 'diretor', enabled: true }, permissions: [{ resource: 'comissoes', action: 'read' }, ...(options.manager ? [{ resource: 'comissoes', action: 'write' }, { resource: 'usuarios', action: 'admin' }] : []), ...(options.financeValidation ? ['read', 'validate'].map(action => ({ resource: 'contas_receber', action })) : []), ...(options.export ? [{ resource: 'comissoes', action: 'export' }] : [])], collector_id: null };
   const claims = { sub: userId, session_id: '20000000-0000-4000-8000-000000000001', exp: Math.floor(Date.now() / 1000) + 3600, iat: Math.floor(Date.now() / 1000), role: 'authenticated' };
   const token = [Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'), Buffer.from(JSON.stringify(claims)).toString('base64url'), 'synthetic-only'].join('.');
-  const seen: any[] = [], writes: any[] = [], pendingSeen: any[] = []; let latest: any;
+  const seen: any[] = [], writes: any[] = [], pendingSeen: any[] = [], retiredValidationSeen: any[] = []; let latest: any;
   await page.route(`${project}/**`, async route => {
     const req = route.request(), url = new URL(req.url());
     const headers = { 'access-control-allow-origin': 'http://127.0.0.1:4173', 'access-control-allow-headers': 'apikey,content-type,authorization,x-client-info,prefer', 'access-control-allow-methods': 'GET,POST,OPTIONS' };
@@ -38,6 +38,9 @@ async function setup(page: Page, options: { missing?: boolean; unsafe?: boolean;
     if (url.pathname === '/functions/v1/auth-gateway') return reply({ session: { access_token: token, refresh_token: 'synthetic-refresh', expires_in: 3600, token_type: 'bearer' }, access });
     if (url.pathname === '/auth/v1/user') return reply({ id: userId, aud: 'authenticated', role: 'authenticated', email: 'synthetic@example.invalid', created_at: new Date().toISOString(), app_metadata: {}, user_metadata: {} });
     if (url.pathname === '/rest/v1/rpc/current_access') return reply(access);
+    if (url.pathname === '/rest/v1/rpc/receivable_retired_validation_queue') { retiredValidationSeen.push(req.postDataJSON()); return reply({ format_version: '055', count: 0, rows: [] }); }
+    if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
+    if (url.pathname === '/rest/v1/receivable_titles') return reply([]);
     if (url.pathname === '/rest/v1/rpc/commissions_report') {
       const body = req.postDataJSON(); seen.push(body);
       if (options.missing) return reply({ code: 'PGRST202', message: 'private SQL error' }, 404);
@@ -59,8 +62,9 @@ async function setup(page: Page, options: { missing?: boolean; unsafe?: boolean;
     throw new Error(`Unexpected request ${req.method()} ${url.pathname}`);
   });
   await page.goto('/'); await page.getByLabel('Usuário', { exact: true }).fill('PessoaSintetica'); await page.getByLabel('Senha', { exact: true }).fill('synthetic-password'); await page.getByRole('button', { name: 'Entrar na Central' }).click();
+  if (options.financeValidation) await page.getByRole('navigation', { name: 'Módulos da Central' }).getByRole('button', { name: 'Comissões', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Apuração de comissões das cobradoras' })).toBeVisible();
-  return { seen, writes, pendingSeen };
+  return { seen, writes, pendingSeen, retiredValidationSeen };
 }
 test('collector commission uses the actual amount, preserves nominal value in details, and Director stays read only', async ({ page }) => {
   await setup(page); const table = page.getByRole('table', { name: 'Recebimentos confirmados para comissões' });
@@ -120,16 +124,27 @@ test('Excel export retrieves every page of the same revision and honors export p
 test('worked missing titles wait separately without increasing received totals or inventing a commission', async ({ page }) => {
   const { writes } = await setup(page, { pendingQueue: true });
   const queue = page.getByRole('region', { name: 'Aguardando confirmação de recebimento' });
-  const table = queue.getByRole('table', { name: 'Títulos trabalhados aguardando relatório de quitados' });
+  const table = queue.getByRole('table', { name: 'Títulos trabalhados aguardando confirmação financeira' });
   await expect(table.getByRole('cell', { name: 'R$ 9.999,99', exact: true })).toBeVisible();
   await expect(page.locator('.commission-base-cards')).toContainText('R$ 90,00');
   await expect(page.locator('.commission-base-cards')).toContainText('R$ 0,05');
   await expect(page.locator('.commission-base-cards')).not.toContainText('9.999,99');
   await queue.getByRole('button', { name: 'Abrir pendência PEND-1' }).click();
   await expect(queue.getByRole('heading', { name: 'Pendência PEND-1' })).toBeVisible();
-  await expect(queue.getByText('A confirmar pelo relatório de quitados', { exact: true })).toBeVisible();
+  await expect(queue.getByText('A confirmar na validação financeira ou no relatório de quitados', { exact: true })).toBeVisible();
   await expect(queue.getByText('Aguardando confirmação do recebimento', { exact: true })).toBeVisible();
   await expect(queue.getByRole('button', { name: /Confirmar|Pagar|Validar/ })).toHaveCount(0);
+  await expect(queue.getByRole('button', { name: 'Abrir validação financeira', exact: true })).toHaveCount(0);
+  expect(writes).toHaveLength(0);
+});
+test('authorized finance opens the financial validation tab from commission pendencies without confirming a receipt by navigation', async ({ page }) => {
+  const { writes, retiredValidationSeen } = await setup(page, { pendingQueue: true, financeValidation: true });
+  const queue = page.getByRole('region', { name: 'Aguardando confirmação de recebimento' });
+  await queue.getByRole('button', { name: 'Abrir pendência PEND-1', exact: true }).click();
+  await queue.getByRole('button', { name: 'Abrir validação financeira', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Contas a Receber', exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Validação financeira', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(() => retiredValidationSeen.length).toBeGreaterThan(0);
   expect(writes).toHaveLength(0);
 });
 test('pending queue filters and pages independently from the month of actual receipts', async ({ page }) => {

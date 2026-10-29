@@ -4,7 +4,7 @@ const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const id = (value: number) => `98000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const userId = id(1), sessionId = id(2), agentId = id(20), titleId = id(30);
 const originalObservation = 'Cliente informou pagamento e enviou comprovante.\nConferir a entrada bancária antes da baixa.';
-interface Options { role?: 'contas_receber' | 'diretor' | 'cobradora_1'; reportDenied?: boolean; wrongReport?: boolean; noReport?: boolean; receiptExists?: boolean; stale?: boolean; unassigned?: boolean; retired?: boolean; ignoreRetiredFilter?: boolean; missingRetirement?: boolean; detailRetired?: boolean; detailDenied?: boolean; wrongDetail?: boolean; missing053?: boolean; netExample?: boolean; commitRace?: 'retired' | 'validated'; uncertain?: 'lost-after-commit' | 'proof' }
+interface Options { role?: 'contas_receber' | 'diretor' | 'cobradora_1'; reportDenied?: boolean; wrongReport?: boolean; noReport?: boolean; receiptExists?: boolean; stale?: boolean; unassigned?: boolean; retired?: boolean; ignoreRetiredFilter?: boolean; missingRetirement?: boolean; detailRetired?: boolean; detailDenied?: boolean; wrongDetail?: boolean; missing053?: boolean; netExample?: boolean; commitRace?: 'retired' | 'validated'; uncertain?: 'lost-after-commit' | 'proof'; retiredQueue?: boolean; retiredSourceMissing?: boolean; retiredQueueUnsafe?: boolean; retiredProofOld?: boolean; format055?: boolean }
 
 async function setup(page: Page, options: Options = {}) {
   await page.clock.setFixedTime(new Date('2026-10-18T15:00:00Z'));
@@ -14,8 +14,9 @@ async function setup(page: Page, options: Options = {}) {
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify({ sub: userId, session_id: sessionId, exp: 4070908800, role: 'authenticated' })).toString('base64url'), 'synthetic-test-only'].join('.');
   const title = { id: titleId, scope: 'grupo-consolidado', document: 'NF-FIN-1', client_name: 'Órgão sintético da conferência', client_document: null, customer_key: 'name:ÓRGÃO SINTÉTICO DA CONFERÊNCIA', branch: '4', issued_on: '2026-08-01', due_date: '2026-08-15', amount_cents: 123456,
     collector_id: options.unassigned ? null : agentId, status: 'PENDING_VALIDATION', validation_status: 'PENDING', payment_source: 'COBRANCA' as string | null, payment_reported_date: '2026-10-17' as string | null, payment_date: null as string | null,
-    retired_from_report: options.retired ?? false, reported_in_collection: true, collector_locked: false, in_latest_report: true, revision: 7, updated_at: '2026-10-18T14:00:00Z', last_action: 'PAID', next_action: null as string | null, next_action_date: null as string | null };
+    retired_from_report: options.retiredQueue || options.retired || false, reported_in_collection: true, collector_locked: false, in_latest_report: true, revision: 7, updated_at: '2026-10-18T14:00:00Z', last_action: 'PAID', next_action: null as string | null, next_action_date: null as string | null };
   if (options.netExample) { title.amount_cents = 424020; title.document = 'NF-FIN-1'; title.payment_reported_date = '2026-08-07'; }
+  if (options.retiredSourceMissing) { title.status = 'OPEN'; title.validation_status = 'NONE'; title.payment_source = null; title.payment_reported_date = null; title.reported_in_collection = false; title.last_action = 'CONTACT'; }
   const reported = { id: id(40), title_id: options.wrongReport ? id(999) : titleId, action: 'PAID', collector_id: agentId, contact_date: '2026-10-18', next_action: null, next_date: null, observation: originalObservation, return_note: 'Status operacional: TÍTULO PAGO; próxima ação: VALIDAÇÃO FINANCEIRA', payment_date: '2026-10-17', created_at: '2026-10-18T14:10:00Z' };
   const receipts: Record<string, unknown>[] = options.receiptExists ? [{ id: id(50), title_id: titleId, amount_cents: title.amount_cents, payment_date: '2026-10-17', delay_days: 63, delay_band: '61_90', payment_source: 'COBRANCA', validated_at: '2026-10-18T14:30:00Z' }] : [];
   const results = new Map<string, Record<string, unknown>>();
@@ -32,6 +33,11 @@ async function setup(page: Page, options: Options = {}) {
     if (['collections_overdue_summary', 'receivables_management_summary'].includes(name)) return reply({ code: 'PGRST202' }, 404);
     if (name === 'collection_workbench') return reply({ as_of_date: '2026-10-18', server_now: '2026-10-18T15:00:00Z', snapshot_revision: 'financial-workflow-empty-returns', active_timer: null, count: 0, total_cents: 0, rows: [], workflow: { version: '029', normal_pause: true, finish_requires_started: true, pending_read_only: true, returns_priority: true }, priority: { collector_id: collector ? agentId : null, due_count: 0, total_cents: 0, next_title_id: null, next_due_date: null } });
     if (name === 'collection_agents') return reply([{ id: agentId, display_name: 'Cobradora sintética responsável', enabled: true }]);
+    if (name === 'receivable_retired_validation_queue') {
+      const eligible = options.retiredQueue && title.retired_from_report && title.status !== 'VALIDATED' && !receipts.length && (!body.p_search || `${title.document} ${title.client_name}`.includes(body.p_search));
+      const rows = eligible ? [{ ...title, collection_worked: !options.retiredQueueUnsafe }] : [];
+      return reply({ format_version: '055', count: rows.length, rows });
+    }
     if (name === 'receivable_titles' || name === 'collection_overdue_titles') {
       if (url.searchParams.has('id') && options.detailDenied) return reply({ code: '42501', message: 'private title details' }, 403);
       if (url.searchParams.has('id') && options.detailRetired) title.retired_from_report = true;
@@ -60,7 +66,7 @@ async function setup(page: Page, options: Options = {}) {
       if (options.commitRace === 'validated') { title.status = 'VALIDATED'; title.validation_status = 'VALIDATED'; title.revision++; receipts.push({ id: id(50), title_id: titleId, amount_cents: title.amount_cents, payment_date: '2026-10-17', validated_at: '2026-10-18T15:00:00Z' }); return reply({ code: 'PV003' }, 409); }
       if (options.stale || body.p_expected_revision !== title.revision) return reply({ code: '40001', message: 'private SQL conflict details' }, 409);
       if (body.p_payment_date && body.p_payment_date > '2026-10-18') return reply({ code: 'PV004', message: 'private future guard' }, 400);
-      if (title.retired_from_report) return reply({ code: 'PV001' }, 409);
+      if (title.retired_from_report && (!options.retiredQueue || body.p_decision !== 'CONFIRM')) return reply({ code: 'PV001' }, 409);
       title.revision++;
       if (body.p_decision === 'CONFIRM') {
         title.status = 'VALIDATED'; title.validation_status = 'VALIDATED'; title.payment_date = body.p_payment_date;
@@ -68,7 +74,7 @@ async function setup(page: Page, options: Options = {}) {
       } else {
         title.status = 'NOT_LOCATED'; title.validation_status = 'NONE'; title.payment_source = null; title.payment_reported_date = null; title.payment_date = null; title.reported_in_collection = false; title.collector_locked = true; title.last_action = 'PAYMENT_NOT_LOCATED'; title.next_action = 'RETRY'; title.next_action_date = '2026-10-18';
       }
-      const proof = { format_version: '053', request_id: body.p_request_id, title_id: titleId, decision: body.p_decision, receipt_id: body.p_decision === 'CONFIRM' ? id(50) : null,
+      const proof = { format_version: options.retiredProofOld ? '053' : options.retiredQueue || options.format055 ? '055' : '053', request_id: body.p_request_id, title_id: titleId, decision: body.p_decision, receipt_id: body.p_decision === 'CONFIRM' ? id(50) : null,
         payment_date: body.p_payment_date, nominal_cents: title.amount_cents, received_cents: body.p_received_cents,
         adjustment_cents: body.p_decision === 'CONFIRM' ? title.amount_cents - body.p_received_cents : null,
         adjustment_reason: body.p_adjustment_reason, title_revision: title.revision };
@@ -107,7 +113,7 @@ test('Contas a Receber abre a fila dedicada e exibe o último PAID original sem 
 });
 
 test('confirmar usa a data real escolhida no financeiro e preserva o relato original e a responsável', async ({ page }) => {
-  const seen = await setup(page); await openValidation(page);
+  const seen = await setup(page, { format055: true }); await openValidation(page);
   await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
   await validationPanel(page).getByLabel('Data real do recebimento', { exact: true }).fill('2026-10-16');
   await validationPanel(page).getByRole('textbox', { name: 'Justificativa / observação da validação', exact: true }).fill('Entrada bancária conferida pelo financeiro.');
@@ -208,10 +214,9 @@ for (const options of [{ retired: true, ignoreRetiredFilter: true }, { missingRe
   expect(seen.writes).toHaveLength(0);
 });
 
-test('retirada entre a fila e a conferência mantém o relato e orienta quitados sem confirmar', async ({ page }) => {
+test('retirada entre a fila e a conferência mantém o relato e exige reabrir pela fila atualizada', async ({ page }) => {
   const seen = await setup(page, { detailRetired: true }); await openValidation(page);
-  await expect(validationPanel(page).getByRole('alert')).toContainText('Título retirado da carteira');
-  await expect(validationPanel(page).getByRole('alert')).toContainText('Importar Bases → Contas a Receber → Títulos quitados');
+  await expect(validationPanel(page).getByRole('alert')).toContainText('Este título mudou. Atualize a fila');
   await expect(validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true })).toBeDisabled();
   await expect(validationPanel(page).getByRole('region', { name: 'Relato original da cobrança', exact: true })).toContainText(originalObservation);
   expect(seen.writes).toHaveLength(0);
@@ -223,7 +228,7 @@ test('retirada após abrir a conferência é detectada novamente antes de enviar
   seen.title.retired_from_report = true; seen.title.revision++;
   page.once('dialog', dialog => dialog.accept());
   await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
-  await expect(validationPanel(page).getByRole('alert')).toContainText('Título retirado da carteira');
+  await expect(validationPanel(page).getByRole('alert')).toContainText('Este título mudou. Atualize a fila');
   await expect(validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true })).toBeDisabled();
   expect(seen.writes).toHaveLength(0); expect(seen.receipts).toHaveLength(0);
 });
@@ -233,7 +238,7 @@ for (const race of ['retired', 'validated'] as const) test(`mudança concorrente
   await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
   page.once('dialog', dialog => dialog.accept());
   await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
-  await expect(validationPanel(page).getByRole('alert')).toContainText(race === 'retired' ? 'Título retirado da carteira' : 'Já existe recebimento validado');
+  await expect(validationPanel(page).getByRole('alert')).toContainText(race === 'retired' ? 'Este título mudou. Atualize a fila' : 'Já existe recebimento validado');
   await expect(validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true })).toBeDisabled();
   await expect(page.getByText('private retirement query', { exact: true })).toHaveCount(0);
   expect(seen.writes).toHaveLength(1);
@@ -315,4 +320,60 @@ for (const uncertain of ['lost-after-commit', 'proof'] as const) test(`resultado
   await expect(validationPanel(page).getByRole('status')).toContainText('Recebimento validado');
   expect(seen.writes).toHaveLength(2); expect(seen.writes[1].body).toEqual(seen.writes[0].body); expect(seen.receipts).toHaveLength(1);
   await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeEnabled();
+});
+
+test('retirado com trabalho confirmado pelo servidor e sem relato PAID permite conferência explícita sem presumir data ou valor', async ({ page }) => {
+  const seen = await setup(page, { retiredQueue: true, retiredSourceMissing: true });
+  await page.getByRole('tab', { name: 'Validação financeira', exact: true }).click();
+  await validationPanel(page).getByRole('button', { name: 'Conferir retirado NF-FIN-1', exact: true }).click();
+  await expect(validationPanel(page).getByLabel('Data real do recebimento', { exact: true })).toHaveValue('');
+  await expect(validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true })).toHaveValue('');
+  await expect(validationPanel(page).getByRole('option', { name: 'Não localizado — cobrar novamente', exact: true })).toHaveJSProperty('disabled', true);
+  await expect(validationPanel(page).getByRole('combobox', { name: /^Decisão da validação/ })).toHaveValue('CONFIRM');
+  await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
+  await validationPanel(page).getByLabel('Data real do recebimento', { exact: true }).fill('2026-08-07');
+  page.once('dialog', dialog => dialog.accept());
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('status')).toContainText('O título saiu da carteira ativa e das pendências de recebimento');
+  await expect(validationPanel(page).getByRole('status')).toContainText('período da data real do recebimento');
+  await expect(validationPanel(page).getByText('Nenhum título retirado aguardando confirmação neste filtro.', { exact: true })).toBeVisible();
+  expect(seen.receipts).toHaveLength(1); expect(seen.title.retired_from_report).toBe(true); expect(seen.title.status).toBe('VALIDATED');
+  expect(seen.writes[0].body).toMatchObject({ p_payment_date: '2026-08-07', p_received_cents: 123456 });
+});
+
+test('fila retirada sem prova de movimento de cobrança é recusada antes de oferecer uma confirmação', async ({ page }) => {
+  const seen = await setup(page, { retiredQueue: true, retiredQueueUnsafe: true });
+  await page.getByRole('tab', { name: 'Validação financeira', exact: true }).click();
+  await expect(validationPanel(page).getByRole('alert')).toContainText('Não foi possível consultar os títulos retirados');
+  await expect(validationPanel(page).getByRole('button', { name: 'Conferir retirado NF-FIN-1', exact: true })).toHaveCount(0);
+  expect(seen.writes).toHaveLength(0);
+});
+
+test('prova antiga não comprova confirmação de retirado e mantém o protocolo protegido', async ({ page }) => {
+  const seen = await setup(page, { retiredQueue: true, retiredProofOld: true });
+  await page.getByRole('tab', { name: 'Validação financeira', exact: true }).click();
+  await validationPanel(page).getByRole('button', { name: 'Conferir retirado NF-FIN-1', exact: true }).click();
+  await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
+  page.once('dialog', dialog => dialog.accept());
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('button', { name: 'Conferir confirmação pendente', exact: true })).toBeVisible();
+  await expect(validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true })).toBeDisabled();
+  await expect(validationPanel(page).getByRole('button', { name: 'Atualizar títulos retirados', exact: true })).toBeDisabled();
+  await expect(validationPanel(page).getByRole('button', { name: 'Consultar títulos retirados', exact: true })).toBeDisabled();
+  await expect(validationPanel(page).getByRole('status').filter({ hasText: 'Recebimento validado' })).toHaveCount(0);
+  expect(seen.calls.some(call => call.name === 'validate_receivable_payment')).toBe(false);
+});
+
+test('resposta perdida de confirmação retirada usa o mesmo protocolo e encerra a pendência uma única vez', async ({ page }) => {
+  const seen = await setup(page, { retiredQueue: true, uncertain: 'lost-after-commit' });
+  await page.getByRole('tab', { name: 'Validação financeira', exact: true }).click();
+  await validationPanel(page).getByRole('button', { name: 'Conferir retirado NF-FIN-1', exact: true }).click();
+  await validationPanel(page).getByLabel('Valor efetivamente recebido (R$)', { exact: true }).fill('1.234,56');
+  page.once('dialog', dialog => dialog.accept());
+  await validationPanel(page).getByRole('button', { name: 'Confirmar recebimento financeiro', exact: true }).click();
+  await expect(validationPanel(page).getByRole('button', { name: 'Conferir confirmação pendente', exact: true })).toBeVisible();
+  await validationPanel(page).getByRole('button', { name: 'Conferir confirmação pendente', exact: true }).click();
+  await expect(validationPanel(page).getByRole('status')).toContainText('Recebimento validado');
+  expect(seen.writes).toHaveLength(2); expect(seen.writes[1].body).toEqual(seen.writes[0].body); expect(seen.receipts).toHaveLength(1);
+  await expect(validationPanel(page).getByText('Nenhum título retirado aguardando confirmação neste filtro.', { exact: true })).toBeVisible();
 });

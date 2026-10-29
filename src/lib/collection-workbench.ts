@@ -80,7 +80,7 @@ export function collectionStartReason(reason: CollectionStartBlock | null | unde
     : reason === 'UNASSIGNED' ? 'Este título está sem responsável definida. Acesse Importar Bases → Contas a Receber para definir as responsáveis na importação.'
     : reason === 'PENDING_VALIDATION' ? 'Pagamento informado aguarda validação de Contas a Receber. Este título está em leitura.'
     : reason === 'SETTLED' ? 'Recebimento já validado. O título está disponível somente no histórico.'
-    : reason === 'REPORT_RETIRED' ? 'Título ausente do relatório completo, disponível somente no histórico. O recebimento depende do relatório de quitados.'
+    : reason === 'REPORT_RETIRED' ? 'Título ausente do relatório completo, disponível somente no histórico. O financeiro pode confirmar o recebimento na Validação financeira ou pelo relatório de quitados.'
     : reason === 'READ_ONLY' ? 'Seu perfil permite somente leitura; não pode iniciar ou alterar este atendimento.' : '';
 }
 export function assertCollectionWorkbench(value: unknown, isCollector: boolean, collectorId: string | null, filters: CollectionFilters): asserts value is CollectionWorkbench {

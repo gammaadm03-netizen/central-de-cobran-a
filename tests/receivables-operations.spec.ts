@@ -60,6 +60,7 @@ async function setup(page: Page, options: Options = {}) {
     if (url.pathname === '/rest/v1/rpc/receivables_management_summary') return reply({ code: 'PGRST202' }, 404);
     if (url.pathname === '/rest/v1/rpc/collections_overdue_summary') return reply({ code: 'PGRST202' }, 404);
     if (url.pathname === '/rest/v1/rpc/current_access') return reply(access);
+    if (url.pathname === '/rest/v1/rpc/receivable_retired_validation_queue') return reply({ format_version: '055', count: 0, rows: [] });
     // Optional context is unavailable on the previous database used by this fixture.
     if (url.pathname === '/rest/v1/rpc/collection_customer_context') return reply({ code: 'PGRST202' }, 404);
     if (url.pathname === '/rest/v1/rpc/get_receivables_sync_revision') {

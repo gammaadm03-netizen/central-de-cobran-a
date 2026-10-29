@@ -7,12 +7,12 @@ Na análise, confira os títulos presentes, as responsáveis e eventuais víncul
 - Ausente com cobrança: sai das filas ativas de Contas a Receber e Cobrança e aparece em **Comissões → Cobradoras → Aguardando confirmação de recebimento**.
 - Ausente sem cobrança: sai das filas e dos saldos ativos; permanece no histórico.
 - Ausência não confirma pagamento. A fila pendente não soma valores em recebido, comissão ou apuração salva.
-- **Títulos quitados** confirma o valor e a data efetivamente recebidos e resolve a pendência. A comissão continua sujeita às regras de elegibilidade e vigência existentes.
+- **Títulos quitados** confirma o valor e a data efetivamente recebidos e resolve a pendência. A atualização **0.18.12 / SQL 055** também permite confirmar títulos retirados com movimento de cobrança em **Contas a Receber → Validação financeira**, conferindo a entrada bancária. A comissão continua sujeita às regras de elegibilidade e vigência existentes.
 - Se o título reaparecer em abertos, volta à carteira com o mesmo vínculo e histórico. Um recebimento já validado não é reaberto.
 
 A classificação como trabalhado segue a regra já utilizada pela apuração: atendimento iniciado, ação de cobrança ou indicação de que houve cobrança. Nenhum evento, recebimento, data ou valor é inventado a partir de uma ausência. Contatos e histórico de trabalho permanecem preservados. Um intervalo em andamento no título retirado é encerrado com motivo próprio, preservando o tempo decorrido.
 
-O histórico pode ser consultado pelos filtros **Todos, incluindo histórico** e **Ausentes do relatório — histórico**. Títulos retirados não recebem novas ações ou validação manual de pagamento; importe Quitados para confirmar o recebimento real.
+O histórico pode ser consultado pelos filtros **Todos, incluindo histórico** e **Ausentes do relatório — histórico**. Títulos retirados não recebem novas ações de cobrança. Para confirmar o recebimento real, importe Quitados ou utilize a fila financeira dos retirados trabalhados após [ativar o SQL 055](validacao-financeira-recebiveis.md).
 
 ## Ativação
 

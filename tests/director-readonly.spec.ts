@@ -49,6 +49,7 @@ async function setup(page: Page, stalePermissions = true, retiredStatus?: 'OPEN'
     }
     if (url.pathname === '/auth/v1/user') return reply({ id: profile.id, aud: 'authenticated', role: 'authenticated', email: 'director@test.invalid', created_at: now, app_metadata: {}, user_metadata: {} });
     if (name === 'current_access') return reply(access);
+    if (name === 'receivable_retired_validation_queue') return reply({ format_version: '055', count: retiredStatus === 'OPEN' ? 1 : 0, rows: retiredStatus === 'OPEN' ? [{ ...receivable, collection_worked: true }] : [] });
     if (unavailableReads.has(name)) return reply({ code: 'PGRST202' }, 404);
     if (name === 'cash_position') return reply({ accounts: [bank], total_cents: bank.amount_cents, reported_accounts: 1, expected_accounts: 1, latest_position_date: day });
     if (name === 'current_stock') return reply({ value_cents: 750000, reference_date: day, source: 'MANUAL' });
@@ -220,9 +221,23 @@ test('Director reads a worked title retired from the complete report in collecti
   await expect(sidebar.getByRole('combobox', { name: 'Status do atendimento', exact: true })).toBeDisabled();
   await expect(sidebar.getByRole('textbox', { name: 'Observações', exact: true })).toBeDisabled();
   await sidebar.getByText('Movimentações por relatório completo', { exact: true }).click();
-  await expect(sidebar).toContainText('Pendente em Comissões, aguardando o relatório de quitados.');
+  await expect(sidebar).toContainText('Pendente em Comissões, aguardando confirmação financeira.');
   await noFinancialWrites(page);
   expect(seen.calls.some(call => call.name === 'collection_workbench' && call.body.p_queue === 'history' && call.body.p_financial_status === 'RETIRED_FROM_REPORT')).toBe(true);
+  expect(seen.mutations).toEqual([]); expect(seen.unhandled).toEqual([]);
+});
+
+test('Director can inspect a worked retired title in financial validation without confirming or returning it to collection', async ({ page }) => {
+  const seen = await setup(page, true, 'OPEN');
+  await navigate(page, 'Contas a Receber');
+  await page.getByRole('tab', { name: 'Validação financeira', exact: true }).click();
+  await page.getByRole('button', { name: 'Conferir retirado NF-LEITURA', exact: true }).click();
+  const detail = page.getByRole('region', { name: 'Conferência financeira de NF-LEITURA', exact: true });
+  await expect(detail).toContainText('Este acesso permite somente consulta');
+  await expect(detail.locator('form')).toHaveCount(0);
+  await expect(detail.getByRole('button', { name: /Confirmar recebimento financeiro|Devolver à mesma responsável/ })).toHaveCount(0);
+  await noFinancialWrites(page);
+  expect(seen.calls.some(call => call.name === 'receivable_retired_validation_queue')).toBe(true);
   expect(seen.mutations).toEqual([]); expect(seen.unhandled).toEqual([]);
 });
 
@@ -246,8 +261,8 @@ test('Director sees a formerly retired title confirmed in Quitados as validated 
   await expect(sidebar).toContainText('O recebimento foi confirmado; o histórico e o tempo de atendimento foram preservados.');
   await expect(sidebar).toContainText('Recebimento validado. Este registro está disponível somente para consulta do histórico.');
   await sidebar.getByText('Movimentações por relatório completo', { exact: true }).click();
-  await expect(sidebar).not.toContainText('Pendente em Comissões, aguardando o relatório de quitados.');
-  await expect(sidebar).not.toContainText('a confirmação financeira depende do relatório de quitados.');
+  await expect(sidebar).not.toContainText('Pendente em Comissões, aguardando confirmação financeira.');
+  await expect(sidebar).not.toContainText('Confirme o recebimento na Validação financeira');
   await expect(sidebar.getByRole('textbox', { name: 'Observações', exact: true })).toBeDisabled();
   await noFinancialWrites(page);
   expect(seen.mutations).toEqual([]); expect(seen.unhandled).toEqual([]);
