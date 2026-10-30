@@ -1,12 +1,52 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
-import { parseCivilDate, parseMoneyCents, parseCsv, inspectWorkbookZip, validateWorkbookExpandedSize, validatePayableRows, validatePayableDailyRows, validatePayablePaidRows, isChequeNumberHeader, readPayableChequeCell } from './payables-parser.mjs';
+import { parseCivilDate, parseMoneyCents, parseProvisionedMoneyCents, parseCsv, inspectWorkbookZip, validateWorkbookExpandedSize, validatePayableRows, validatePayableDailyRows, validatePayablePaidRows, isChequeNumberHeader, readPayableChequeCell } from './payables-parser.mjs';
 
 const header = ['Nº Lançamento','Histórico','Vencimento','Valor','Plano de Contas','Filial'];
 const row = ['14','Fornecedor sintético','16/10/2026','1.234,56','ENERGIA','3'];
 const erpHeader = ['Lançamento', 'Histórico', 'Plano cp - Conta: nome', 'Plano cc - Conta: nome', 'Emissão: valor do lançamento', 'Emissão: data', 'Vencimento: data', 'Filial', 'Situação'];
 const erpRow = ['80', 'Fornecedor de teste', 'ENERGIA - FIXO', 'BANCO TESTE - CONTA 1', '125,90', '16/10/2026 15:03', '20/10/2026 00:00', '7', 'CHEQUE'];
+test('daily provisioned money rounds exact decimal ties HALF_UP without binary multiplication', () => {
+  for (const [source, cents] of [[1.005, 101], [2.675, 268], ['7,2357', 724], ['7,2349', 723], ['R$ 1.234,565', 123457], [0.1 + 0.2, 30], [1e-7, 0], [5e-3, 1]]) {
+    const result = parseProvisionedMoneyCents(source);
+    assert.equal(result.amount_cents, cents, String(source)); assert.equal(result.original_amount, String(source).trim()); assert.equal(result.adjusted, true);
+  }
+  for (const source of [0, 19.99, 'R$ 1.230,5000', '0,01000']) assert.equal(parseProvisionedMoneyCents(source).adjusted, false);
+});
+test('provisioned rounding preserves Brazilian string syntax and enforces safe cents and bounded audit values', () => {
+  assert.equal(parseProvisionedMoneyCents('90.071.992.547.409,91').amount_cents, Number.MAX_SAFE_INTEGER);
+  assert.equal(parseProvisionedMoneyCents('90.071.992.547.409,914').amount_cents, Number.MAX_SAFE_INTEGER);
+  for (const value of ['', -1, NaN, Infinity, '1e-3', '1.23', '-1,005', '12.34,005', '90.071.992.547.409,915', 1e100, '9'.repeat(301), 'R$\n1,005', { formula: '1+1' }]) assert.throws(() => parseProvisionedMoneyCents(value), String(value));
+  // Shared payment/manual values retain the existing strict two-decimal policy.
+  for (const value of [1.005, 0.1 + 0.2, '7,2357']) assert.throws(() => parseMoneyCents(value));
+});
+test('rounding is an explicit daily option and records only effective per-title cent changes', () => {
+  const data = [header, ['1', 'Fornecedor A', '16/10/2026', '1,005', 'ENERGIA', '3'], ['2', 'Fornecedor B', '16/10/2026', '2,6700', 'ENERGIA', '3']];
+  for (const roundProvisionedAmounts of [undefined, false, 'true', 1]) assert.ok(validatePayableDailyRows(data, { roundProvisionedAmounts }).errors.length);
+  const result = validatePayableDailyRows(data, { roundProvisionedAmounts: true });
+  assert.deepEqual(result.errors, []); assert.equal(result.rows[0].amount_cents, 101); assert.equal(result.rows[1].amount_cents, 267);
+  assert.deepEqual(result.rounding_adjustments, [{ line: 2, original_amount: '1,005', amount_cents: 101 }]);
+  assert.ok(validatePayableRows(data).errors.length);
+  assert.equal(Object.hasOwn(validatePayableRows([header, row]), 'rounding_adjustments'), false);
+});
+test('daily rounding sums the normalized titles rather than rounding the grand total', () => {
+  const data = [header, ['1', 'Fornecedor A', '16/10/2026', '1,005', 'ENERGIA', '3'], ['2', 'Fornecedor B', '16/10/2026', '1,005', 'ENERGIA', '3']];
+  const result = validatePayableDailyRows(data, { roundProvisionedAmounts: true });
+  assert.deepEqual(result.errors, []); assert.equal(result.rows.reduce((sum, item) => sum + item.amount_cents, 0), 202); assert.equal(result.rounding_adjustments.length, 2);
+  assert.equal(parseProvisionedMoneyCents('2,010').amount_cents, 201);
+});
+test('rounding cannot hide malformed rows, formulas, duplicate identity or overflowed totals', () => {
+  const rounded = ['1', 'Fornecedor A', '16/10/2026', '1,005', 'ENERGIA', '3'];
+  for (const extra of [[...rounded.slice(0, 3), { formula: '1+1', result: 2 }, ...rounded.slice(4)], ['2', 'Fornecedor B', '31/02/2026', '2,005', 'ENERGIA', '3'], rounded]) {
+    const result = validatePayableDailyRows([header, rounded, extra], { roundProvisionedAmounts: true });
+    assert.ok(result.errors.length); assert.deepEqual(result.rows, []); assert.deepEqual(result.rounding_adjustments, []);
+  }
+  const result = validatePayableDailyRows([header, ['1', 'A', '16/10/2026', '90.071.992.547.409,91', 'ENERGIA', '3'], ['2', 'B', '16/10/2026', '0,005', 'ENERGIA', '3']], { roundProvisionedAmounts: true });
+  assert.ok(result.errors.length); assert.deepEqual(result.rows, []); assert.deepEqual(result.rounding_adjustments, []);
+  assert.deepEqual(validatePayableDailyRows([header], { roundProvisionedAmounts: true, allowEmptyReport: true }), { rows: [], errors: [], rounding_adjustments: [] });
+  assert.ok(validatePayableDailyRows([header, rounded], { roundProvisionedAmounts: true, allowEmptyReport: true }).errors.length);
+});
 test('posição de cheques zerada exige declaração explícita e cabeçalhos completos válidos', () => {
   for (const matrix of [[erpHeader], [erpHeader, [], Array(erpHeader.length).fill(' ')]]) {
     assert.deepEqual(validatePayableDailyRows(matrix, { allowEmptyCheques: true }), { rows: [], errors: [] });

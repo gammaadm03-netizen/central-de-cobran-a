@@ -7,7 +7,9 @@ import { buildPayableUnifiedRestartSql } from './bundle-payable-unified-restart.
 // Disposable PostgreSQL only. Every source, person, account position and amount is synthetic.
 const allScope = JSON.parse(await readFile(new URL('./lib/base-reset-scope.json', import.meta.url), 'utf8'));
 const payableScope = JSON.parse(await readFile(new URL('./lib/payable-reset-scope.json', import.meta.url), 'utf8'));
-const scope = { targets: payableScope.targets, preserved: [...allScope.targets.filter(name => !payableScope.targets.includes(name)), ...allScope.preserved], revision_states: payableScope.revision_states };
+// This compatibility suite intentionally boots through059/060. The061 suite
+// exercises the additional immutable report-status table and its recovery.
+const scope = { targets: payableScope.targets.filter(name => name !== 'public.payable_report_status_events'), preserved: [...allScope.targets.filter(name => !payableScope.targets.includes(name)), ...allScope.preserved], revision_states: payableScope.revision_states };
 const resetSql = await readFile(new URL('../supabase/admin/zerar-somente-contas-pagar-2026-10-30.sql', import.meta.url), 'utf8');
 const restoreSql = await readFile(new URL('../supabase/admin/restaurar-somente-contas-pagar-2026-10-30.sql', import.meta.url), 'utf8');
 const operation = 'cp-restart-2026-10-30-v1';

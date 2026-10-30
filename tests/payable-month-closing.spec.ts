@@ -400,7 +400,7 @@ test('a failed snapshot read never exports current live titles under a historica
 
 test('superseded source versions stay consultable without requiring payment and appear separately in the historical Excel', async ({ page }) => {
   const { calls } = await setup(page, { reviewed: true, closed: true, historical: true }); await selectMonth(page);
-  await expect(closing(page)).toContainText('1 de 1 títulos CONCILIADOS');
+  await expect(closing(page)).toContainText('1 de 1 títulos concluídos');
   await expect(closing(page)).toContainText('1 registro(s) preservado(s) no histórico, fora da conferência e dos totais do fechamento');
   const old = page.locator('section[aria-labelledby="payables-title"]').getByRole('row').filter({ hasText: 'Versão sintética anterior do mesmo lançamento' });
   await expect(old.getByRole('button', { name: 'VERSÃO ANTERIOR', exact: true })).toBeDisabled();

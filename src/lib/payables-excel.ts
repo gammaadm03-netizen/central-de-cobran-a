@@ -12,7 +12,7 @@ const statusLabels: Record<PayableTitle['status'], string> = { NEW: 'Novo', OPEN
 const TIMEZONE = 'America/Sao_Paulo';
 const SETTLEMENT_NOTE = 'A data de baixa automática registra quando o título desapareceu de um relatório completo importado; não é a data real de pagamento e não comprova pagamento ou compensação bancária.';
 const UNKNOWN_FINANCIAL = 'INFORMAÇÃO INDISPONÍVEL';
-const financialStatusLabels = { OPEN: 'Em aberto', PARTIAL: 'Pendência de registro anterior', PAID: 'Pago', OVERPAID: 'Pagamento excedente — revisar', PENDING_RECONCILIATION: 'Aguardando conciliação', ADMIN_WRITEOFF: 'BAIXADO SEM PAGAMENTO' } as const;
+const financialStatusLabels = { OPEN: 'Em aberto', PARTIAL: 'Pendência de registro anterior', PAID: 'Pago', OVERPAID: 'Pagamento excedente — revisar', PENDING_RECONCILIATION: 'Aguardando conciliação', ADMIN_WRITEOFF: 'BAIXADO SEM PAGAMENTO', REPORT_PAID: 'Pago' } as const;
 
 export interface PaymentExportRow {
   id: string;
@@ -215,7 +215,7 @@ export async function buildPayablesWorkbook(currentRows: PayableTitle[], previou
     const reference = JSON.stringify([item.branch, item.entry_number]);
     relatedEntries.set(reference, (relatedEntries.get(reference) ?? 0) + 1);
     // ExcelJS interprets a string as literal text; formulas require a {formula: ...} object.
-    const row = lines.addRow([item.macro, String(item.entry_number), String(item.description), String(item.plan), String(item.branch), item.bank_account ?? '', item.issued_on === null ? null : excelCivilDate(item.issued_on), excelCivilDate(item.due_date), financialWeekLabel(item.due_date), checkedCents(BigInt(item.amount_cents)), statusLabels[item.status], item.source_status ?? '', 'IMPORTAÇÃO DIÁRIA', item.settled_at === null ? null : excelSaoPauloTime(item.settled_at)]);
+    const row = lines.addRow([item.macro, String(item.entry_number), String(item.description), String(item.plan), String(item.branch), item.bank_account ?? '', item.issued_on === null ? null : excelCivilDate(item.issued_on), excelCivilDate(item.due_date), financialWeekLabel(item.due_date), checkedCents(BigInt(item.amount_cents)), item.report_paid === true || item.financial_status === 'REPORT_PAID' ? 'Pago' : statusLabels[item.status], item.source_status ?? '', 'IMPORTAÇÃO DIÁRIA', item.settled_at === null ? null : excelSaoPauloTime(item.settled_at)]);
     for (const column of [7, 8]) row.getCell(column).numFmt = 'dd/mm/yyyy';
     row.getCell(10).numFmt = CURRENCY;
     row.getCell(14).numFmt = 'dd/mm/yyyy hh:mm';
@@ -283,7 +283,7 @@ export async function buildPayablesWorkbook(currentRows: PayableTitle[], previou
   info('Filtro: vencimento final', options.filters.end ? excelCivilDate(options.filters.end) : 'Sem restrição adicional', options.filters.end ? 'dd/mm/yyyy' : undefined);
   info('Filtro: status', options.filters.status ? statusLabels[options.filters.status as PayableTitle['status']] ?? options.filters.status : 'Todos, incluindo histórico');
   info('Filtro: situação financeira', options.filters.financialStatus ? financialStatusLabels[options.filters.financialStatus as keyof typeof financialStatusLabels] ?? options.filters.financialStatus : 'Todas');
-  info('Filtro: conferência', options.filters.reviewStatus === 'CONCILIADO' ? 'Conciliado' : options.filters.reviewStatus === 'A_CONCILIAR' ? 'A conciliar' : options.filters.reviewStatus || 'Todas');
+  info('Filtro: conferência', options.filters.reviewStatus === 'PAGO_POR_RELATORIO' ? 'Pago pelo relatório' : options.filters.reviewStatus === 'CONCILIADO' ? 'Conciliado' : options.filters.reviewStatus === 'A_CONCILIAR' ? 'A conciliar' : options.filters.reviewStatus || 'Todas');
   info('Filtro: macro', options.filters.macro || 'Todos');
   info('Filtro: filial', options.filters.branch || 'Todas');
   info('Filtro: pesquisa', options.filters.search || 'Sem pesquisa');

@@ -25,7 +25,7 @@ DECLARE
   'public.payable_payments','public.payable_payment_reversals','public.payable_title_control_revisions',
   'public.payable_title_reviews','public.payable_title_corrections','public.payable_title_macro_overrides',
   'public.payable_payment_reclassifications','public.payable_month_closures','public.payable_month_events',
-  'public.payable_import_modes','public.payable_paid_import_rows','public.payable_administrative_writeoffs',
+  'public.payable_import_modes','public.payable_paid_import_rows','public.payable_administrative_writeoffs','public.payable_report_status_events',
   'cf_private.payable_import_files','cf_private.payable_identity_registry','cf_private.payable_import_resolution_requests',
   'cf_private.payable_daily_reports','cf_private.payable_daily_requests','cf_private.payable_daily_actions'
  ];
@@ -35,7 +35,7 @@ DECLARE
  v_run cf_operations.base_resets%ROWTYPE;v_record record;v_trigger record;v_state record;
  v_all text;v_unknown text;v_count bigint;v_total bigint:=0;v_tables integer:=0;v_columns text;v_signature jsonb;v_triggers jsonb;v_command text;v_hash text;
  v_current_state jsonb;v_expected_state jsonb;
- v_manifest text[];v_scope_oids oid[];v_name text;
+ v_manifest text[];v_scope_oids oid[];v_name text;v_compatible_oids oid[]:='{}';
 BEGIN
  PERFORM pg_catalog.pg_advisory_xact_lock(2045812301);
  PERFORM pg_catalog.pg_advisory_xact_lock(2045812305,hashtext('grupo-consolidado'));
@@ -59,11 +59,21 @@ BEGIN
  EXECUTE format('SELECT array_agg(relation_name),array_agg(relation_oid) FROM %I._tables',v_run.backup_schema) INTO v_manifest,v_scope_oids;
  FOREACH v_name IN ARRAY v_targets LOOP
   IF to_regclass(v_name) IS NOT NULL AND NOT v_name=ANY(v_manifest) THEN
-   RAISE EXCEPTION 'A estrutura de CP mudou depois da cópia: %. A recuperação foi interrompida.',v_name USING ERRCODE='22023';END IF;
+   -- A atualização061 acrescenta somente um histórico novo. Uma cópia anterior
+   -- continua recuperável se esse histórico nunca tiver recebido operações.
+   IF v_name='public.payable_report_status_events' THEN
+    EXECUTE format('LOCK TABLE %s IN ACCESS EXCLUSIVE MODE',v_name::regclass);
+    EXECUTE format('SELECT count(*) FROM %s',v_name::regclass) INTO v_count;
+    IF v_count<>0 THEN RAISE EXCEPTION 'O histórico de CP já contém novas operações. A recuperação não sobrepõe a nova base.' USING ERRCODE='23514';END IF;
+    v_compatible_oids:=array_append(v_compatible_oids,to_regclass(v_name)::oid);
+   ELSE
+    RAISE EXCEPTION 'A estrutura de CP mudou depois da cópia: %. A recuperação foi interrompida.',v_name USING ERRCODE='22023';END IF;
+  END IF;
  END LOOP;
  EXECUTE format('SELECT string_agg(relation_oid::regclass::text,'', '' ORDER BY relation_name) FROM %I._tables',v_run.backup_schema) INTO v_all;
  IF v_all IS NULL THEN RAISE EXCEPTION 'A cópia não contém um manifesto de tabelas válido.' USING ERRCODE='22023';END IF;
  EXECUTE 'LOCK TABLE '||v_all||' IN ACCESS EXCLUSIVE MODE';
+ v_scope_oids:=v_scope_oids||v_compatible_oids;
  SELECT string_agg(conrelid::regclass::text,', ') INTO v_unknown FROM pg_catalog.pg_constraint
  WHERE contype='f' AND confrelid=ANY(v_scope_oids) AND NOT conrelid=ANY(v_scope_oids);
  IF v_unknown IS NOT NULL THEN RAISE EXCEPTION 'Existem novas dependências fora de CP: %. A recuperação foi interrompida.',v_unknown USING ERRCODE='22023';END IF;

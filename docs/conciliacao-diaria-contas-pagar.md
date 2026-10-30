@@ -1,54 +1,49 @@
-# Contas a Pagar: um relatório por dia — 0.18.17
+# Contas a Pagar: relatório diário e status automático — 0.18.18
 
-Em **Importar Bases → Contas a Pagar**, envie um único relatório completo dos títulos que continuam em aberto, incluindo os novos lançamentos, os vencidos, os valores a vencer e os cheques de todas as filiais. O primeiro arquivo cria a base inicial. Nos arquivos seguintes, a Central atualiza os títulos presentes, inclui os novos e considera pagos os títulos da posição anterior que desapareceram.
+Em **Importar Bases → Contas a Pagar**, selecione o relatório completo dos títulos ainda em aberto e clique em **Importar relatório**. A Central inclui os novos lançamentos, atualiza valor e vencimento do mesmo título e marca como **Pago** os títulos que desapareceram da posição anterior. As atualizações de valor e vencimento são aplicadas sem uma etapa de aprovação manual.
 
-## Reiniciar somente Contas a Pagar
+A identificação permanece **Filial + Lançamento**. O arquivo deve reunir todas as filiais e todos os títulos em aberto, incluindo os cheques. A primeira carga cria a referência quando ainda não existe uma posição anterior.
 
-O reinício foi solicitado em 30/10/2026 para começar uma nova base oficial. Ele remove os dados operacionais de Contas a Pagar, inclusive importações, arquivos originais, títulos, pagamentos, conciliações e fechamentos antigos, após conferir uma cópia privada recuperável. Contas a Receber, Cobrança, Comissões, Caixa/Bancos, estoque, demais bases e configurações permanecem preservados.
+## Ativar a atualização
 
-1. Copie todo o [SQL de ativação e reinício somente de Contas a Pagar](https://raw.githubusercontent.com/gammaadm03-netizen/central-de-cobran-a/main/supabase/dashboard/reiniciar-contas-pagar-relatorio-unico.sql) para **Supabase → SQL Editor → New query → Run**. Ele instala a rotina 060 e executa a limpeza de CP na mesma transação.
-2. Em **Supabase → Edge Functions → payables-import → Code → index.ts**, substitua todo o conteúdo pela [função completa atualizada](https://raw.githubusercontent.com/gammaadm03-netizen/central-de-cobran-a/main/supabase/dashboard/payables-import.ts) e clique em **Deploy updates**. O código TypeScript pertence à função, separado do SQL do primeiro passo.
-3. Atualize a Central com **Ctrl + F5** e confira a versão **0.18.17**.
-4. Importe o novo relatório completo para estabelecer a base inicial.
+1. Copie todo o [SQL 061 completo](https://raw.githubusercontent.com/gammaadm03-netizen/central-de-cobran-a/main/supabase/dashboard/ativar-status-relatorio-contas-pagar.sql) em **Supabase → SQL Editor → New query → Run**.
+2. Em **Supabase → Edge Functions → payables-import → Code → index.ts**, substitua todo o conteúdo pela [função completa atualizada](https://raw.githubusercontent.com/gammaadm03-netizen/central-de-cobran-a/main/supabase/dashboard/payables-import.ts) e clique em **Deploy updates**.
+3. Atualize a Central com **Ctrl + F5** e confira a versão **0.18.18**.
+4. Importe a planilha original da origem. A leitura e as verificações técnicas são feitas dentro da rotina de importação.
 
-O reinício é uma operação única: repetir o mesmo SQL não apaga arquivos ou títulos oficiais importados depois da primeira limpeza. Uma falha na instalação, na cópia ou na conferência desfaz a operação inteira. A publicação do site não executa esse SQL e não limpa o banco remoto.
-
-Para instalar a rotina sem limpar dados, utilize o [SQL 060 de ativação](https://raw.githubusercontent.com/gammaadm03-netizen/central-de-cobran-a/main/supabase/dashboard/ativar-relatorio-unico-contas-pagar.sql). A recuperação da cópia tem um [SQL separado](https://raw.githubusercontent.com/gammaadm03-netizen/central-de-cobran-a/main/supabase/admin/restaurar-somente-contas-pagar-2026-10-30.sql), que recusa sobrepor novas operações oficiais.
+Essa atualização preserva a base e os históricos existentes. Não executa outro reinício de Contas a Pagar.
 
 ## Rotina diária
 
-1. Exporte do sistema de origem a relação **completa dos títulos em aberto**, de todas as filiais, incluindo os cheques e os novos títulos.
-2. Entre em **Importar Bases → Contas a Pagar** e selecione o arquivo. A conferência começa automaticamente.
-3. Confira o resumo de inclusões, atualizações e baixas. Resolva somente as exceções indicadas, como plano novo, conta sem vínculo ou marcador de R$ 0,01.
-4. Clique em **Importar e conciliar relatório diário** e confirme o resumo.
+1. Exporte a relação completa dos títulos que continuam em aberto, incluindo os novos títulos e cheques.
+2. Selecione o arquivo na Central.
+3. Confirme individualmente os marcadores de R$ 0,01, quando existirem.
+4. Clique em **Importar relatório**. O resumo aparece após a conclusão, com inclusões, alterações, títulos marcados como Pago e ajustes de centavos.
 
-O primeiro relatório cria a referência e não baixa títulos antigos por ausência. Cada novo relatório completo passa a ser a referência do dia seguinte. Um arquivo filtrado, de uma única filial ou apenas com os novos lançamentos não deve ser utilizado nesta rotina.
+O vencimento e o valor mais recentes do relatório substituem os dados anteriores do mesmo lançamento. Um título marcado como Pago pelo relatório volta a aberto quando reaparece na relação, preservando os eventos anteriores no histórico.
 
-Se a relação atual não tiver mudado e o arquivo for idêntico ao da posição mais recente, a Central registra a nova conferência sem duplicar títulos ou pagamentos. Um arquivo antigo que já foi substituído por outra posição continua bloqueado.
+Planos já classificados mantêm seu Centro de Custo Macro. Um novo plano sem vínculo entra como **NÃO CLASSIFICADO**, com o nome original preservado para classificação posterior. A importação não presume uma categoria contábil pelo nome.
 
-Títulos comuns ausentes entram em **Pago/Realizado na data de vencimento registrada**. Cheques ausentes entram em **Pago/Realizado na data oficial da importação, em São Paulo**. Ambos são processados pelo mesmo arquivo. O pagamento considera o saldo integral a pagar e fica conciliado, com seu histórico.
+O banco previsto do Plano cc fica preservado. Os cheques mantêm seu número e sua regra de banco BRADESCO F2G para um eventual pagamento financeiro registrado separadamente.
 
-Uma data de vencimento futura exige conferir a data efetiva do pagamento antes de concluir; a Central não registra um pagamento futuro por suposição. As contas já vinculadas são reutilizadas. Uma conta sem correspondência segura exige escolha explícita, que pode ser reutilizada nas próximas importações. Para títulos comuns, o banco efetivo pode ser ajustado individualmente antes da confirmação.
+## Significado de Pago pelo relatório
 
-## Como as colunas são utilizadas
+O desaparecimento encerra o título na carteira e na previsão com o status **Pago**, mantendo a referência nominal e o histórico da importação. Essa alteração de status não cria uma saída bancária, um banco efetivo ou uma data real de pagamento.
 
-| Coluna do relatório | Informação na Central |
-| --- | --- |
-| Lançamento + Filial | Identidade do título nas próximas importações. |
-| Histórico | Descrição da conta e da parcela. |
-| Plano cp - Conta: nome | Plano vinculado ao Centro de Custo Macro; classificações existentes são reutilizadas. |
-| Plano cc - Conta: nome | Banco previsto na origem, preservado separadamente do banco efetivo do pagamento. |
-| Emissão: valor do lançamento | Valor provisionado atualizado pelo novo relatório. |
-| Emissão: data | Data de emissão do título. |
-| Vencimento: data | Vencimento atualizado do mesmo lançamento. |
-| Cheque: número | Número textual do cheque, incluindo zeros iniciais. Quando preenchido, o banco do pagamento é BRADESCO F2G. |
+Os pagamentos financeiros já registrados continuam com seus valores, bancos, datas e históricos. Os indicadores de realizado usam esses pagamentos efetivos. O status operacional pelo relatório e o histórico financeiro permanecem identificados separadamente.
 
-Alterar valor ou vencimento não cria outra dívida para a mesma filial e lançamento. Pagamentos já registrados não são apagados por uma atualização da previsão. Um título pago que reaparece exige conferir o histórico antes de retornar à base.
+## Centavos e modelo de 30/10/2026
 
-## R$ 0,01 e relatório sem títulos
+Valores provisionados com mais de duas casas são arredondados automaticamente por título para centavos, com o critério **HALF_UP**. Exemplo: R$ 3.122,935 passa para R$ 3.122,94. O arquivo original é preservado e os ajustes ficam disponíveis no resultado da importação.
 
-Os marcadores de **R$ 0,01** exigem confirmação individual de baixa sem pagamento. Permanecem no histórico, fora dos valores financeiros e do realizado. Um saldo residual de um centavo em um título originalmente maior não é tratado como marcador administrativo.
+A planilha enviada como modelo tem **1.155 títulos, 386 cheques e 16 ajustes de centavos**. A soma dos títulos arredondados é **R$ 3.697.121,79**. Excluindo os quatro marcadores de R$ 0,01, o valor é **R$ 3.697.121,75**.
 
-Quando todos os títulos tiverem sido liquidados, exporte um arquivo com os cabeçalhos e sem lançamentos. Marque **Confirmo que o relatório completo não contém títulos em aberto** e confira o resumo das últimas baixas. A declaração só vale para uma posição completa vazia; linhas incompletas, fórmulas ou cabeçalhos ausentes continuam bloqueados.
+A soma dos valores originais antes do arredondamento individual é R$ 3.697.121,82. A diferença acumulada de R$ 0,03 decorre do arredondamento de cada título. A Central conserva essa distinção para conferir os totais do relatório.
 
-Se a confirmação ficar pendente por falha de conexão, mantenha a tela aberta e use o reenvio da mesma confirmação. O arquivo, as escolhas e o protocolo ficam preservados para impedir duplicação de pagamentos.
+Os marcadores de **R$ 0,01** seguem com confirmação individual de baixa sem pagamento, fora dos valores financeiros. Um saldo residual de um centavo de um título originalmente maior não é tratado como marcador administrativo.
+
+## Arquivo sem títulos e confirmação pendente
+
+Quando não restar nenhum título em aberto, exporte os cabeçalhos sem lançamentos e marque a declaração de relatório completo vazio. A importação então encerra os últimos títulos da posição anterior. Cabeçalhos ausentes, linhas incompletas, duplicidades e fórmulas continuam sendo recusados pelas verificações técnicas.
+
+Se houver falha de conexão durante a gravação, utilize o reenvio da mesma solicitação. O arquivo, os centavos normalizados e o protocolo permanecem preservados para evitar duplicação. Uma mudança na base exige nova leitura interna; uma confirmação incerta mantém a mesma identificação até esclarecer o resultado.

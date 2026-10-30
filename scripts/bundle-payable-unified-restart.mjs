@@ -15,7 +15,7 @@ export async function buildPayableUnifiedRestartSql() {
   if (reset.split(result).length !== 2 || !reset.trimEnd().endsWith(result)) throw new Error('Missing CP-only reset result');
   return `-- CENTRAL FINANCEIRA — ativação 060 E reinício autorizado SOMENTE de Contas a Pagar.
 -- SOLICITADO EM 30/10/2026: ESTE SQL ZERA A BASE OPERACIONAL DE CONTAS A PAGAR.
--- Antes de zerar, confere uma cópia privada recuperável das 21 tabelas de CP.
+-- Antes de zerar, confere uma cópia privada recuperável das tabelas disponíveis de CP.
 -- Preserva Contas a Receber, Cobrança, Comissões, Caixa/Bancos, estoque e configurações.
 -- Execute TODO o conteúdo em Supabase > SQL Editor > New query > Run, como postgres.
 -- A operação cp-restart-2026-10-30-v1 só limpa uma vez; repetir não apaga a nova base.

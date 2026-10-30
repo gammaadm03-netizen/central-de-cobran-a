@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.17**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.18**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Status Pago pelo relatório e atualizações automáticas de CP — 0.18.18
+
+Uma única ação **Importar relatório** inclui os novos títulos e aplica valor e vencimento mais recentes, sem aprovação manual dessas alterações. Ausências recebem o status Pago pelo relatório, fora da carteira e da previsão, com histórico e sem fabricar pagamentos bancários. Pagamentos financeiros existentes permanecem preservados. Os centavos provisionados usam arredondamento HALF_UP por título, com registro dos ajustes; planos novos sem vínculo entram como NÃO CLASSIFICADO. A atualização não limpa a base. [Ativar a rotina 061 e usar a planilha diária](docs/conciliacao-diaria-contas-pagar.md).
 
 ## Um relatório diário e reinício somente de Contas a Pagar — 0.18.17
 

@@ -7,9 +7,10 @@ export interface PayablePaidRow { branch: string; entry_number: string; source_s
 export interface PayableTitle extends PayableImportRow {
   id: string; scope: string; source_key: string; macro: string; status: 'NEW' | 'OPEN' | 'SETTLED_IMPORT'; settled_at: string | null;
   last_import_id?: string; paid_cents?: number; outstanding_cents?: number; payment_remaining_cents?: number;
-  overpaid_cents?: number; financial_status?: 'OPEN' | 'PARTIAL' | 'PAID' | 'OVERPAID' | 'PENDING_RECONCILIATION' | 'ADMIN_WRITEOFF';
+  overpaid_cents?: number; financial_status?: 'OPEN' | 'PARTIAL' | 'PAID' | 'OVERPAID' | 'PENDING_RECONCILIATION' | 'ADMIN_WRITEOFF' | 'REPORT_PAID';
   last_payment_date?: string | null; last_payment_bank?: string | null; payment_revision?: string | null;
-  review_status?: 'A_CONCILIAR' | 'CONCILIADO' | 'BAIXADO_ADMINISTRATIVAMENTE'; review_id?: string | null; reviewed_by?: string | null; reviewed_at?: string | null; review_fingerprint?: string; closing_eligible?: boolean; closing_exclusion_reason?: string | null;
+  review_status?: 'A_CONCILIAR' | 'CONCILIADO' | 'BAIXADO_ADMINISTRATIVAMENTE' | 'PAGO_POR_RELATORIO'; review_id?: string | null; reviewed_by?: string | null; reviewed_at?: string | null; review_fingerprint?: string; closing_eligible?: boolean; closing_exclusion_reason?: string | null;
+  report_paid?: boolean; report_paid_event_id?: string | null; report_paid_at?: string | null; report_paid_import_id?: string | null; report_paid_reason?: string | null;
   administrative_writeoff_id?: string | null; administrative_writeoff_at?: string | null;
   administrative_writeoff_by?: string | null; administrative_writeoff_reason?: string | null;
   administrative_writeoff_import_id?: string | null;
@@ -17,12 +18,16 @@ export interface PayableTitle extends PayableImportRow {
 export function isPayableAdministrativeWriteoff(row: PayableTitle) {
   return row.financial_status === 'ADMIN_WRITEOFF' || row.closing_exclusion_reason === 'ADMIN_WRITEOFF' || !!row.administrative_writeoff_id;
 }
+export function isPayableReportPaid(row: PayableTitle) {
+  return row.report_paid === true || row.financial_status === 'REPORT_PAID' || row.review_status === 'PAGO_POR_RELATORIO';
+}
+export function payableTitleStatus(row: PayableTitle) { return isPayableReportPaid(row) ? 'Pago' : payableStatus[row.status]; }
 export interface ImportProblem { line: number; column: string; problem: string; correction: string }
 export interface ImportPreview { previous_import_id: string | null; row_count: number; new_count: number; open_count: number; settled_count: number; changed_count?: number }
 export interface PayableFilters { scope: string; search: string; start: string; end: string; status: string; macro: string; branch: string; financialStatus?: string; reviewStatus?: string; outstandingOnly?: boolean; canonicalOnly?: boolean }
 export interface PayableServerPreview { rows: PayableImportRow[]; preview: ImportPreview; file_sha256: string }
 export const payableStatus: Record<string, string> = { NEW: 'Novo', OPEN: 'Em aberto', SETTLED_IMPORT: 'Quitado por importação' };
-export const payableFinancialStatus: Record<string, string> = { OPEN: 'Em aberto', PARTIAL: 'Pendência de pagamento anterior', PAID: 'Totalmente pago', OVERPAID: 'Pagamento acima do valor atualizado', PENDING_RECONCILIATION: 'Baixado por importação — a conciliar', ADMIN_WRITEOFF: 'Baixado sem pagamento' };
+export const payableFinancialStatus: Record<string, string> = { OPEN: 'Em aberto', PARTIAL: 'Pendência de pagamento anterior', PAID: 'Totalmente pago', OVERPAID: 'Pagamento acima do valor atualizado', PENDING_RECONCILIATION: 'Baixado por importação — a conciliar', ADMIN_WRITEOFF: 'Baixado sem pagamento', REPORT_PAID: 'Pago' };
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 export function formatCents(value: number) {
   if (!Number.isSafeInteger(value)) return 'Valor indisponível';
@@ -60,12 +65,13 @@ export interface PayableResolutionChoice {
 export interface PayableImportRequest {
   action: 'preview' | 'commit'; file_name: string; file_base64: string;
   mappings?: Record<string,string>; complete?: boolean; previous_import_id?: string | null;
-  mode?: 'forecast' | 'payments' | 'daily'; bank_mappings?: Record<string,string>; confirm_corrections?: boolean;
+  mode?: 'forecast' | 'payments' | 'daily' | 'open_status'; bank_mappings?: Record<string,string>; confirm_corrections?: boolean;
   previous_financial_revision?: string | null; reconciliation_version?: '043'; full_report?: boolean;
   resolution_choices?: Record<string, PayableResolutionChoice>; request_id?: string;
   payment_date_version?: '2026-10-27.1';
   bank_rules_version?: '050'; column_rules_version?: '059';
   daily_report_version?: '060'; report_kind?: 'ALL'; expected_report_date?: string;
+  status_report_version?: '061';
   empty_report_confirmed?: boolean;
 }
 export async function payableImportRequest<T>(body: PayableImportRequest, signal?: AbortSignal): Promise<T> {
@@ -143,13 +149,13 @@ export async function readPayablesRevision(signal?: AbortSignal): Promise<Payabl
   return result.data as PayablesRevision;
 }
 
-async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | undefined, mode: 'forecast' | 'payments', today?: string, allowInternalCashWriteoff = false, allowEmptyReport = false, columnRulesVersion?: '059'): Promise<{ rows: Row[]; errors: ImportProblem[]; hash: string; base64: string }> {
+async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | undefined, mode: 'forecast' | 'payments', today?: string, allowInternalCashWriteoff = false, allowEmptyReport = false, columnRulesVersion?: '059', roundProvisionedAmounts = false): Promise<{ rows: Row[]; errors: ImportProblem[]; hash: string; base64: string; rounding_adjustments?: { line: number; original_amount: string; amount_cents: number }[] }> {
   if (!file.size || file.size > 2 * 1024 * 1024) throw new Error('Selecione um arquivo não vazio de até 2 MiB.');
   if (!/\.(xlsx|xlsm|csv|xls)$/i.test(file.name)) throw new Error('Selecione .xlsx, .xlsm ou .csv. Para .xls, salve uma cópia como .xlsx.');
   const original = await file.arrayBuffer();
   if (signal?.aborted) throw new DOMException('Análise cancelada.', 'AbortError');
   const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', original))).map(byte => byte.toString(16).padStart(2, '0')).join('');
-  const result = await new Promise<{ rows: Row[]; errors: ImportProblem[] }>((resolve, reject) => {
+  const result = await new Promise<{ rows: Row[]; errors: ImportProblem[]; rounding_adjustments?: { line: number; original_amount: string; amount_cents: number }[] }>((resolve, reject) => {
     const worker = new Worker(new URL('../workers/payables.worker.ts', import.meta.url), { type: 'module' });
     let timeout: number;
     const cleanup = () => { window.clearTimeout(timeout); signal?.removeEventListener('abort', abort); worker.terminate(); };
@@ -159,7 +165,7 @@ async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | u
     worker.onmessage = event => { cleanup(); resolve(event.data); };
     worker.onerror = () => { cleanup(); reject(new Error('Não foi possível processar a cópia do arquivo. Nenhum dado foi alterado.')); };
     const copy = original.slice(0);
-    worker.postMessage({ buffer: copy, name: file.name, mode, ...(mode === 'payments' ? { ...(today !== undefined ? { today } : {}), ...(allowInternalCashWriteoff ? { allowInternalCashWriteoff: true } : {}), ...(columnRulesVersion ? { columnRulesVersion } : {}) } : allowEmptyReport ? { allowEmptyReport: true } : {}) }, [copy]);
+    worker.postMessage({ buffer: copy, name: file.name, mode, ...(mode === 'payments' ? { ...(today !== undefined ? { today } : {}), ...(allowInternalCashWriteoff ? { allowInternalCashWriteoff: true } : {}), ...(columnRulesVersion ? { columnRulesVersion } : {}) } : { ...(allowEmptyReport ? { allowEmptyReport: true } : {}), ...(roundProvisionedAmounts === true ? { roundProvisionedAmounts: true } : {}) }) }, [copy]);
   });
   const bytes = new Uint8Array(original);
   let binary = '';
@@ -167,7 +173,7 @@ async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | u
   return { ...result, hash, base64: btoa(binary) };
 }
 
-export function analyzePayableFile(file: File, signal?: AbortSignal, allowEmptyReport = false) { return analyzePayableImportFile<PayableImportRow>(file, signal, 'forecast', undefined, false, allowEmptyReport); }
+export function analyzePayableFile(file: File, signal?: AbortSignal, allowEmptyReport = false, roundProvisionedAmounts = false) { return analyzePayableImportFile<PayableImportRow>(file, signal, 'forecast', undefined, false, allowEmptyReport, undefined, roundProvisionedAmounts); }
 export function analyzePayablePaymentsFile(file: File, signal?: AbortSignal, today?: string, allowInternalCashWriteoff = false, columnRulesVersion?: '059') { return analyzePayableImportFile<PayablePaidRow>(file, signal, 'payments', today, allowInternalCashWriteoff, false, columnRulesVersion); }
 
 export function downloadCsv(rows: PayableTitle[], name: string) {
@@ -184,9 +190,9 @@ export function downloadCsv(rows: PayableTitle[], name: string) {
   const decimal = (value:number) => { const cents=BigInt(value); return `${cents/100n},${String(cents%100n).padStart(2,'0')}`; };
   const lines = rows.map(row => {
     const writtenOff = isPayableAdministrativeWriteoff(row);
-    return [row.macro,row.entry_number,row.description,row.plan,row.branch,row.bank_account,dateLabel(row.issued_on),dateLabel(row.due_date),financialWeekLabel(row.due_date),decimal(row.amount_cents),payableStatus[row.status],row.source_status,'IMPORTAÇÃO DIÁRIA',dateLabel(row.settled_at),
+    return [row.macro,row.entry_number,row.description,row.plan,row.branch,row.bank_account,dateLabel(row.issued_on),dateLabel(row.due_date),financialWeekLabel(row.due_date),decimal(row.amount_cents),payableTitleStatus(row),row.source_status,'IMPORTAÇÃO DIÁRIA',dateLabel(row.settled_at),
       ...(financial ? [Number.isSafeInteger(row.paid_cents) ? decimal(row.paid_cents!) : 'Indisponível', Number.isSafeInteger(row.outstanding_cents) ? decimal(row.outstanding_cents!) : 'Indisponível', payableFinancialStatus[row.financial_status!] ?? 'Indisponível', dateLabel(row.last_payment_date ?? null), row.last_payment_bank ?? '', Number.isSafeInteger(row.overpaid_cents) ? decimal(row.overpaid_cents!) : 'Indisponível'] : []),
-      ...(reviewed ? [writtenOff ? 'BAIXADO SEM PAGAMENTO' : row.closing_eligible === false ? 'VERSÃO ANTERIOR — HISTÓRICO FORA DO FECHAMENTO' : row.review_status === 'CONCILIADO' ? 'CONCILIADO' : 'A CONCILIAR', dateLabel(row.reviewed_at ?? null), row.reviewed_by ?? ''] : []),
+      ...(reviewed ? [writtenOff ? 'BAIXADO SEM PAGAMENTO' : row.closing_eligible === false ? 'VERSÃO ANTERIOR — HISTÓRICO FORA DO FECHAMENTO' : row.review_status === 'PAGO_POR_RELATORIO' ? 'PAGO PELO RELATÓRIO' : row.review_status === 'CONCILIADO' ? 'CONCILIADO' : 'A CONCILIAR', dateLabel(row.reviewed_at ?? null), row.reviewed_by ?? ''] : []),
       ...(hasCheques ? [row.cheque_number ?? ''] : []),
       ...(administrative ? [decimal(writtenOff || row.closing_eligible === false ? 0 : row.amount_cents), writtenOff ? 'BAIXADO SEM PAGAMENTO' : '', row.administrative_writeoff_reason ?? '', dateLabel(row.administrative_writeoff_at ?? null), row.administrative_writeoff_by ?? '', row.administrative_writeoff_import_id ?? ''] : []),
     ].map(safe).join(';');

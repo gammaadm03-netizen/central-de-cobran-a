@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { parseCsv } from '../src/lib/payables-parser.mjs';
 import { readFile } from 'node:fs/promises';
 
 const project='https://sjimddcqgrsauzvffcol.supabase.co';

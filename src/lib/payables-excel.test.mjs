@@ -397,3 +397,21 @@ test('formula-like cheque text stays literal, while numeric cheque payloads fail
   await assert.rejects(buildPayablesWorkbook([title('numeric-cheque', { cheque_number: 123 })], [], options), /cheque deve ser texto/);
   await assert.rejects(buildPayablesWorkbook([], [], { ...options, payments: [payment('numeric-payment-cheque', { cheque_number: 123 })] }), /cheque deve ser texto/);
 });
+
+test('daily report Pago status preserves zero realized and historical actual payments independently', async () => {
+  const common = { status: 'SETTLED_IMPORT', settled_at: '2026-10-30T12:00:00Z', report_paid: true, review_status: 'PAGO_POR_RELATORIO', closing_eligible: true, outstanding_cents: 0, payment_remaining_cents: 0, overpaid_cents: 0 };
+  const statusOnly = title('status-only', { ...common, amount_cents: 10000, financial_status: 'REPORT_PAID', paid_cents: 0, last_payment_date: null, last_payment_bank: null });
+  const historical = title('historic-actual', { ...common, amount_cents: 20000, financial_status: 'PARTIAL', paid_cents: 5000, last_payment_date: '2026-10-15', last_payment_bank: 'Banco real preservado' });
+  const book = await buildPayablesWorkbook([statusOnly, historical], [], { ...options, payments: [payment('prior-payment', { title_id: historical.id, amount_cents: 5000, paid_on: '2026-10-15', bank_label: 'Banco real preservado' })] });
+  assert.equal(summaryValue(book, 'Total dos lançamentos'), 300);
+  assert.equal(summaryValue(book, 'Total em aberto'), 0);
+  assert.equal(summaryValue(book, 'Valor pago histórico dos títulos selecionados'), 50);
+  assert.equal(summaryValue(book, 'Realizado: total pago no período'), 50);
+  assert.equal(summaryValue(book, 'Realizado: quantidade de pagamentos'), 1);
+  const details = book.getWorksheet('TODOS OS LANÇAMENTOS');
+  const rows = details.getRows(2, 2), statusRow = rows.find(row => row.getCell(2).value === statusOnly.entry_number), actualRow = rows.find(row => row.getCell(2).value === historical.entry_number);
+  assert.equal(statusRow.getCell(11).value, 'Pago'); assert.equal(actualRow.getCell(11).value, 'Pago');
+  assert.equal(statusRow.getCell(15).value, 0); assert.equal(statusRow.getCell(17).value, 'Pago');
+  assert.equal(statusRow.getCell(18).value, null); assert.equal(statusRow.getCell(19).value, null);
+  assert.equal(actualRow.getCell(15).value, 50); assert.equal(actualRow.getCell(19).value, 'Banco real preservado');
+});

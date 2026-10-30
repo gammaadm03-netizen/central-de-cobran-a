@@ -1,6 +1,6 @@
 -- CENTRAL FINANCEIRA — ativação 060 E reinício autorizado SOMENTE de Contas a Pagar.
 -- SOLICITADO EM 30/10/2026: ESTE SQL ZERA A BASE OPERACIONAL DE CONTAS A PAGAR.
--- Antes de zerar, confere uma cópia privada recuperável das 21 tabelas de CP.
+-- Antes de zerar, confere uma cópia privada recuperável das tabelas disponíveis de CP.
 -- Preserva Contas a Receber, Cobrança, Comissões, Caixa/Bancos, estoque e configurações.
 -- Execute TODO o conteúdo em Supabase > SQL Editor > New query > Run, como postgres.
 -- A operação cp-restart-2026-10-30-v1 só limpa uma vez; repetir não apaga a nova base.
@@ -2071,7 +2071,7 @@ END $apply_060$;
 -- CENTRAL FINANCEIRA: reinício autorizado SOMENTE de Contas a Pagar, em 30/10/2026.
 -- Executar apenas no SQL Editor do projeto sjimddcqgrsauzvffcol, como postgres.
 -- Não é migration, função Edge ou tarefa de publicação. Não executa pelo aplicativo.
--- Guarda uma cópia privada das 21 tabelas operacionais de CP, incluindo arquivos e históricos.
+-- Guarda uma cópia privada das tabelas operacionais de CP disponíveis, incluindo arquivos e históricos.
 -- Preserva Contas a Receber, Cobrança, Comissões, Caixa/Bancos, usuários e configurações.
 -- A operação cp-restart-2026-10-30-v1 só limpa UMA vez. Reexecutar não apaga a nova base.
 SET LOCAL search_path = pg_catalog,pg_temp,public;
@@ -2114,6 +2114,7 @@ DECLARE
   'public.payable_import_modes',
   'public.payable_paid_import_rows',
   'public.payable_administrative_writeoffs',
+  'public.payable_report_status_events',
   'cf_private.payable_import_files',
   'cf_private.payable_identity_registry',
   'cf_private.payable_import_resolution_requests',

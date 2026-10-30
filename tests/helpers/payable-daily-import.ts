@@ -5,21 +5,18 @@ import { isChequeNumberHeader, parseCsv, readPayableChequeCell, validatePayableD
 
 const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 export const dailyUuid = (value: number) => `58000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
-export const dailyBank = { id: dailyUuid(90), display_name: 'Conta oficial sintética', company: 'Empresa sintética', bank: 'Banco sintético', account_type: 'BANK' as const };
-export const dailyOtherBank = { ...dailyBank, id: dailyUuid(91), display_name: 'Outra conta oficial sintética' };
-export const dailyChequeBank = { ...dailyBank, id: dailyUuid(92), display_name: 'BRADESCO F2G' };
-export const dailyDate = '2026-10-29';
-export const dailyBankKey = '["3", "Banco sintético"]';
+export const dailyDate = '2026-10-30';
 export const dailyCsv = 'Nº Lançamento;Histórico;Vencimento;Valor;Plano de Contas;Banco;Filial;Situação;Cheque: número\r\n14;Fornecedor sintético;16/10/2026;1.234,56;ENERGIA;Banco sintético;3;ABERTO;';
 export const dailyChequeCsv = dailyCsv.replace(';ABERTO;', ';CHEQUE;000123');
 export interface DailyFixtureOptions {
-  automatic?: number; firstReport?: boolean; chequeMissing?: boolean; mixedMissing?: boolean; activationRequired?: boolean; unknownBank?: boolean; unknownBankCount?: number; futureDue?: boolean; centNominal?: number; unclassified?: boolean;
-  paidReappeared?: boolean; uncertain?: boolean; invalidCommit?: boolean; stale?: boolean; deferred?: boolean;
-  malformed?: 'hash' | 'count' | 'date' | 'partition' | 'automatic-date' | 'automatic-bank' | 'version';
+  missing?: number; firstReport?: boolean; unclassified?: boolean; reopened?: boolean; changed?: boolean;
+  uncertain?: boolean; invalidCommit?: boolean; stale?: boolean; deferred?: boolean; activationRequired?: boolean; alreadyWrittenOff?: boolean;
+  malformed?: 'hash' | 'count' | 'date' | 'partition' | 'version' | 'rounding' | 'financial';
 }
 export async function setupDailyImport(page: Page, options: DailyFixtureOptions = {}) {
-  await page.clock.setFixedTime(new Date('2026-10-29T15:00:00Z'));
-  const id = dailyUuid(1), claims = { sub: id, session_id: dailyUuid(2), exp: Math.floor(Date.now() / 1000) + 3600, iat: Math.floor(Date.now() / 1000), role: 'authenticated' };
+  const fixedNow = new Date('2026-10-30T15:00:00Z');
+  await page.clock.setFixedTime(fixedNow);
+  const id = dailyUuid(1), claims = { sub: id, session_id: dailyUuid(2), exp: Math.floor(fixedNow.getTime() / 1000) + 3600, iat: Math.floor(fixedNow.getTime() / 1000), role: 'authenticated' };
   const access = { profile: { id, username: 'PessoaTeste', display_name: 'Pessoa de Teste', role_key: 'gerente_geral', enabled: true }, permissions: ['painel', 'caixa', 'contas_pagar', 'contas_receber', 'importar_bases'].flatMap(resource => [{ resource, action: 'read' }, ...(resource.startsWith('contas_') ? [{ resource, action: 'write' }, { resource, action: 'import' }] : [])]), collector_id: null };
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify(claims)).toString('base64url'), 'synthetic-test-only'].join('.');
   const seen = { previews: [] as any[], commits: [] as any[], payments: [] as any[], writeoffs: [] as string[], otherWrites: [] as string[], results: new Map<string, any>(), release: () => {} };
@@ -37,7 +34,7 @@ export async function setupDailyImport(page: Page, options: DailyFixtureOptions 
     if (url.pathname === '/rest/v1/rpc/current_stock') return reply({ value_cents: null, reference_date: null, source: null });
     if (url.pathname === '/rest/v1/rpc/payables_summary' || url.pathname === '/rest/v1/rpc/receivables_summary') return reply({ open_cents: 0, overdue_cents: 0, period_cents: 0, active_count: 0, latest_import_at: null });
     if (url.pathname === '/functions/v1/payables-import') {
-      expect(body.mode).toBe('daily'); expect(body.daily_report_version).toBe('060');
+      expect(body.mode).toBe('open_status'); expect(body.status_report_version).toBe('061'); expect(body.report_kind).toBe('ALL'); expect(body.bank_mappings).toBeUndefined();
       const bytes = Buffer.from(body.file_base64, 'base64'); let matrix: unknown[][];
       if (body.file_name.endsWith('.csv')) matrix = parseCsv(bytes.toString('utf8'));
       else {
@@ -45,66 +42,44 @@ export async function setupDailyImport(page: Page, options: DailyFixtureOptions 
         sheet.getRow(1).eachCell((cell, column) => { if (isChequeNumberHeader(cell.value)) chequeColumns.push(column); });
         matrix = []; sheet.eachRow((row, index) => { const values = (row.values as unknown[]).slice(1); if (index > 1) for (const column of chequeColumns) { const cell = row.getCell(column); values[column - 1] = readPayableChequeCell(cell.value, cell.numFmt); } matrix.push(values); });
       }
-      const parsed = validatePayableDailyRows(matrix, { allowEmptyReport: body.empty_report_confirmed === true });
+      const parsed = validatePayableDailyRows(matrix, { allowEmptyReport: body.empty_report_confirmed === true, roundProvisionedAmounts: true });
       if (parsed.errors.length) return reply({ errors: parsed.errors }, 422);
-      const cheque = (row: any) => row.source_status === 'CHEQUE' || !!row.cheque_number;
-      const source = parsed.rows;
-      const rows = source.map((row: any) => Object.fromEntries(Object.entries(row).reverse()));
+      const rows = parsed.rows.map((row: any) => Object.fromEntries(Object.entries(row).reverse()));
       const fileHash = createHash('sha256').update(bytes).digest('hex'), sameHead = currentHeadHash === fileHash;
-      expect(body.report_kind).toBe('ALL');
-      if (options.activationRequired) return reply({ code: 'P0060', activation_required: true }, 409);
-      const isMissingCheque = (index: number) => options.chequeMissing === true || options.mixedMissing === true && index % 2 === 1;
-      const action = (index: number) => ({ key: `title:${dailyUuid(100 + index)}`, kind: 'MISSING', line: null, title_id: dailyUuid(100 + index), branch: '3', entry_number: `AUSENTE-${index + 1}`, description: `Fornecedor ausente sintético ${index + 1}`, due_date: options.futureDue ? '2026-11-04' : '2026-10-16', amount_cents: 10000 + index, payment_remaining_cents: 10000 + index, allowed_actions: ['PAID'], requires_resolution: false, already_written_off: false, problem: null, selected_action: 'PAID', paid_on: isMissingCheque(index) ? dailyDate : options.futureDue ? '2026-11-04' : '2026-10-16', bank_account_id: isMissingCheque(index) ? dailyChequeBank.id : dailyBank.id, bank_label: isMissingCheque(index) ? dailyChequeBank.display_name : dailyBank.display_name, cheque_number: isMissingCheque(index) ? `000${index + 1}` : null, is_cheque: isMissingCheque(index), rule: isMissingCheque(index) ? 'IMPORT_DATE' : 'DUE_DATE', payment_revision: null, last_import_id: dailyUuid(500) });
-      const mappedBank = body.bank_mappings?.[dailyBankKey] === dailyBank.id;
-      const automatic: any[] = options.firstReport || sameHead || options.unknownBank && !mappedBank || options.futureDue ? [] : Array.from({ length: options.unknownBank ? options.unknownBankCount ?? 1 : options.automatic ?? 1 }, (_, index) => action(index));
-      const exceptions: any[] = [];
-      for (let index = automatic.length - 1; index >= 0; index--) if (body.resolution_choices[automatic[index].key]) { exceptions.push({ ...automatic[index], requires_resolution: true }); automatic.splice(index, 1); }
-      if (options.unknownBank && !mappedBank || options.futureDue) for (let index = 0; index < (options.unknownBankCount ?? 1); index++) exceptions.push({ ...action(index), requires_resolution: true, selected_action: null, problem: options.futureDue ? 'Vencimento futuro: confirme a data real do pagamento.' : 'Escolha a conta oficial deste pagamento.', ...(options.unknownBank ? { bank_account_id: null, bank_label: null, bank_mapping_key: dailyBankKey, source_bank: 'Banco sintético' } : {}) });
-      rows.forEach((row: any, index: number) => {
-        if (row.amount_cents === 1) exceptions.push({ ...action(600 + index), key: `row:${index + 1}`, kind: 'CENT', line: index + 1, title_id: options.centNominal ? dailyUuid(600 + index) : null, branch: row.branch, entry_number: row.entry_number, description: row.description, due_date: row.due_date, cheque_number: row.cheque_number ?? null, amount_cents: options.centNominal ?? 1, source_amount_cents: 1, is_cheque: cheque(row), rule: cheque(row) ? 'IMPORT_DATE' : 'DUE_DATE', payment_remaining_cents: options.centNominal ?? 1, paid_on: null, allowed_actions: ['WRITE_OFF'], requires_resolution: true, selected_action: null, problem: 'Confirme esta baixa individualmente, sem pagamento.', payment_revision: options.centNominal ? dailyUuid(1000 + index) : null, last_import_id: options.centNominal ? dailyUuid(500) : null });
-      });
-      if (options.paidReappeared) exceptions.push({ ...action(999), kind: 'REAPPEARED', line: 1, branch: rows[0].branch, entry_number: rows[0].entry_number, description: rows[0].description, due_date: rows[0].due_date, cheque_number: rows[0].cheque_number ?? null, amount_cents: rows[0].amount_cents, payment_remaining_cents: 0, is_cheque: cheque(rows[0]), rule: cheque(rows[0]) ? 'IMPORT_DATE' : 'DUE_DATE', allowed_actions: [], requires_resolution: true, selected_action: null, problem: 'Título já possui pagamento: confira o histórico e estorne explicitamente antes de retornar.' });
-      for (const item of exceptions) {
-        const choice = body.resolution_choices[item.key];
-        if (choice && item.allowed_actions.includes(choice.action)) { item.selected_action = choice.action; item.problem = null; if (choice.action === 'PAID') { item.paid_on = choice.paid_on; item.bank_account_id = choice.bank_account_id; item.bank_label = [dailyBank, dailyOtherBank, dailyChequeBank].find(bank => bank.id === choice.bank_account_id)?.display_name ?? null; } }
-      }
-      const unclassified = options.unclassified && body.mappings.ENERGIA !== 'FIXO' ? [{ plan: 'ENERGIA', count: rows.length, total_cents: rows.reduce((sum: number, row: any) => sum + row.amount_cents, 0) }] : [];
-      const preview: any = { daily_report_version: '060', mode: 'daily', report_kind: body.report_kind, report_date: dailyDate, empty_report_confirmed: body.empty_report_confirmed === true, previous_import_id: dailyUuid(500), financial_revision: 'revision-58', rows, row_count: rows.length, ignored_cheque_count: parsed.rows.length - rows.length, new_count: sameHead ? 0 : rows.length, open_count: sameHead ? rows.length : 0, changed_count: 0, baseline_only: !!options.firstReport && currentHeadHash === null, baseline_origin: options.firstReport && currentHeadHash === null ? 'FIRST_REPORT' : 'PREVIOUS_REPORT', auto_payment_count: automatic.length, auto_payment_cents: automatic.reduce((sum, item) => sum + item.payment_remaining_cents, 0), missing_count: [...automatic, ...exceptions].filter(item => item.kind === 'MISSING').length, automatic_actions: automatic, exceptions, reconciliation_items: exceptions, bank_options: [dailyBank, dailyOtherBank, dailyChequeBank], unclassified_plans: unclassified, macros: ['FIXO', 'VARIÁVEL'], errors: [], can_commit: exceptions.every(item => item.problem === null) && !unclassified.length };
+      if (options.activationRequired) return reply({ code: 'P0061', activation_required: true }, 409);
+      const statusActions: any[] = options.firstReport || sameHead ? [] : Array.from({ length: options.missing ?? 1 }, (_, index) => ({ kind: 'PAID', title_id: dailyUuid(100 + index), source_key: JSON.stringify(['3', `AUSENTE-${index}`]), amount_cents: 10000 + index }));
+      if (options.reopened) statusActions.push({ kind: 'REOPEN', title_id: dailyUuid(900), source_key: JSON.stringify([rows[0].branch, rows[0].entry_number]), amount_cents: rows[0].amount_cents });
+      const exceptions = rows.flatMap((row: any, index: number) => row.amount_cents === 1 ? [{ key: `row:${index + 1}`, kind: 'CENT', line: index + 1, title_id: null, branch: row.branch, entry_number: row.entry_number, description: row.description, due_date: row.due_date, cheque_number: row.cheque_number ?? null, amount_cents: 1, allowed_actions: options.alreadyWrittenOff ? [] : ['WRITE_OFF'], requires_resolution: !options.alreadyWrittenOff, already_written_off: !!options.alreadyWrittenOff, selected_action: options.alreadyWrittenOff ? null : body.resolution_choices[`row:${index + 1}`]?.action ?? null, problem: options.alreadyWrittenOff || body.resolution_choices[`row:${index + 1}`]?.action === 'WRITE_OFF' ? null : 'Confirme esta baixa individualmente, sem pagamento.' }] : []);
+      const changed = options.changed ? 1 : 0, openCount = sameHead || options.changed || options.reopened ? rows.length : 0;
+      const preview: any = { status_report_version: '061', mode: 'open_status', status_only: true, report_kind: 'ALL', report_date: dailyDate, empty_report_confirmed: body.empty_report_confirmed === true, previous_import_id: dailyUuid(500), financial_revision: 'revision-61', rows, row_count: rows.length, new_count: rows.length - openCount, open_count: openCount, changed_count: changed, baseline_only: !!options.firstReport && currentHeadHash === null, baseline_origin: options.firstReport && currentHeadHash === null ? 'FIRST_REPORT' : 'PREVIOUS_REPORT', marked_paid_count: statusActions.filter(item => item.kind === 'PAID').length, marked_paid_cents: statusActions.filter(item => item.kind === 'PAID').reduce((sum, item) => sum + item.amount_cents, 0), reopened_count: statusActions.filter(item => item.kind === 'REOPEN').length, status_actions: statusActions, exceptions, unmapped_plans: options.unclassified ? [{ plan: 'ENERGIA', count: rows.length, total_cents: rows.reduce((sum: number, row: any) => sum + row.amount_cents, 0) }] : [], macro_options: ['FIXO', 'NÃO CLASSIFICADO'], errors: exceptions.filter((item: any) => item.problem !== null).map((item: any) => ({ line: item.line ?? 0, column: 'Baixa sem pagamento', problem: item.problem, correction: 'Confirme somente o marcador de um centavo indicado.' })), can_commit: exceptions.every((item: any) => item.problem === null), rounding_adjustments: parsed.rounding_adjustments ?? [] };
       if (body.action === 'preview') {
-        seen.previews.push(body);
-        if (options.deferred) await gate;
-        if (options.malformed === 'count') preview.auto_payment_count++;
+        seen.previews.push(body); if (options.deferred) await gate;
+        if (options.malformed === 'count') preview.marked_paid_count++;
         if (options.malformed === 'date') preview.report_date = '2026-02-30';
         if (options.malformed === 'partition') rows[0].amount_cents++;
-        if (options.malformed === 'automatic-date') automatic[0].paid_on = '2026-10-01';
-        if (options.malformed === 'automatic-bank') automatic[0].bank_account_id = dailyUuid(9999);
-        if (options.malformed === 'version') preview.daily_report_version = '043';
-        return reply({ rows, preview, file_sha256: options.malformed === 'hash' ? '0'.repeat(64) : createHash('sha256').update(bytes).digest('hex') });
+        if (options.malformed === 'version') preview.status_report_version = '060';
+        if (options.malformed === 'rounding') preview.rounding_adjustments = [];
+        if (options.malformed === 'financial') statusActions[0].paid_on = dailyDate;
+        return reply({ rows, preview, file_sha256: options.malformed === 'hash' ? '0'.repeat(64) : fileHash });
       }
       seen.commits.push(structuredClone(body));
       if (seen.results.has(body.request_id)) return reply({ ...seen.results.get(body.request_id), idempotent: true });
       if (options.stale) return reply({ code: '40001' }, 409);
-      if (!preview.can_commit || body.expected_report_date !== dailyDate || body.previous_financial_revision !== 'revision-58') return reply({ code: '23514' }, 409);
-      const paid = Object.values(body.resolution_choices).filter((choice: any) => choice.action === 'PAID') as any[];
-      const writeoffs = Object.entries(body.resolution_choices).filter(([, choice]: any) => choice.action === 'WRITE_OFF').map(([key]) => key);
-      seen.payments.push(...automatic.map(item => ({ title_id: item.title_id, amount: item.payment_remaining_cents, date: item.paid_on, bank: item.bank_account_id })), ...paid.map(choice => ({ amount: choice.amount_paid_cents, date: choice.paid_on, bank: choice.bank_account_id })));
-      seen.writeoffs.push(...writeoffs);
-      const result = { daily_report_version: '060', mode: 'daily', report_kind: body.report_kind, report_date: dailyDate, empty_report_confirmed: body.empty_report_confirmed === true, request_id: body.request_id, report_id: dailyUuid(700 + seen.results.size), import_id: dailyUuid(701), row_count: rows.length, new_count: preview.new_count, open_count: preview.open_count, changed_count: 0, paid_count: automatic.length + paid.length, written_off_count: writeoffs.length, automatic_paid_count: automatic.length, payment_cents: automatic.reduce((sum, item) => sum + item.payment_remaining_cents, 0) + paid.reduce((sum, choice) => sum + choice.amount_paid_cents, 0), idempotent: false };
-      seen.results.set(body.request_id, result);
-      currentHeadHash = fileHash;
+      if (!preview.can_commit || body.expected_report_date !== dailyDate || body.previous_financial_revision !== 'revision-61') return reply({ code: '23514' }, 409);
+      const writeoffs = Object.entries(body.resolution_choices).filter(([, choice]: any) => choice.action === 'WRITE_OFF').map(([key]) => key); seen.writeoffs.push(...writeoffs);
+      const result = { status_report_version: '061', mode: 'open_status', status_only: true, report_kind: 'ALL', report_date: dailyDate, empty_report_confirmed: body.empty_report_confirmed === true, request_id: body.request_id, report_id: dailyUuid(700 + seen.results.size), import_id: dailyUuid(701), row_count: rows.length, new_count: preview.new_count, open_count: preview.open_count, updated_count: preview.changed_count, marked_paid_count: preview.marked_paid_count, marked_paid_cents: preview.marked_paid_cents, reopened_count: preview.reopened_count, paid_count: 0, payment_cents: 0, payments_created: 0, written_off_count: writeoffs.length, baseline_only: preview.baseline_only, idempotent: false, rounding_adjustments: preview.rounding_adjustments };
+      seen.results.set(body.request_id, result); currentHeadHash = fileHash;
       if (options.uncertain) return reply({ code: 'XX000' }, 503);
-      if (options.invalidCommit) return reply({ ...result, payment_cents: result.payment_cents + 1 });
+      if (options.invalidCommit) return reply({ ...result, payment_cents: 1 });
       return reply(result);
     }
     if (req.method() === 'GET') return reply([]);
     if (url.pathname.startsWith('/rest/v1/rpc/')) return reply({ code: 'PGRST202' }, 404);
-    seen.otherWrites.push(url.pathname);
-    throw new Error(`Unexpected daily fixture request ${req.method()} ${url.pathname}`);
+    seen.otherWrites.push(url.pathname); throw new Error(`Unexpected daily fixture request ${req.method()} ${url.pathname}`);
   });
   await page.goto('/'); await page.getByLabel('Usuário', { exact: true }).fill('PessoaTeste'); await page.getByLabel('Senha', { exact: true }).fill('synthetic-password'); await page.getByRole('button', { name: 'Entrar na Central', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sair', exact: false })).toBeVisible();
-  await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click();
-  return seen;
+  await page.getByRole('navigation').getByRole('button', { name: 'Importar Bases', exact: true }).click(); return seen;
 }
 export async function selectDailyFile(page: Page, content = dailyCsv, cheque = false) {
   await page.getByLabel('Relatório completo diário de Contas a Pagar', { exact: true }).setInputFiles({ name: cheque ? 'cheques.csv' : 'diario.csv', mimeType: 'text/csv', buffer: Buffer.from(content) });

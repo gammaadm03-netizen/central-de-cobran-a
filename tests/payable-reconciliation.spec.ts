@@ -6,7 +6,7 @@ const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const now = new Date('2026-10-18T15:00:00Z');
 const uuid = (value: number) => `73000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const labels = ['BRADESCO ECOPLAST', 'BRADESCO LIMPE FACIL', 'BRADESCO GAMMA IND', 'BRADESCO F2G', 'BRADESCO FAST CLEAN', 'BRADESCO EASY CLEAN', 'BANCO DO BRASIL FAST CLEAN', 'BANCO DO BRASIL EASY CLEAN', 'BANCO DO BRASIL ECOPLAST', 'BANCO CORA LIMPE FACIL', 'BANCO CORA MY CLEAN', 'BANCO CORA ECO PLAST', 'CAIXA ECOPLAST', 'CAIXA LIMPE FACIL', 'CAIXA GAMMA', 'CAIXA FAST CLEAN', 'CAIXA EASY CLEAN'];
-interface Options { director?: boolean; missing?: boolean; stale?: boolean; ambiguous?: boolean; uncertain?: boolean; commitBeforeError?: boolean; initialPayments?: number; initialPaymentAmount?: number; titleValue?: number; extraTitle?: boolean; changedFinancialRevision?: boolean; chequeNumber?: string | null; entryNumber?: string; missingChequeBank?: boolean; ambiguousChequeBank?: boolean }
+interface Options { reportPaid?: boolean; director?: boolean; missing?: boolean; stale?: boolean; ambiguous?: boolean; uncertain?: boolean; commitBeforeError?: boolean; initialPayments?: number; initialPaymentAmount?: number; titleValue?: number; extraTitle?: boolean; changedFinancialRevision?: boolean; chequeNumber?: string | null; entryNumber?: string; missingChequeBank?: boolean; ambiguousChequeBank?: boolean }
 async function setup(page: Page, options: Options = {}) {
   await page.clock.setFixedTime(now);
   const id = uuid(1); const role = options.director ? 'diretor' : 'contas_pagar';
@@ -14,7 +14,7 @@ async function setup(page: Page, options: Options = {}) {
   if (!options.director) permissions.push({ resource: 'contas_pagar', action: 'write' }, { resource: 'contas_pagar', action: 'import' });
   const access = { profile: { id, username: 'FinanceiroTeste', display_name: 'Pessoa de Teste', role_key: role, enabled: true }, permissions, collector_id: null };
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify({ sub: id, session_id: uuid(2), exp: Math.floor(now.getTime() / 1000) + 3600, role: 'authenticated' })).toString('base64url'), 'synthetic-test-only'].join('.');
-  const title: any = { id: uuid(3), scope: 'grupo-consolidado', source_key: 'synthetic-title', entry_number: options.entryNumber ?? '8001', description: 'Fornecedor sintético de conciliação', branch: '3', due_date: '2026-10-14', amount_cents: options.titleValue ?? 20000, source_status: 'ABERTO', plan: 'ENERGIA', bank_account: 'Banco original da base', issued_on: '2026-10-01', macro: 'FIXO', status: 'SETTLED_IMPORT', settled_at: '2026-10-18T12:00:00Z', last_import_id: uuid(4), payment_revision: null, ...(Object.hasOwn(options, 'chequeNumber') ? { cheque_number: options.chequeNumber } : {}) };
+  const title: any = { id: uuid(3), scope: 'grupo-consolidado', source_key: 'synthetic-title', entry_number: options.entryNumber ?? '8001', description: 'Fornecedor sintético de conciliação', branch: '3', due_date: '2026-10-14', amount_cents: options.titleValue ?? 20000, source_status: 'ABERTO', plan: 'ENERGIA', bank_account: 'Banco original da base', issued_on: '2026-10-01', macro: 'FIXO', status: 'SETTLED_IMPORT', settled_at: '2026-10-18T12:00:00Z', last_import_id: uuid(4), payment_revision: null, ...(Object.hasOwn(options, 'chequeNumber') ? { cheque_number: options.chequeNumber } : {}), ...(options.reportPaid ? { report_paid: true, report_paid_event_id: uuid(399), report_paid_at: now.toISOString() } : {}) };
   const sourceTitles = [title, ...(options.extraTitle ? [{ ...title, id: uuid(3000), source_key: 'synthetic-second-title', entry_number: '8002', description: 'Outro fornecedor sintético', amount_cents: 12345, due_date: '2026-10-20', macro: 'VARIÁVEL', status: 'OPEN', settled_at: null }] : [])];
   const accounts = labels.map((label, index) => ({ id: uuid(100 + index), display_name: label, company: label, bank: 'Conta sintética', account_label: label, account_type: index >= 12 ? 'CASH' : 'BANK' })).filter(account => !options.missingChequeBank || account.display_name !== 'BRADESCO F2G');
   if (options.ambiguousChequeBank) accounts.push({ ...accounts.find(account => account.display_name === 'BRADESCO F2G')!, id: uuid(999) });
@@ -24,7 +24,7 @@ async function setup(page: Page, options: Options = {}) {
   for (let index = 0; index < (options.initialPayments ?? 0); index += 1) { const historical: any = payment(options.initialPaymentAmount ?? 100); delete historical.cheque_number; payments.push(historical); }
   if (payments.length) title.payment_revision = payments.at(-1).id;
   const revision = () => ({ import_id: title.last_import_id, financial_revision: String(event) });
-  const financial = (source: any = title) => { const active = payments.filter(item => item.title_id === source.id && !item.cancelled_at); const paid = active.reduce((sum, item) => sum + item.amount_cents, 0); const last = [...active].sort((a, b) => b.paid_on.localeCompare(a.paid_on) || b.event_revision - a.event_revision)[0]; return { ...source, paid_cents: paid, outstanding_cents: paid > 0 ? Math.max(0, source.amount_cents - paid) : source.status === 'SETTLED_IMPORT' ? 0 : source.amount_cents, payment_remaining_cents: Math.max(0, source.amount_cents - paid), overpaid_cents: Math.max(0, paid - source.amount_cents), last_payment_date: last?.paid_on ?? null, last_payment_bank: last?.bank_label ?? null, financial_status: paid > source.amount_cents ? 'OVERPAID' : paid === source.amount_cents && paid > 0 ? 'PAID' : paid > 0 ? 'PARTIAL' : source.status === 'SETTLED_IMPORT' ? 'PENDING_RECONCILIATION' : 'OPEN' }; };
+  const financial = (source: any = title) => { const active = payments.filter(item => item.title_id === source.id && !item.cancelled_at); const paid = active.reduce((sum, item) => sum + item.amount_cents, 0); const last = [...active].sort((a, b) => b.paid_on.localeCompare(a.paid_on) || b.event_revision - a.event_revision)[0]; return { ...source, paid_cents: paid, outstanding_cents: source.report_paid ? 0 : paid > 0 ? Math.max(0, source.amount_cents - paid) : source.status === 'SETTLED_IMPORT' ? 0 : source.amount_cents, payment_remaining_cents: source.report_paid ? 0 : Math.max(0, source.amount_cents - paid), overpaid_cents: Math.max(0, paid - source.amount_cents), last_payment_date: last?.paid_on ?? null, last_payment_bank: last?.bank_label ?? null, financial_status: source.report_paid && paid === 0 ? 'REPORT_PAID' : paid > source.amount_cents ? 'OVERPAID' : paid === source.amount_cents && paid > 0 ? 'PAID' : paid > 0 ? 'PARTIAL' : source.status === 'SETTLED_IMPORT' ? 'PENDING_RECONCILIATION' : 'OPEN' }; };
   await page.route(`${project}/**`, async route => {
     const request = route.request(), url = new URL(request.url()), name = url.pathname.split('/').at(-1)!;
     const headers = { 'access-control-allow-origin': 'http://127.0.0.1:4173', 'access-control-allow-headers': 'apikey,content-type,authorization,x-client-info,prefer', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-expose-headers': 'content-range' };
@@ -278,4 +278,26 @@ test('period and macro paid consultation filters receipts by actual date, shows 
   const table = page.locator('section[aria-labelledby="payable-actual-title"] tbody'); await expect(table.locator('tr')).toHaveCount(1); await expect(table).toContainText('05/10/2026'); await expect(table).toContainText('VARIÁVEL'); await expect(table).not.toContainText('FIXO');
   expect(calls.some(call => call.name === 'list_payable_payments' && call.body.p_start === '2026-10-01' && call.body.p_end === '2026-10-10' && call.body.p_macro === 'VARIÁVEL')).toBe(true);
   await page.getByRole('button', { name: 'Abrir título 8001', exact: true }).click(); await expect(editor(page)).toContainText('15/09/2026'); await expect(editor(page).locator('tbody tr')).toHaveCount(2); await expect(page.getByRole('button', { name: 'Confirmar pagamento', exact: true })).toHaveCount(0);
+});
+
+
+test('daily report Pago has no actual amount or duplicate payment form', async ({ page }) => {
+  const { calls } = await setup(page, { reportPaid: true });
+  const row = page.getByRole('table', { name: 'Títulos de Contas a Pagar com filtros e paginação' }).locator('tbody tr').first();
+  await expect(row).toContainText('Pago'); await expect(page.getByRole('button', { name: 'Conciliar título', exact: true })).toHaveCount(0);
+  await openTitle(page); await expect(editor(page)).toContainText('Pago pelo relatório diário.');
+  await expect(editor(page)).toContainText('Nenhum pagamento registrado para este título.');
+  await expect(page.getByLabel('Data real do pagamento', { exact: true })).toHaveCount(0);
+  await expect(actual(page)).toContainText('R$ 0,00'); expect(calls.filter(call => call.name === 'register_payable_payment')).toHaveLength(0);
+});
+
+test('report Pago preserves real history and allows its audited reversal without creating a payment', async ({ page }) => {
+  const { calls, payments } = await setup(page, { reportPaid: true, initialPayments: 1, initialPaymentAmount: 7015 });
+  await openTitle(page); await expect(editor(page)).toContainText('Pago pelo relatório diário.');
+  await expect(editor(page)).toContainText('R$ 70,15'); await expect(page.getByLabel('Data real do pagamento', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Estornar pagamento', exact: true }).click();
+  await page.getByLabel('Motivo do estorno', { exact: true }).fill('Correção do pagamento real anterior.');
+  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Confirmar estorno', exact: true }).click();
+  await expect(editor(page)).toContainText('Pagamento estornado com histórico e auditoria.');
+  expect(payments[0].cancelled_at).toBeTruthy(); expect(calls.filter(call => call.name === 'register_payable_payment')).toHaveLength(0);
 });

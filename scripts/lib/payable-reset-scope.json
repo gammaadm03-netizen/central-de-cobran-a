@@ -15,6 +15,7 @@
     "public.payable_import_modes",
     "public.payable_paid_import_rows",
     "public.payable_administrative_writeoffs",
+    "public.payable_report_status_events",
     "cf_private.payable_import_files",
     "cf_private.payable_identity_registry",
     "cf_private.payable_import_resolution_requests",

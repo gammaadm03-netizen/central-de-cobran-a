@@ -90,6 +90,39 @@ export function parseMoneyCents(value) {
   return Number(cents);
 }
 
+// Only the provisioned amount in the explicitly selected daily report may be
+// rounded. The shared/manual/received-money parser above remains strict.
+// Use the source decimal representation, never binary multiplication/toFixed.
+export function parseProvisionedMoneyCents(value) {
+  let digits, scale;
+  const original = String(value ?? '').trim();
+  if (original.length > 300) throw new Error('Limite de 300 caracteres excedido.');
+  if (/[\u0000-\u001f\u007f]/.test(original)) throw new Error('Use valor brasileiro, por exemplo 1.234,56, com até duas casas decimais.');
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value < 0) throw new Error('Informe um valor numérico positivo.');
+    const match = /^(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(String(value));
+    if (!match) throw new Error('Informe um valor numérico positivo.');
+    digits = match[1] + (match[2] ?? '');
+    scale = (match[2]?.length ?? 0) - Number(match[3] ?? 0);
+  } else {
+    const text = original.replace(/^R\$\s*/, '');
+    if (!text) throw new Error('Valor obrigatório.');
+    if (!/^(?:\d+|\d{1,3}(?:\.\d{3})+)(?:,\d+)?$/.test(text)) throw new Error('Use valor brasileiro, por exemplo 1.234,56, com até duas casas decimais.');
+    const [whole, fraction = ''] = text.replaceAll('.', '').split(',');
+    digits = whole + fraction; scale = fraction.length;
+  }
+  const coefficient = BigInt(digits);
+  let cents, remainder = 0n;
+  if (scale <= 2) cents = coefficient * 10n ** BigInt(2 - scale);
+  else {
+    const divisor = 10n ** BigInt(scale - 2);
+    remainder = coefficient % divisor;
+    cents = coefficient / divisor + (remainder * 2n >= divisor ? 1n : 0n);
+  }
+  if (cents > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Valor excede o limite seguro.');
+  return { amount_cents: Number(cents), original_amount: original, adjusted: remainder !== 0n };
+}
+
 // RFC4180-style parser, preserving quoted delimiters, newlines and escaped quotes.
 export function parseCsv(text, { maxRows = MAX_ROWS + 1 } = {}) {
   // Financial imports retain their existing limit. RH can reserve bounded rows
@@ -218,9 +251,10 @@ export function readPayableChequeCell(value, numFmt) {
   if (format.length > 150) throw new Error('Limite de 150 caracteres excedido.');
   return text.padStart(format.length, '0');
 }
-export function validatePayableRows(matrix, { excel1904 = false } = {}) {
-  const errors = [], rows = [];
-  if (!matrix.length) return { rows, errors: [{ line: 1, column: 'Arquivo', problem: 'Arquivo vazio.', correction: 'Exporte o relatório completo com os cabeçalhos.' }] };
+export function validatePayableRows(matrix, { excel1904 = false, roundProvisionedAmounts = false } = {}) {
+  const errors = [], rows = [], rounding = [];
+  const result = (values, problems) => ({ rows: values, errors: problems, ...(roundProvisionedAmounts === true ? { rounding_adjustments: problems.length ? [] : rounding } : {}) });
+  if (!matrix.length) return result(rows, [{ line: 1, column: 'Arquivo', problem: 'Arquivo vazio.', correction: 'Exporte o relatório completo com os cabeçalhos.' }]);
   const columns = new Map(), timestampColumns = new Set();
   matrix[0].forEach((value, index) => {
     let key;
@@ -233,7 +267,7 @@ export function validatePayableRows(matrix, { excel1904 = false } = {}) {
     else if (key) columns.set(key, index);
   });
   for (const key of REQUIRED) if (!columns.has(key)) errors.push({ line: 1, column: COLUMN_LABELS[key], problem: 'Coluna obrigatória ausente.', correction: `Inclua a coluna ${COLUMN_LABELS[key]}.` });
-  if (errors.length) return { rows, errors };
+  if (errors.length) return result(rows, errors);
   const keys = new Set(); let total = 0, nonempty = 0;
   for (let index = 1; index < matrix.length; index++) {
     const source = matrix[index];
@@ -247,7 +281,12 @@ export function validatePayableRows(matrix, { excel1904 = false } = {}) {
     for (const [key, column] of columns) {
       try {
         const value = scalar(source[column]);
-        if (key === 'amount_cents') row[key] = parseMoneyCents(value);
+        if (key === 'amount_cents') {
+          if (roundProvisionedAmounts === true) {
+            const amount = parseProvisionedMoneyCents(value); row[key] = amount.amount_cents;
+            if (amount.adjusted) rounding.push({ line: index + 1, original_amount: amount.original_amount, amount_cents: amount.amount_cents });
+          } else row[key] = parseMoneyCents(value);
+        }
         else if (key === 'cheque_number') row[key] = parseChequeNumber(value);
         else if (key === 'due_date') row[key] = timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904);
         else if (key === 'issued_on') row[key] = String(value).trim() ? (timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904)) : null;
@@ -270,20 +309,20 @@ export function validatePayableRows(matrix, { excel1904 = false } = {}) {
     if (errors.length >= 100) break;
   }
   if (!rows.length && !errors.length) errors.push({ line: 2, column: 'Arquivo', problem: 'Não há títulos no relatório.', correction: 'Selecione um relatório completo com lançamentos; base vazia não pode baixar títulos.' });
-  return { rows: errors.length ? [] : rows, errors };
+  return result(errors.length ? [] : rows, errors);
 }
 
 // An empty complete position requires a separate explicit declaration. Retain
 // every header, formula and malformed-row check from the ordinary validator;
 // only its final, unambiguous "no titles" diagnostic can be waived.
-export function validatePayableDailyRows(matrix, { excel1904 = false, allowEmptyCheques = false, allowEmptyReport = false } = {}) {
-  const parsed = validatePayableRows(matrix, { excel1904 });
+export function validatePayableDailyRows(matrix, { excel1904 = false, allowEmptyCheques = false, allowEmptyReport = false, roundProvisionedAmounts = false } = {}) {
+  const parsed = validatePayableRows(matrix, { excel1904, roundProvisionedAmounts });
   if (allowEmptyCheques !== true && allowEmptyReport !== true) return parsed;
   if (parsed.errors.length === 1 && parsed.errors[0].line === 2
-    && parsed.errors[0].column === 'Arquivo' && parsed.errors[0].problem === 'Não há títulos no relatório.') return { rows: [], errors: [] };
+    && parsed.errors[0].column === 'Arquivo' && parsed.errors[0].problem === 'Não há títulos no relatório.') return { rows: [], errors: [], ...(roundProvisionedAmounts === true ? { rounding_adjustments: [] } : {}) };
   if (!parsed.errors.length && parsed.rows.length > 0) return { rows: [], errors: [{ line: 0, column: allowEmptyReport === true ? 'Declaração de relatório sem títulos' : 'Declaração de cheques',
     problem: allowEmptyReport === true ? 'O relatório contém títulos. Desmarque a declaração de relatório sem títulos em aberto.' : 'O relatório contém títulos. Desmarque a declaração de posição sem cheques pendentes.',
-    correction: 'Confira o conteúdo do arquivo e a declaração antes de analisar novamente.' }] };
+    correction: 'Confira o conteúdo do arquivo e a declaração antes de analisar novamente.' }], ...(roundProvisionedAmounts === true ? { rounding_adjustments: [] } : {}) };
   return parsed;
 }
 
