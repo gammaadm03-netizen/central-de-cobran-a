@@ -137,8 +137,8 @@ test('CR com liberação individual acessa as nove bases e os formulários opera
   'Contas a Pagar','Contas a Receber','Contatos e descrições','Caixa / Bancos','Estoque',
   'Resumo da Diretoria','Fechamento / Faturamento','RH / DP','Custos',
  ]);
- await page.getByRole('button',{name:'Previsões / novos títulos',exact:true}).click();
- await expect(page.getByRole('heading',{name:'Importar Contas a Pagar',exact:true})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'Importar relatório diário de Contas a Pagar',exact:true})).toBeVisible();
+ await expect(page.getByLabel('Relatório completo diário de Contas a Pagar',{exact:true})).toBeEnabled();
  await tabs.getByRole('tab',{name:'Estoque',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Registrar posição de estoque',exact:true})).toBeVisible();
  await expect(page.getByLabel('Valor total do estoque (R$)',{exact:true})).toBeEnabled();
@@ -207,8 +207,8 @@ test('limite individual de CP mostra somente três módulos e uma única base de
  const tabs=page.getByRole('tablist',{name:'Bases para atualização'});
  await expect(tabs.getByRole('tab')).toHaveCount(1);
  await expect(tabs.getByRole('tab')).toHaveText(['Contas a Pagar']);
- await page.getByRole('button',{name:'Previsões / novos títulos',exact:true}).click();
- await expect(page.getByRole('heading',{name:'Importar Contas a Pagar',exact:true})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'Importar relatório diário de Contas a Pagar',exact:true})).toBeVisible();
+ await expect(page.getByLabel('Relatório completo diário de Contas a Pagar',{exact:true})).toBeEnabled();
  await nav.getByRole('button',{name:'Contas a Pagar',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Contas a Pagar',level:1,exact:true})).toBeVisible();
  await expect(nav.getByRole('button')).toHaveCount(3);

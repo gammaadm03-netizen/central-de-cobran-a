@@ -1,0 +1,39 @@
+{
+  "targets": [
+    "public.payable_imports",
+    "public.payable_titles",
+    "public.payable_forecast_completions",
+    "public.payable_payments",
+    "public.payable_payment_reversals",
+    "public.payable_title_control_revisions",
+    "public.payable_title_reviews",
+    "public.payable_title_corrections",
+    "public.payable_title_macro_overrides",
+    "public.payable_payment_reclassifications",
+    "public.payable_month_closures",
+    "public.payable_month_events",
+    "public.payable_import_modes",
+    "public.payable_paid_import_rows",
+    "public.payable_administrative_writeoffs",
+    "cf_private.payable_import_files",
+    "cf_private.payable_identity_registry",
+    "cf_private.payable_import_resolution_requests",
+    "cf_private.payable_daily_reports",
+    "cf_private.payable_daily_requests",
+    "cf_private.payable_daily_actions"
+  ],
+  "preserved_config": [
+    "public.payable_macros",
+    "public.payable_plan_mappings",
+    "public.payable_forecast_rules",
+    "public.payable_forecast_plan_bindings",
+    "public.payable_paid_bank_mappings",
+    "cf_private.payable_paid_bank_aliases",
+    "cf_private.payable_payment_state",
+    "cf_private.payable_control_state"
+  ],
+  "revision_states": [
+    "cf_private.payable_payment_state",
+    "cf_private.payable_control_state"
+  ]
+}

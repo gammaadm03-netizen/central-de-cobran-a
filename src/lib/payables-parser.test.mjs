@@ -532,3 +532,13 @@ test('059 preserves a supplied cash date for existing-cheque lookup without requ
   }
   for (const date of ['31/02/2026', '=1+1']) assert.ok(validatePayablePaidRows([columns, ['1', '4', '125,90', 'CAIXA INTERNO', date]], options).errors.length);
 });
+
+
+test('060 empty complete report requires its generic typed declaration and retains every row validation', () => {
+  assert.deepEqual(validatePayableDailyRows([erpHeader], { allowEmptyReport: true }), { rows: [], errors: [] });
+  for (const flag of [undefined, false, 'true', 1]) assert.ok(validatePayableDailyRows([erpHeader], { allowEmptyReport: flag }).errors.length);
+  for (const matrix of [[], [[]], [erpHeader.slice(1)], [erpHeader, erpRow], [erpHeader, ['TOTAL']], [erpHeader, [{ formula: '1+1', result: 2 }]]]) {
+    const result = validatePayableDailyRows(matrix, { allowEmptyReport: true }); assert.ok(result.errors.length); assert.deepEqual(result.rows, []);
+  }
+  assert.match(validatePayableDailyRows([erpHeader, erpRow], { allowEmptyReport: true }).errors[0].problem, /relatório sem títulos em aberto/);
+});

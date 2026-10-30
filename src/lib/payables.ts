@@ -43,6 +43,7 @@ export function payableError(error: unknown, fallback: string) {
   if (code === 'P0043') return error && typeof error === 'object' && 'activation_required' in error && error.activation_required === true
     ? 'Ative a atualização de conciliação na importação no banco e na função payables-import. Preserve o arquivo e as escolhas para analisar novamente.'
     : 'Confira as decisões de pagamento e baixa de cada título e valide novamente as escolhas antes de confirmar a importação.';
+  if (code === 'P0060') return 'Use o relatório diário único de Contas a Pagar. Atualize a Central e ative o SQL 060 e a função payables-import quando solicitado. Nenhum dado foi alterado.';
   if (code === 'P0059') return 'Ative o SQL 059 de atualização das colunas de Contas a Pagar e publique a função payables-import atualizada. Nenhum dado foi alterado.';
   if (code === 'P0058') return 'Ative o SQL 058 e atualize a função payables-import para usar a conciliação diária de títulos e cheques. Nenhum dado foi alterado.';
   if (code === 'P0019') return 'Ative a atualização dos números de cheque no banco de dados antes de importar esta coluna. Nenhum dado foi alterado.';
@@ -64,8 +65,8 @@ export interface PayableImportRequest {
   resolution_choices?: Record<string, PayableResolutionChoice>; request_id?: string;
   payment_date_version?: '2026-10-27.1';
   bank_rules_version?: '050'; column_rules_version?: '059';
-  daily_report_version?: '059'; report_kind?: 'NORMAL' | 'CHEQUES'; expected_report_date?: string;
-  empty_cheques_confirmed?: boolean;
+  daily_report_version?: '060'; report_kind?: 'ALL'; expected_report_date?: string;
+  empty_report_confirmed?: boolean;
 }
 export async function payableImportRequest<T>(body: PayableImportRequest, signal?: AbortSignal): Promise<T> {
   const client = supabase;
@@ -142,7 +143,7 @@ export async function readPayablesRevision(signal?: AbortSignal): Promise<Payabl
   return result.data as PayablesRevision;
 }
 
-async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | undefined, mode: 'forecast' | 'payments', today?: string, allowInternalCashWriteoff = false, allowEmptyCheques = false, columnRulesVersion?: '059'): Promise<{ rows: Row[]; errors: ImportProblem[]; hash: string; base64: string }> {
+async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | undefined, mode: 'forecast' | 'payments', today?: string, allowInternalCashWriteoff = false, allowEmptyReport = false, columnRulesVersion?: '059'): Promise<{ rows: Row[]; errors: ImportProblem[]; hash: string; base64: string }> {
   if (!file.size || file.size > 2 * 1024 * 1024) throw new Error('Selecione um arquivo não vazio de até 2 MiB.');
   if (!/\.(xlsx|xlsm|csv|xls)$/i.test(file.name)) throw new Error('Selecione .xlsx, .xlsm ou .csv. Para .xls, salve uma cópia como .xlsx.');
   const original = await file.arrayBuffer();
@@ -158,7 +159,7 @@ async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | u
     worker.onmessage = event => { cleanup(); resolve(event.data); };
     worker.onerror = () => { cleanup(); reject(new Error('Não foi possível processar a cópia do arquivo. Nenhum dado foi alterado.')); };
     const copy = original.slice(0);
-    worker.postMessage({ buffer: copy, name: file.name, mode, ...(mode === 'payments' ? { ...(today !== undefined ? { today } : {}), ...(allowInternalCashWriteoff ? { allowInternalCashWriteoff: true } : {}), ...(columnRulesVersion ? { columnRulesVersion } : {}) } : allowEmptyCheques ? { allowEmptyCheques: true } : {}) }, [copy]);
+    worker.postMessage({ buffer: copy, name: file.name, mode, ...(mode === 'payments' ? { ...(today !== undefined ? { today } : {}), ...(allowInternalCashWriteoff ? { allowInternalCashWriteoff: true } : {}), ...(columnRulesVersion ? { columnRulesVersion } : {}) } : allowEmptyReport ? { allowEmptyReport: true } : {}) }, [copy]);
   });
   const bytes = new Uint8Array(original);
   let binary = '';
@@ -166,7 +167,7 @@ async function analyzePayableImportFile<Row>(file: File, signal: AbortSignal | u
   return { ...result, hash, base64: btoa(binary) };
 }
 
-export function analyzePayableFile(file: File, signal?: AbortSignal, allowEmptyCheques = false) { return analyzePayableImportFile<PayableImportRow>(file, signal, 'forecast', undefined, false, allowEmptyCheques); }
+export function analyzePayableFile(file: File, signal?: AbortSignal, allowEmptyReport = false) { return analyzePayableImportFile<PayableImportRow>(file, signal, 'forecast', undefined, false, allowEmptyReport); }
 export function analyzePayablePaymentsFile(file: File, signal?: AbortSignal, today?: string, allowInternalCashWriteoff = false, columnRulesVersion?: '059') { return analyzePayableImportFile<PayablePaidRow>(file, signal, 'payments', today, allowInternalCashWriteoff, false, columnRulesVersion); }
 
 export function downloadCsv(rows: PayableTitle[], name: string) {

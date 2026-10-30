@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.16**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.17**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Um relatório diário e reinício somente de Contas a Pagar — 0.18.17
+
+Contas a Pagar usa uma única importação completa de títulos em aberto, incluindo cheques e novos lançamentos. O primeiro arquivo cria a base inicial; os seguintes atualizam os presentes e registram como pagos os que desapareceram. Títulos comuns usam o vencimento e cheques usam a data da importação; marcadores de R$ 0,01 continuam com confirmação individual sem realizado. A limpeza administrativa solicitada para 30/10/2026 fica restrita a CP, com cópia privada conferida e proteção para não apagar a nova base em uma repetição. [Ativar a rotina 060, executar o reinício de CP e importar a nova base](docs/conciliacao-diaria-contas-pagar.md). Publicar o código não executa a limpeza no banco remoto.
 
 ## Colunas e atualização de Contas a Pagar — 0.18.16
 

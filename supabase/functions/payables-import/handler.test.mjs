@@ -112,7 +112,7 @@ test('preview derives canonical financial rows, hash and fixed scope from actual
   assert.equal(payload.file_sha256, createHash('sha256').update(CSV).digest('hex'));
   assert.deepEqual(payload.rows, [{ entry_number: 'ABC-1', description: 'Fornecedor sintético', due_date: '2026-10-16', amount_cents: 123456, plan: 'INVESTIMENTOS', bank_account: 'Banco teste', branch: '2 - TESTE', issued_on: '2026-10-01', source_status: 'Pendente' }]);
   assert.equal(payload.preview.row_count, 1);
-  assert.deepEqual(app.calls.map(call => call.path), ['/auth/v1/user', '/rest/v1/rpc/current_access', '/rest/v1/rpc/preview_payables_import']);
+  assert.deepEqual(app.calls.map(call => call.path), ['/auth/v1/user', '/rest/v1/rpc/current_access', '/rest/v1/rpc/payables_import_capabilities', '/rest/v1/rpc/preview_payables_import']);
   assert.deepEqual(app.calls.at(-1).data, { p_scope: 'grupo-consolidado', p_rows: payload.rows });
   assert.equal(app.workbookCalls(), 0);
 });
@@ -951,4 +951,16 @@ test('059 fresh paid commits require column-rule proof while an old completed ex
   }
   const replay = setup({ capabilities: columnCapabilities, commitPayload: { import_id: IMPORT, row_count: 1, mode: 'payments', settled_count: 0, idempotent: true, reconciliation_version: '043', request_id: SESSION } });
   assert.equal((await replay.send(body('commit', columnRequest({ file_base64: encode(source), request_id: SESSION, previous_financial_revision: '17' })))).status, 200);
+});
+
+
+test('060 activation retires every old HTTP import writer including unversioned forecasts without a cheque column', async () => {
+  for (const action of ['preview', 'commit']) for (const extra of [{}, { mode: 'forecast' }, { mode: 'payments', file_base64: encode(PAID_CSV) }]) {
+    const app = setup({ capabilities: { unified_daily_report: true, daily_report_version: '060' } });
+    const response = await app.send(body(action, extra));
+    assert.equal(response.status, 409); const result = await response.json();
+    assert.equal(result.code, 'P0060'); assert.equal(result.activation_required, false);
+    assert.equal(app.calls.at(-1).path, '/rest/v1/rpc/payables_import_capabilities');
+    assert(!app.calls.some(call => /\/(?:preview_|commit_)/.test(call.path)));
+  }
 });

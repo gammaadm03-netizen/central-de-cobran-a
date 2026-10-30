@@ -10,7 +10,7 @@ const IMPORT = '50000000-0000-4000-8000-000000000001';
 const normal = { entry_number: 'TESTE-001', branch: 'Filial sintética', description: 'Fornecedor sintético',
   due_date: '2026-10-20', amount_cents: 10000, plan: 'PLANO TESTE', bank_account: 'BANCO TESTE', issued_on: null, source_status: 'PENDENTE' };
 const cheque = { ...normal, entry_number: 'CHEQUE-001', source_status: 'CHEQUE', cheque_number: '000123' };
-const request = extra => ({ action: 'preview', mode: 'daily', daily_report_version: '059', report_kind: 'NORMAL',
+const request = extra => ({ action: 'preview', mode: 'daily', daily_report_version: '060', report_kind: 'ALL',
   file_name: 'sintetico.csv', file_base64: 'YQ==', mappings: {}, bank_mappings: {}, resolution_choices: {}, ...extra });
 const committedRequest = extra => request({ action: 'commit', complete: true, previous_import_id: null,
   previous_financial_revision: '17', expected_report_date: '2026-10-29', request_id: REQUEST, ...extra });
@@ -18,55 +18,55 @@ const action = extra => ({ key: `title:${TITLE}`, kind: 'MISSING', line: null, t
   entry_number: 'AUSENTE-001', description: 'Obrigação sintética ausente', due_date: '2026-10-20', amount_cents: 15000,
   payment_remaining_cents: 15000, allowed_actions: ['PAID'], selected_action: 'PAID', requires_resolution: false,
   already_written_off: false, problem: null, paid_on: '2026-10-20', bank_account_id: BANK, bank_label: 'BANCO TESTE',
-  cheque_number: null, rule: 'DUE_DATE', payment_revision: TITLE, last_import_id: IMPORT, ...extra });
-const preview = extra => ({ mode: 'daily', daily_report_version: '059', report_kind: 'NORMAL', report_date: '2026-10-29',
-  empty_cheques_confirmed: false,
+  cheque_number: null, is_cheque: false, rule: 'DUE_DATE', payment_revision: TITLE, last_import_id: IMPORT, ...extra });
+const preview = extra => ({ mode: 'daily', daily_report_version: '060', report_kind: 'ALL', report_date: '2026-10-29',
+  empty_report_confirmed: false,
   previous_import_id: null, financial_revision: '17', rows: [normal], ignored_cheque_count: 0, row_count: 1,
-  new_count: 0, open_count: 1, changed_count: 0, baseline_only: false, baseline_origin: 'EXISTING_BASE',
+  new_count: 0, open_count: 1, changed_count: 0, baseline_only: false, baseline_origin: 'PREVIOUS_REPORT',
   auto_payment_count: 1, auto_payment_cents: 15000, missing_count: 1, automatic_actions: [action()],
   exceptions: [], reconciliation_items: [], errors: [], bank_options: [{ id: BANK, display_name: 'BRADESCO F2G', account_type: 'BANK' }], can_commit: true, ...extra });
-const options = extra => ({ sourceRows: [normal], reportKind: 'NORMAL', resolutionChoices: {}, ...extra });
-const result = extra => ({ mode: 'daily', daily_report_version: '059', report_kind: 'NORMAL', report_date: '2026-10-29',
-  empty_cheques_confirmed: false,
+const options = extra => ({ sourceRows: [normal], reportKind: 'ALL', resolutionChoices: {}, ...extra });
+const result = extra => ({ mode: 'daily', daily_report_version: '060', report_kind: 'ALL', report_date: '2026-10-29',
+  empty_report_confirmed: false,
   request_id: REQUEST, report_id: REPORT, import_id: IMPORT, row_count: 1, new_count: 0, open_count: 1, changed_count: 0,
   paid_count: 1, written_off_count: 0, automatic_paid_count: 1, payment_cents: 15000, idempotent: false, ...extra });
 
 test('daily request requires explicit version, channel, whole-report confirmation and frozen exact protocol', () => {
   assert(validDailyRequest(request())); assert(validDailyRequest(committedRequest()));
-  for (const extra of [{ mode: 'forecast' }, { daily_report_version: '043' }, { report_kind: 'ALL' }, { file_name: '../a.csv' },
+  for (const extra of [{ mode: 'forecast' }, { daily_report_version: '043' }, { report_kind: 'NORMAL' }, { file_name: '../a.csv' },
     { rows: [] }, { user_id: TITLE }, { scope: 'other' }, { full_report: true }, { bank_rules_version: '050' },
-    { empty_cheques_confirmed: true }, { empty_cheques_confirmed: false }, { report_kind: 'CHEQUES', empty_cheques_confirmed: 'true' },
+    { empty_report_confirmed: 'true' }, { empty_cheques_confirmed: true }, { report_kind: 'CHEQUES' },
     { request_id: REQUEST }, { expected_report_date: '2026-10-29' }]) assert(!validDailyRequest(request(extra)));
   for (const extra of [{ complete: false }, { previous_import_id: undefined }, { previous_financial_revision: '' },
     { request_id: null }, { expected_report_date: '2026-02-30' }, { bank_mappings: { group: 'invented-bank' } },
     { mappings: { PLAN: [] } }]) assert(!validDailyRequest(committedRequest(extra)));
 });
 
-test('a zero-cheque position requires explicit channel-specific declaration and exact response echo', () => {
-  const emptyRequest = committedRequest({ report_kind: 'CHEQUES', empty_cheques_confirmed: true });
+test('an empty unified position requires an explicit complete-report declaration and exact response echo', () => {
+  const emptyRequest = committedRequest({ report_kind: 'ALL', empty_report_confirmed: true });
   assert(validDailyRequest(emptyRequest));
-  assert(validDailyRequest(request({ report_kind: 'CHEQUES', empty_cheques_confirmed: false })));
-  const baseline = preview({ report_kind: 'CHEQUES', rows: [], row_count: 0, new_count: 0, open_count: 0,
-    empty_cheques_confirmed: true, baseline_only: true, baseline_origin: 'FIRST_REPORT',
+  assert(validDailyRequest(request({ report_kind: 'ALL', empty_report_confirmed: false })));
+  const baseline = preview({ report_kind: 'ALL', rows: [], row_count: 0, new_count: 0, open_count: 0,
+    empty_report_confirmed: true, baseline_only: true, baseline_origin: 'FIRST_REPORT',
     automatic_actions: [], auto_payment_count: 0, auto_payment_cents: 0, missing_count: 0 });
-  const emptyOptions = options({ sourceRows: [], reportKind: 'CHEQUES', emptyChequesConfirmed: true });
+  const emptyOptions = options({ sourceRows: [], reportKind: 'ALL', emptyReportConfirmed: true });
   assert(validDailyPreview(baseline, emptyOptions));
-  assert(!validDailyPreview(baseline, { ...emptyOptions, emptyChequesConfirmed: false }));
-  assert(!validDailyPreview({ ...baseline, empty_cheques_confirmed: false }, emptyOptions));
-  assert(!validDailyPreview({ ...baseline, empty_cheques_confirmed: undefined }, emptyOptions));
+  assert(!validDailyPreview(baseline, { ...emptyOptions, emptyReportConfirmed: false }));
+  assert(!validDailyPreview({ ...baseline, empty_report_confirmed: false }, emptyOptions));
+  assert(!validDailyPreview({ ...baseline, empty_report_confirmed: undefined }, emptyOptions));
   assert(!validDailyPreview(baseline, { ...emptyOptions, sourceRows: [cheque] }));
   assert(!validDailyPreview({ ...baseline, report_kind: 'NORMAL' }, { ...emptyOptions, reportKind: 'NORMAL' }));
   const cleared = { ...baseline, baseline_only: false, baseline_origin: 'PREVIOUS_REPORT', missing_count: 1,
-    automatic_actions: [action({ paid_on: '2026-10-29', rule: 'IMPORT_DATE', cheque_number: '000009' })],
+    automatic_actions: [action({ paid_on: '2026-10-29', rule: 'IMPORT_DATE', cheque_number: '000009', is_cheque: true })],
     auto_payment_count: 1, auto_payment_cents: 15000 };
   assert(validDailyPreview(cleared, emptyOptions));
   assert(!validDailyPreview({ ...cleared, missing_count: 0 }, emptyOptions));
-  const completed = result({ report_kind: 'CHEQUES', empty_cheques_confirmed: true,
+  const completed = result({ report_kind: 'ALL', empty_report_confirmed: true,
     row_count: 0, new_count: 0, open_count: 0 });
   assert(validDailyCommit(completed, { sourceRows: [], request: emptyRequest }));
-  assert(!validDailyCommit({ ...completed, empty_cheques_confirmed: false }, { sourceRows: [], request: emptyRequest }));
+  assert(!validDailyCommit({ ...completed, empty_report_confirmed: false }, { sourceRows: [], request: emptyRequest }));
   assert(!validDailyCommit(completed, { sourceRows: [cheque], request: emptyRequest }));
-  assert(!validDailyCommit(completed, { sourceRows: [], request: { ...emptyRequest, empty_cheques_confirmed: false } }));
+  assert(!validDailyCommit(completed, { sourceRows: [], request: { ...emptyRequest, empty_report_confirmed: false } }));
 });
 
 test('cheque classification only follows explicit status or explicit cheque number', () => {
@@ -76,12 +76,12 @@ test('cheque classification only follows explicit status or explicit cheque numb
     { cheque_number: '' }, { cheque_number: ' ' }]) assert(!isDailyCheque({ ...normal, ...extra }));
 });
 
-test('normal preview proves the exact source partition and never silently drops ordinary obligations', () => {
+test('unified preview proves every ordinary and cheque source row and never silently drops ordinary obligations', () => {
   assert(validDailyPreview(preview(), options()));
   assert(validDailyPreview(preview({ rows: [normal, cheque], row_count: 2, open_count: 2 }), options({ sourceRows: [normal, cheque] })));
   assert(!validDailyPreview(preview({ ignored_cheque_count: 1 }), options({ sourceRows: [normal, cheque] })));
   for (const change of [{ rows: [] }, { rows: [{ ...normal, amount_cents: 1 }] }, { rows: [{ ...normal, due_date: '2026-10-21' }] },
-    { rows: [{ ...normal, extra: 'untrusted' }] }, { ignored_cheque_count: 1 }, { row_count: 2 }, { report_kind: 'CHEQUES' },
+    { rows: [{ ...normal, extra: 'untrusted' }] }, { ignored_cheque_count: 1 }, { row_count: 2 }, { report_kind: 'NORMAL' },
     { new_count: 1 }, { changed_count: 2 }, { daily_report_version: '057' }]) assert(!validDailyPreview(preview(change), options()));
 });
 
@@ -98,18 +98,18 @@ test('automatic actions prove exact date rule, bank, sums and unique canonical i
   }
 });
 
-test('separate cheque channel uses import date and first complete report never produces missing settlements', () => {
-  const chequePreview = preview({ report_kind: 'CHEQUES', rows: [cheque], baseline_origin: 'PREVIOUS_REPORT',
-    automatic_actions: [action({ cheque_number: '000009', paid_on: '2026-10-29', rule: 'IMPORT_DATE' })] });
-  const chequeOptions = options({ sourceRows: [cheque], reportKind: 'CHEQUES' });
+test('the single ALL report uses per-title dates and its first baseline never produces missing settlements', () => {
+  const chequePreview = preview({ report_kind: 'ALL', rows: [cheque], baseline_origin: 'PREVIOUS_REPORT',
+    automatic_actions: [action({ cheque_number: '000009', paid_on: '2026-10-29', rule: 'IMPORT_DATE', is_cheque: true })] });
+  const chequeOptions = options({ sourceRows: [cheque], reportKind: 'ALL' });
   assert(validDailyPreview(chequePreview, chequeOptions));
   assert(!validDailyPreview({ ...chequePreview, automatic_actions: [action({ rule: 'IMPORT_DATE' })] }, chequeOptions));
-  assert(!validDailyPreview(chequePreview, { ...chequeOptions, sourceRows: [cheque, normal] }));
+  assert(validDailyPreview({ ...chequePreview, rows: [cheque, normal], row_count: 2, open_count: 2 }, { ...chequeOptions, sourceRows: [cheque, normal] }));
   const baseline = { ...chequePreview, baseline_only: true, baseline_origin: 'FIRST_REPORT', automatic_actions: [],
     auto_payment_count: 0, auto_payment_cents: 0, missing_count: 0 };
   assert(validDailyPreview(baseline, chequeOptions));
   assert(!validDailyPreview({ ...chequePreview, baseline_only: true, baseline_origin: 'FIRST_REPORT' }, chequeOptions));
-  assert(!validDailyPreview({ ...baseline, report_kind: 'NORMAL', rows: [normal] }, options()));
+  assert(validDailyPreview({ ...baseline, rows: [normal] }, options()));
 });
 
 test('individual cent confirmation is preserved for present and missing markers without allowing realized payment', () => {
@@ -157,10 +157,10 @@ test('daily commit result must prove original request, report date, channel and 
     { idempotent: undefined }]) assert(!validDailyCommit(result(change), { sourceRows: [normal], request: committedRequest() }));
 });
 
-test('059 numbered cheque payments prove the unique official BANK account and ordinary absence cannot consume a cheque', () => {
-  const paidCheque = action({ cheque_number: '000009', paid_on: '2026-10-29', rule: 'IMPORT_DATE' });
-  const chequePreview = preview({ report_kind: 'CHEQUES', rows: [cheque], baseline_origin: 'PREVIOUS_REPORT', automatic_actions: [paidCheque] });
-  const chequeOptions = options({ sourceRows: [cheque], reportKind: 'CHEQUES' });
+test('060 numbered cheque payments prove the official BANK account and cannot conceal their cheque classification', () => {
+  const paidCheque = action({ cheque_number: '000009', paid_on: '2026-10-29', rule: 'IMPORT_DATE', is_cheque: true });
+  const chequePreview = preview({ report_kind: 'ALL', rows: [cheque], baseline_origin: 'PREVIOUS_REPORT', automatic_actions: [paidCheque] });
+  const chequeOptions = options({ sourceRows: [cheque], reportKind: 'ALL' });
   assert(validDailyPreview(chequePreview, chequeOptions));
   for (const bank_options of [
     [{ id: BANK, display_name: 'OUTRO BANCO', account_type: 'BANK' }],
@@ -169,4 +169,27 @@ test('059 numbered cheque payments prove the unique official BANK account and or
   ]) assert(!validDailyPreview({ ...chequePreview, bank_options }, chequeOptions));
   assert(!validDailyPreview(preview({ automatic_actions: [action({ cheque_number: '000009' })] }), options()));
   assert(validDailyPreview({ ...chequePreview, bank_options: [{ id: BANK, display_name: 'Brádesco  F2G', account_type: 'BANK' }, { id: TITLE, display_name: 'BRADESCO F2G', account_type: 'CASH' }] }, chequeOptions));
+});
+
+
+test('one ALL position proves ordinary and cheque disappearances together using independent effective dates', () => {
+  const ordinary = action(), numbered = action({ key: `title:${REPORT}`, title_id: REPORT, entry_number: 'CHEQUE-AUSENTE', cheque_number: '000129', is_cheque: true, rule: 'IMPORT_DATE', paid_on: '2026-10-29' });
+  const mixed = preview({ rows: [normal, cheque], row_count: 2, open_count: 2, automatic_actions: [ordinary, numbered], auto_payment_count: 2, missing_count: 2, auto_payment_cents: 30000 });
+  const opts = options({ sourceRows: [normal, cheque] });
+  assert(validDailyPreview(mixed, opts));
+  for (const changed of [{ ...numbered, is_cheque: false }, { ...numbered, rule: 'DUE_DATE' }, { ...numbered, paid_on: numbered.due_date }, { ...ordinary, is_cheque: true }]) {
+    const actions = changed.title_id === TITLE ? [changed, numbered] : [ordinary, changed];
+    assert(!validDailyPreview({ ...mixed, automatic_actions: actions }, opts));
+  }
+  // A status-only cheque still uses import date; F2G is compulsory for an explicit number.
+  assert(validDailyPreview({ ...mixed, automatic_actions: [ordinary, { ...numbered, cheque_number: null }] }, opts));
+  assert(!validDailyPreview({ ...mixed, automatic_actions: [ordinary, { ...numbered, is_cheque: undefined }] }, opts));
+});
+
+test('first ALL baseline and legacy adoption claims cannot silently create payments from the old portfolio', () => {
+  const baseline = preview({ baseline_only: true, baseline_origin: 'FIRST_REPORT', missing_count: 0, automatic_actions: [], auto_payment_count: 0, auto_payment_cents: 0 });
+  assert(validDailyPreview(baseline, options()));
+  assert(!validDailyPreview({ ...baseline, baseline_origin: 'EXISTING_BASE' }, options()));
+  assert(!validDailyPreview({ ...baseline, baseline_only: false }, options()));
+  assert(!validDailyPreview({ ...preview(), baseline_origin: 'FIRST_REPORT' }, options()));
 });

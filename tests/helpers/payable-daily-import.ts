@@ -1,6 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { parseCsv, validatePayableDailyRows } from '../../src/lib/payables-parser.mjs';
+import ExcelJS from 'exceljs';
+import { isChequeNumberHeader, parseCsv, readPayableChequeCell, validatePayableDailyRows } from '../../src/lib/payables-parser.mjs';
 
 const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 export const dailyUuid = (value: number) => `58000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
@@ -12,7 +13,7 @@ export const dailyBankKey = '["3", "Banco sintético"]';
 export const dailyCsv = 'Nº Lançamento;Histórico;Vencimento;Valor;Plano de Contas;Banco;Filial;Situação;Cheque: número\r\n14;Fornecedor sintético;16/10/2026;1.234,56;ENERGIA;Banco sintético;3;ABERTO;';
 export const dailyChequeCsv = dailyCsv.replace(';ABERTO;', ';CHEQUE;000123');
 export interface DailyFixtureOptions {
-  automatic?: number; firstCheques?: boolean; unknownBank?: boolean; unknownBankCount?: number; futureDue?: boolean; centNominal?: number; unclassified?: boolean;
+  automatic?: number; firstReport?: boolean; chequeMissing?: boolean; mixedMissing?: boolean; activationRequired?: boolean; unknownBank?: boolean; unknownBankCount?: number; futureDue?: boolean; centNominal?: number; unclassified?: boolean;
   paidReappeared?: boolean; uncertain?: boolean; invalidCommit?: boolean; stale?: boolean; deferred?: boolean;
   malformed?: 'hash' | 'count' | 'date' | 'partition' | 'automatic-date' | 'automatic-bank' | 'version';
 }
@@ -22,6 +23,7 @@ export async function setupDailyImport(page: Page, options: DailyFixtureOptions 
   const access = { profile: { id, username: 'PessoaTeste', display_name: 'Pessoa de Teste', role_key: 'gerente_geral', enabled: true }, permissions: ['painel', 'caixa', 'contas_pagar', 'contas_receber', 'importar_bases'].flatMap(resource => [{ resource, action: 'read' }, ...(resource.startsWith('contas_') ? [{ resource, action: 'write' }, { resource, action: 'import' }] : [])]), collector_id: null };
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify(claims)).toString('base64url'), 'synthetic-test-only'].join('.');
   const seen = { previews: [] as any[], commits: [] as any[], payments: [] as any[], writeoffs: [] as string[], otherWrites: [] as string[], results: new Map<string, any>(), release: () => {} };
+  let currentHeadHash: string | null = null;
   const gate = new Promise<void>(resolve => { seen.release = resolve; });
   await page.route(`${project}/**`, async route => {
     const req = route.request(), url = new URL(req.url()), body = req.postDataJSON();
@@ -35,29 +37,39 @@ export async function setupDailyImport(page: Page, options: DailyFixtureOptions 
     if (url.pathname === '/rest/v1/rpc/current_stock') return reply({ value_cents: null, reference_date: null, source: null });
     if (url.pathname === '/rest/v1/rpc/payables_summary' || url.pathname === '/rest/v1/rpc/receivables_summary') return reply({ open_cents: 0, overdue_cents: 0, period_cents: 0, active_count: 0, latest_import_at: null });
     if (url.pathname === '/functions/v1/payables-import') {
-      expect(body.mode).toBe('daily'); expect(body.daily_report_version).toBe('059');
-      const bytes = Buffer.from(body.file_base64, 'base64'), parsed = validatePayableDailyRows(parseCsv(bytes.toString('utf8')), { allowEmptyCheques: body.empty_cheques_confirmed === true });
+      expect(body.mode).toBe('daily'); expect(body.daily_report_version).toBe('060');
+      const bytes = Buffer.from(body.file_base64, 'base64'); let matrix: unknown[][];
+      if (body.file_name.endsWith('.csv')) matrix = parseCsv(bytes.toString('utf8'));
+      else {
+        const book = new ExcelJS.Workbook(); await book.xlsx.load(bytes); const sheet = book.worksheets[0], chequeColumns: number[] = [];
+        sheet.getRow(1).eachCell((cell, column) => { if (isChequeNumberHeader(cell.value)) chequeColumns.push(column); });
+        matrix = []; sheet.eachRow((row, index) => { const values = (row.values as unknown[]).slice(1); if (index > 1) for (const column of chequeColumns) { const cell = row.getCell(column); values[column - 1] = readPayableChequeCell(cell.value, cell.numFmt); } matrix.push(values); });
+      }
+      const parsed = validatePayableDailyRows(matrix, { allowEmptyReport: body.empty_report_confirmed === true });
       if (parsed.errors.length) return reply({ errors: parsed.errors }, 422);
       const cheque = (row: any) => row.source_status === 'CHEQUE' || !!row.cheque_number;
       const source = parsed.rows;
       const rows = source.map((row: any) => Object.fromEntries(Object.entries(row).reverse()));
-      const rule = body.report_kind === 'CHEQUES' ? 'IMPORT_DATE' : 'DUE_DATE';
-      const action = (index: number) => ({ key: `title:${dailyUuid(100 + index)}`, kind: 'MISSING', line: null, title_id: dailyUuid(100 + index), branch: '3', entry_number: `AUSENTE-${index + 1}`, description: `Fornecedor ausente sintético ${index + 1}`, due_date: options.futureDue ? '2026-11-04' : '2026-10-16', amount_cents: 10000 + index, payment_remaining_cents: 10000 + index, allowed_actions: ['PAID'], requires_resolution: false, already_written_off: false, problem: null, selected_action: 'PAID', paid_on: body.report_kind === 'CHEQUES' ? dailyDate : options.futureDue ? '2026-11-04' : '2026-10-16', bank_account_id: body.report_kind === 'CHEQUES' ? dailyChequeBank.id : dailyBank.id, bank_label: body.report_kind === 'CHEQUES' ? dailyChequeBank.display_name : dailyBank.display_name, cheque_number: body.report_kind === 'CHEQUES' ? `000${index + 1}` : null, rule, payment_revision: null, last_import_id: dailyUuid(500) });
+      const fileHash = createHash('sha256').update(bytes).digest('hex'), sameHead = currentHeadHash === fileHash;
+      expect(body.report_kind).toBe('ALL');
+      if (options.activationRequired) return reply({ code: 'P0060', activation_required: true }, 409);
+      const isMissingCheque = (index: number) => options.chequeMissing === true || options.mixedMissing === true && index % 2 === 1;
+      const action = (index: number) => ({ key: `title:${dailyUuid(100 + index)}`, kind: 'MISSING', line: null, title_id: dailyUuid(100 + index), branch: '3', entry_number: `AUSENTE-${index + 1}`, description: `Fornecedor ausente sintético ${index + 1}`, due_date: options.futureDue ? '2026-11-04' : '2026-10-16', amount_cents: 10000 + index, payment_remaining_cents: 10000 + index, allowed_actions: ['PAID'], requires_resolution: false, already_written_off: false, problem: null, selected_action: 'PAID', paid_on: isMissingCheque(index) ? dailyDate : options.futureDue ? '2026-11-04' : '2026-10-16', bank_account_id: isMissingCheque(index) ? dailyChequeBank.id : dailyBank.id, bank_label: isMissingCheque(index) ? dailyChequeBank.display_name : dailyBank.display_name, cheque_number: isMissingCheque(index) ? `000${index + 1}` : null, is_cheque: isMissingCheque(index), rule: isMissingCheque(index) ? 'IMPORT_DATE' : 'DUE_DATE', payment_revision: null, last_import_id: dailyUuid(500) });
       const mappedBank = body.bank_mappings?.[dailyBankKey] === dailyBank.id;
-      const automatic: any[] = options.firstCheques || options.unknownBank && !mappedBank || options.futureDue ? [] : Array.from({ length: options.unknownBank ? options.unknownBankCount ?? 1 : options.automatic ?? 1 }, (_, index) => action(index));
+      const automatic: any[] = options.firstReport || sameHead || options.unknownBank && !mappedBank || options.futureDue ? [] : Array.from({ length: options.unknownBank ? options.unknownBankCount ?? 1 : options.automatic ?? 1 }, (_, index) => action(index));
       const exceptions: any[] = [];
       for (let index = automatic.length - 1; index >= 0; index--) if (body.resolution_choices[automatic[index].key]) { exceptions.push({ ...automatic[index], requires_resolution: true }); automatic.splice(index, 1); }
       if (options.unknownBank && !mappedBank || options.futureDue) for (let index = 0; index < (options.unknownBankCount ?? 1); index++) exceptions.push({ ...action(index), requires_resolution: true, selected_action: null, problem: options.futureDue ? 'Vencimento futuro: confirme a data real do pagamento.' : 'Escolha a conta oficial deste pagamento.', ...(options.unknownBank ? { bank_account_id: null, bank_label: null, bank_mapping_key: dailyBankKey, source_bank: 'Banco sintético' } : {}) });
       rows.forEach((row: any, index: number) => {
-        if (row.amount_cents === 1) exceptions.push({ ...action(600 + index), key: `row:${index + 1}`, kind: 'CENT', line: index + 1, title_id: options.centNominal ? dailyUuid(600 + index) : null, entry_number: row.entry_number, description: row.description, amount_cents: options.centNominal ?? 1, source_amount_cents: 1, payment_remaining_cents: options.centNominal ?? 1, paid_on: null, allowed_actions: ['WRITE_OFF'], requires_resolution: true, selected_action: null, problem: 'Confirme esta baixa individualmente, sem pagamento.', payment_revision: options.centNominal ? dailyUuid(1000 + index) : null, last_import_id: options.centNominal ? dailyUuid(500) : null });
+        if (row.amount_cents === 1) exceptions.push({ ...action(600 + index), key: `row:${index + 1}`, kind: 'CENT', line: index + 1, title_id: options.centNominal ? dailyUuid(600 + index) : null, branch: row.branch, entry_number: row.entry_number, description: row.description, due_date: row.due_date, cheque_number: row.cheque_number ?? null, amount_cents: options.centNominal ?? 1, source_amount_cents: 1, is_cheque: cheque(row), rule: cheque(row) ? 'IMPORT_DATE' : 'DUE_DATE', payment_remaining_cents: options.centNominal ?? 1, paid_on: null, allowed_actions: ['WRITE_OFF'], requires_resolution: true, selected_action: null, problem: 'Confirme esta baixa individualmente, sem pagamento.', payment_revision: options.centNominal ? dailyUuid(1000 + index) : null, last_import_id: options.centNominal ? dailyUuid(500) : null });
       });
-      if (options.paidReappeared) exceptions.push({ ...action(999), kind: 'REAPPEARED', line: 1, allowed_actions: [], requires_resolution: true, selected_action: null, problem: 'Título já possui pagamento: confira o histórico e estorne explicitamente antes de retornar.' });
+      if (options.paidReappeared) exceptions.push({ ...action(999), kind: 'REAPPEARED', line: 1, branch: rows[0].branch, entry_number: rows[0].entry_number, description: rows[0].description, due_date: rows[0].due_date, cheque_number: rows[0].cheque_number ?? null, amount_cents: rows[0].amount_cents, payment_remaining_cents: 0, is_cheque: cheque(rows[0]), rule: cheque(rows[0]) ? 'IMPORT_DATE' : 'DUE_DATE', allowed_actions: [], requires_resolution: true, selected_action: null, problem: 'Título já possui pagamento: confira o histórico e estorne explicitamente antes de retornar.' });
       for (const item of exceptions) {
         const choice = body.resolution_choices[item.key];
         if (choice && item.allowed_actions.includes(choice.action)) { item.selected_action = choice.action; item.problem = null; if (choice.action === 'PAID') { item.paid_on = choice.paid_on; item.bank_account_id = choice.bank_account_id; item.bank_label = [dailyBank, dailyOtherBank, dailyChequeBank].find(bank => bank.id === choice.bank_account_id)?.display_name ?? null; } }
       }
       const unclassified = options.unclassified && body.mappings.ENERGIA !== 'FIXO' ? [{ plan: 'ENERGIA', count: rows.length, total_cents: rows.reduce((sum: number, row: any) => sum + row.amount_cents, 0) }] : [];
-      const preview: any = { daily_report_version: '059', mode: 'daily', report_kind: body.report_kind, report_date: dailyDate, empty_cheques_confirmed: body.empty_cheques_confirmed === true, previous_import_id: dailyUuid(500), financial_revision: 'revision-58', rows, row_count: rows.length, ignored_cheque_count: parsed.rows.length - rows.length, new_count: rows.length, open_count: 0, changed_count: 0, baseline_only: !!options.firstCheques, baseline_origin: options.firstCheques ? 'FIRST_REPORT' : body.report_kind === 'NORMAL' ? 'EXISTING_BASE' : 'PREVIOUS_REPORT', auto_payment_count: automatic.length, auto_payment_cents: automatic.reduce((sum, item) => sum + item.payment_remaining_cents, 0), missing_count: [...automatic, ...exceptions].filter(item => item.kind === 'MISSING').length, automatic_actions: automatic, exceptions, reconciliation_items: exceptions, bank_options: [dailyBank, dailyOtherBank, dailyChequeBank], unclassified_plans: unclassified, macros: ['FIXO', 'VARIÁVEL'], errors: [], can_commit: exceptions.every(item => item.problem === null) && !unclassified.length };
+      const preview: any = { daily_report_version: '060', mode: 'daily', report_kind: body.report_kind, report_date: dailyDate, empty_report_confirmed: body.empty_report_confirmed === true, previous_import_id: dailyUuid(500), financial_revision: 'revision-58', rows, row_count: rows.length, ignored_cheque_count: parsed.rows.length - rows.length, new_count: sameHead ? 0 : rows.length, open_count: sameHead ? rows.length : 0, changed_count: 0, baseline_only: !!options.firstReport && currentHeadHash === null, baseline_origin: options.firstReport && currentHeadHash === null ? 'FIRST_REPORT' : 'PREVIOUS_REPORT', auto_payment_count: automatic.length, auto_payment_cents: automatic.reduce((sum, item) => sum + item.payment_remaining_cents, 0), missing_count: [...automatic, ...exceptions].filter(item => item.kind === 'MISSING').length, automatic_actions: automatic, exceptions, reconciliation_items: exceptions, bank_options: [dailyBank, dailyOtherBank, dailyChequeBank], unclassified_plans: unclassified, macros: ['FIXO', 'VARIÁVEL'], errors: [], can_commit: exceptions.every(item => item.problem === null) && !unclassified.length };
       if (body.action === 'preview') {
         seen.previews.push(body);
         if (options.deferred) await gate;
@@ -77,8 +89,9 @@ export async function setupDailyImport(page: Page, options: DailyFixtureOptions 
       const writeoffs = Object.entries(body.resolution_choices).filter(([, choice]: any) => choice.action === 'WRITE_OFF').map(([key]) => key);
       seen.payments.push(...automatic.map(item => ({ title_id: item.title_id, amount: item.payment_remaining_cents, date: item.paid_on, bank: item.bank_account_id })), ...paid.map(choice => ({ amount: choice.amount_paid_cents, date: choice.paid_on, bank: choice.bank_account_id })));
       seen.writeoffs.push(...writeoffs);
-      const result = { daily_report_version: '059', mode: 'daily', report_kind: body.report_kind, report_date: dailyDate, empty_cheques_confirmed: body.empty_cheques_confirmed === true, request_id: body.request_id, report_id: dailyUuid(700), import_id: dailyUuid(701), row_count: rows.length, new_count: rows.length, open_count: 0, changed_count: 0, paid_count: automatic.length + paid.length, written_off_count: writeoffs.length, automatic_paid_count: automatic.length, payment_cents: automatic.reduce((sum, item) => sum + item.payment_remaining_cents, 0) + paid.reduce((sum, choice) => sum + choice.amount_paid_cents, 0), idempotent: false };
+      const result = { daily_report_version: '060', mode: 'daily', report_kind: body.report_kind, report_date: dailyDate, empty_report_confirmed: body.empty_report_confirmed === true, request_id: body.request_id, report_id: dailyUuid(700 + seen.results.size), import_id: dailyUuid(701), row_count: rows.length, new_count: preview.new_count, open_count: preview.open_count, changed_count: 0, paid_count: automatic.length + paid.length, written_off_count: writeoffs.length, automatic_paid_count: automatic.length, payment_cents: automatic.reduce((sum, item) => sum + item.payment_remaining_cents, 0) + paid.reduce((sum, choice) => sum + choice.amount_paid_cents, 0), idempotent: false };
       seen.results.set(body.request_id, result);
+      currentHeadHash = fileHash;
       if (options.uncertain) return reply({ code: 'XX000' }, 503);
       if (options.invalidCommit) return reply({ ...result, payment_cents: result.payment_cents + 1 });
       return reply(result);
@@ -94,6 +107,5 @@ export async function setupDailyImport(page: Page, options: DailyFixtureOptions 
   return seen;
 }
 export async function selectDailyFile(page: Page, content = dailyCsv, cheque = false) {
-  if (cheque) await page.getByRole('button', { name: 'Relatório diário de cheques', exact: true }).click();
-  await page.getByLabel(cheque ? 'Relatório completo de cheques em aberto' : 'Relatório completo diário de Contas a Pagar', { exact: true }).setInputFiles({ name: cheque ? 'cheques.csv' : 'diario.csv', mimeType: 'text/csv', buffer: Buffer.from(content) });
+  await page.getByLabel('Relatório completo diário de Contas a Pagar', { exact: true }).setInputFiles({ name: cheque ? 'cheques.csv' : 'diario.csv', mimeType: 'text/csv', buffer: Buffer.from(content) });
 }

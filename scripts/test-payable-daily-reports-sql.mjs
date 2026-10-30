@@ -5,13 +5,13 @@ import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { PGlite } from '@electric-sql/pglite';
 import { buildPayableColumnRulesSql } from './bundle-payable-column-rules.mjs';
-import { validDailyPreview, validDailyCommit } from '../supabase/functions/payables-import/daily-reconciliation.mjs';
+import { validDailyPreview, validDailyCommit } from './lib/payable-daily-059-gateway-contract.mjs';
 
 // Disposable local PostgreSQL; every customer, report, account and amount is synthetic.
 const db = new PGlite();
-// Exercise the actual browser contract guards against SQL output, without a
+// Exercise the frozen published 059 browser guards against the legacy SQL RPCs, without a
 // browser, a published bundle, a network request, or an application login.
-const uiBundle = await build({ entryPoints: [new URL('../src/lib/payable-daily.ts', import.meta.url).pathname], bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent', define: { 'import.meta.env': '{}' }, loader: { '.css': 'empty' } });
+const uiBundle = await build({ entryPoints: [new URL('./lib/payable-daily-059-browser-contract.ts', import.meta.url).pathname], bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent', define: { 'import.meta.env': '{}' }, loader: { '.css': 'empty' } });
 const uiModule = { exports: {} };
 new Function('require', 'module', 'exports', uiBundle.outputFiles[0].text)(createRequire(import.meta.url), uiModule, uiModule.exports);
 const { validDailyCanonical, validDailyResult } = uiModule.exports;

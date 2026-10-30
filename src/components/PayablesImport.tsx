@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
-import PayablePaidImport from './PayablePaidImport';
 import PayableDailyImport from './PayableDailyImport';
 import PayableColumnGuide from './PayableColumnGuide';
 import PayableImportReconciliation, { resolutionChoices, validReconciliationItems, payableUuid, type ReconciliationItem, type ImportBank, type ResolutionDraft, type ResolutionChoice } from './PayableImportReconciliation';
@@ -15,7 +14,6 @@ type ForecastRequest = Parameters<typeof payableImportRequest>[0] & { reconcilia
 interface FrozenForecast { body: ForecastRequest; rowCount: number }
 
 export default function PayablesImport({ canImport, onBusyChange }: { canImport: boolean; onBusyChange?: (busy: boolean) => void }) {
-  const [mode, setMode] = useState<'daily' | 'cheques' | 'forecast' | 'payments'>('daily');
   const [importBusy, setImportBusy] = useState(false);
   useEffect(() => {
     onBusyChange?.(importBusy);
@@ -27,23 +25,17 @@ export default function PayablesImport({ canImport, onBusyChange }: { canImport:
   }, [onBusyChange]);
   if (!canImport) return <p className="notice">Seu perfil não permite importar bases de Contas a Pagar.</p>;
   return <>
-    <section className="panel" aria-label="Tipo de importação de Contas a Pagar">
-      <h2>Atualizar Contas a Pagar pelo relatório</h2>
-      <p>Envie o relatório completo da manhã para atualizar a previsão e conciliar os títulos que deixaram de aparecer. Os cheques possuem uma conferência separada.</p>
-      <div className="inline-actions">
-        <button type="button" className={`button${mode === 'daily' ? '' : ' secondary'}`} aria-pressed={mode === 'daily'} disabled={importBusy} onClick={() => setMode('daily')}>Relatório diário de títulos</button>
-        <button type="button" className={`button${mode === 'cheques' ? '' : ' secondary'}`} aria-pressed={mode === 'cheques'} disabled={importBusy} onClick={() => setMode('cheques')}>Relatório diário de cheques</button>
-        <button type="button" className={`button${mode === 'forecast' ? '' : ' secondary'}`} aria-pressed={mode === 'forecast'} disabled={importBusy} onClick={() => setMode('forecast')}>Previsões / novos títulos</button>
-        <button type="button" className={`button${mode === 'payments' ? '' : ' secondary'}`} aria-pressed={mode === 'payments'} disabled={importBusy} onClick={() => setMode('payments')}>Pagamentos realizados</button>
-      </div>
-      <p className="help-text">Rotina diária: títulos ausentes são conciliados no vencimento; cheques ausentes são conciliados na data da importação. Para arquivos parciais ou comprovantes de pagamentos, use as opções de previsões e pagamentos realizados.</p>
+    <section className="panel" aria-label="Rotina diária de Contas a Pagar">
+      <h2>Contas a Pagar: um relatório por dia</h2>
+      <p>Envie a relação completa dos títulos que continuam em aberto, incluindo os novos lançamentos e os cheques. O primeiro arquivo cria a base inicial. Nos próximos dias, os títulos que deixarem de aparecer serão baixados como pagos.</p>
+      <p className="help-text">A Central atualiza os valores e vencimentos do mesmo lançamento, inclui os novos e calcula as baixas em uma única conferência. Marcadores de R$ 0,01 exigem confirmação individual e ficam fora do realizado.</p>
       <PayableColumnGuide />
     </section>
-    {mode === 'daily' || mode === 'cheques' ? <PayableDailyImport key={mode} canImport={canImport} reportKind={mode === 'cheques' ? 'CHEQUES' : 'NORMAL'} onBusyChange={setImportBusy} /> : mode === 'forecast' ? <ForecastImport canImport={canImport} onBusyChange={setImportBusy} /> : <PayablePaidImport canImport={canImport} onBusyChange={setImportBusy} />}
+    <PayableDailyImport canImport={canImport} reportKind="ALL" onBusyChange={setImportBusy} />
   </>;
 }
 
-function ForecastImport({ canImport, onBusyChange }: { canImport: boolean; onBusyChange: (busy: boolean) => void }) {
+export function ForecastImport({ canImport, onBusyChange }: { canImport: boolean; onBusyChange: (busy: boolean) => void }) {
   const [file, setFile] = useState<File | null>(null), [reportKind, setReportKind] = useState<'' | 'FULL' | 'INCREMENTAL'>('');
   const [complete, setComplete] = useState(false), [busy, setBusy] = useState<'analyzing' | 'saving' | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null), [needsReview, setNeedsReview] = useState(false);

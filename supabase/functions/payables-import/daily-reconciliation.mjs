@@ -10,21 +10,21 @@ const count = value => Number.isSafeInteger(value) && value >= 0;
 const mapping = (value, max, keyMax, validValue) => object(value) && Object.keys(value).length <= max
   && Object.entries(value).every(([key, item]) => text(key, keyMax) && validValue(item));
 
-export const DAILY_REPORT_VERSION = '059';
+export const DAILY_REPORT_VERSION = '060';
 export function isDailyCheque(row) {
   return String(row.source_status ?? '').trim().toUpperCase() === 'CHEQUE'
     || typeof row.cheque_number === 'string' && row.cheque_number.trim() !== '';
 }
 export function dailyReportSourceRows(rows, kind) {
-  return kind === 'CHEQUES' ? rows.filter(isDailyCheque) : rows;
+  return rows;
 }
 export function validDailyRequest(body) {
   const fields = ['action', 'mode', 'daily_report_version', 'report_kind', 'file_name', 'file_base64', 'mappings', 'bank_mappings',
-    'resolution_choices', 'complete', 'previous_import_id', 'previous_financial_revision', 'expected_report_date', 'request_id', 'empty_cheques_confirmed'];
+    'resolution_choices', 'complete', 'previous_import_id', 'previous_financial_revision', 'expected_report_date', 'request_id', 'empty_report_confirmed'];
   if (!object(body) || Object.keys(body).some(key => !fields.includes(key)) || body.mode !== 'daily'
-    || body.daily_report_version !== DAILY_REPORT_VERSION || !['NORMAL', 'CHEQUES'].includes(body.report_kind)
+    || body.daily_report_version !== DAILY_REPORT_VERSION || body.report_kind !== 'ALL'
     || !['preview', 'commit'].includes(body.action) || !text(body.file_name, 250) || /[/\\]/.test(body.file_name)
-    || Object.hasOwn(body, 'empty_cheques_confirmed') && (body.report_kind !== 'CHEQUES' || typeof body.empty_cheques_confirmed !== 'boolean')
+    || Object.hasOwn(body, 'empty_report_confirmed') && typeof body.empty_report_confirmed !== 'boolean'
     || !mapping(body.mappings ?? {}, 5000, 300, value => text(value, 100))
     || !mapping(body.bank_mappings ?? {}, 10000, 1000, uuid)
     || !validResolutionChoices(body.resolution_choices ?? {})) return false;
@@ -39,16 +39,16 @@ function sameSourceRow(first, second) {
     && Object.keys(second).every(key => Object.hasOwn(first, key) && first[key] === second[key]);
 }
 
-export function validDailyPreview(preview, { sourceRows, reportKind, resolutionChoices = {}, emptyChequesConfirmed = false } = {}) {
-  if (!object(preview) || !Array.isArray(sourceRows) || preview.mode !== 'daily'
+export function validDailyPreview(preview, { sourceRows, reportKind, resolutionChoices = {}, emptyReportConfirmed = false } = {}) {
+  if (!object(preview) || !Array.isArray(sourceRows) || reportKind !== 'ALL' || preview.mode !== 'daily'
     || preview.daily_report_version !== DAILY_REPORT_VERSION || preview.report_kind !== reportKind
     || !validReconciliationDate(preview.report_date) || !text(preview.financial_revision, 256)
     || !(preview.previous_import_id === null || uuid(preview.previous_import_id))
     || typeof preview.can_commit !== 'boolean' || typeof preview.baseline_only !== 'boolean'
-    || preview.empty_cheques_confirmed !== emptyChequesConfirmed || typeof emptyChequesConfirmed !== 'boolean'
-    || emptyChequesConfirmed && (reportKind !== 'CHEQUES' || sourceRows.length !== 0)) return false;
+    || preview.empty_report_confirmed !== emptyReportConfirmed || typeof emptyReportConfirmed !== 'boolean'
+    || emptyReportConfirmed && sourceRows.length !== 0) return false;
   const filtered = dailyReportSourceRows(sourceRows, reportKind);
-  if (!filtered.length && !emptyChequesConfirmed || reportKind === 'CHEQUES' && filtered.length !== sourceRows.length
+  if (!filtered.length && !emptyReportConfirmed
     || !Array.isArray(preview.rows) || preview.rows.length !== filtered.length
     || preview.rows.some((row, index) => !sameSourceRow(row, filtered[index]))
     || preview.row_count !== filtered.length || preview.ignored_cheque_count !== sourceRows.length - filtered.length
@@ -56,7 +56,7 @@ export function validDailyPreview(preview, { sourceRows, reportKind, resolutionC
       .every(key => count(preview[key]))
     || preview.new_count + preview.open_count !== preview.row_count || preview.changed_count > preview.open_count
     || !['exceptions', 'automatic_actions', 'reconciliation_items', 'errors', 'bank_options'].every(key => Array.isArray(preview[key]) && preview[key].length <= 15000)
-    || !['EXISTING_BASE', 'PREVIOUS_REPORT', 'FIRST_REPORT'].includes(preview.baseline_origin)
+    || !['PREVIOUS_REPORT', 'FIRST_REPORT'].includes(preview.baseline_origin)
     || preview.can_commit && preview.errors.length > 0) return false;
   if (preview.bank_options.some(bank => !object(bank) || !uuid(bank.id) || !text(bank.display_name, 200))) return false;
   if (new Set(preview.bank_options.map(bank => bank.id)).size !== preview.bank_options.length) return false;
@@ -84,11 +84,11 @@ export function validDailyPreview(preview, { sourceRows, reportKind, resolutionC
         || !(item.bank_account_id === null || uuid(item.bank_account_id))
         || !(item.bank_label === null || text(item.bank_label, 200))
         || !(item.cheque_number === null || typeof item.cheque_number === 'string' && item.cheque_number.length <= 150)
-        || item.rule !== (reportKind === 'NORMAL' ? 'DUE_DATE' : 'IMPORT_DATE')) return false;
+        || typeof item.is_cheque !== 'boolean' || item.rule !== (item.is_cheque ? 'IMPORT_DATE' : 'DUE_DATE')
+        || typeof item.cheque_number === 'string' && item.cheque_number.trim() && !item.is_cheque) return false;
       if (item.title_id !== null && titleIds.has(item.title_id)) return false;
       if (item.kind === 'MISSING') {
         if (item.line !== null || !uuid(item.title_id) || item.key !== `title:${item.title_id}`) return false;
-        if (reportKind === 'NORMAL' && typeof item.cheque_number === 'string' && item.cheque_number.trim()) return false;
         missing++;
       } else if (item.line === null) return false;
       if (item.kind === 'CENT' && (item.key !== `row:${item.line}` || filtered[item.line - 1].amount_cents !== 1
@@ -97,13 +97,14 @@ export function validDailyPreview(preview, { sourceRows, reportKind, resolutionC
       if (item.kind === 'REAPPEARED' && item.key !== `title:${item.title_id}`) return false;
       if (item.line !== null) {
         const row = filtered[item.line - 1];
-        if (item.branch !== row.branch || item.entry_number !== row.entry_number || item.due_date !== row.due_date) return false;
+        if (item.branch !== row.branch || item.entry_number !== row.entry_number || item.due_date !== row.due_date
+          || item.is_cheque !== isDailyCheque(row)) return false;
       }
       if (automatic) {
         if (item.kind !== 'MISSING' || item.amount_cents === 1 || item.payment_remaining_cents <= 0
           || item.requires_resolution || item.selected_action !== 'PAID' || item.allowed_actions.length !== 1 || item.allowed_actions[0] !== 'PAID'
           || item.problem !== null || !banks.has(item.bank_account_id) || item.bank_label === null
-          || item.paid_on !== (reportKind === 'NORMAL' ? item.due_date : preview.report_date)
+          || item.paid_on !== (item.is_cheque ? preview.report_date : item.due_date)
           || item.paid_on > preview.report_date) return false;
         automaticCents += BigInt(item.payment_remaining_cents);
       } else {
@@ -126,7 +127,7 @@ export function validDailyPreview(preview, { sourceRows, reportKind, resolutionC
     }
   }
   if (preview.auto_payment_count !== preview.automatic_actions.length || automaticCents !== BigInt(preview.auto_payment_cents)
-    || missing !== preview.missing_count || preview.baseline_only && (missing > 0 || reportKind !== 'CHEQUES')
+    || missing !== preview.missing_count || preview.baseline_only && missing > 0
     || preview.baseline_only !== (preview.baseline_origin === 'FIRST_REPORT')
     || preview.can_commit && Object.keys(resolutionChoices).some(key => !keys.has(key))) return false;
   for (let index = 0; index < filtered.length; index++) if (filtered[index].amount_cents === 1
@@ -136,16 +137,16 @@ export function validDailyPreview(preview, { sourceRows, reportKind, resolutionC
 
 export function validDailyCommit(result, { sourceRows, request } = {}) {
   if (!object(result) || !Array.isArray(sourceRows) || !object(request) || result.mode !== 'daily'
-    || result.daily_report_version !== DAILY_REPORT_VERSION || result.report_kind !== request.report_kind
+    || request.report_kind !== 'ALL' || result.daily_report_version !== DAILY_REPORT_VERSION || result.report_kind !== request.report_kind
     || result.report_date !== request.expected_report_date || result.request_id !== request.request_id
-    || result.empty_cheques_confirmed !== (request.empty_cheques_confirmed ?? false)
-    || Object.hasOwn(request, 'empty_cheques_confirmed') && (request.report_kind !== 'CHEQUES' || typeof request.empty_cheques_confirmed !== 'boolean')
+    || result.empty_report_confirmed !== (request.empty_report_confirmed ?? false)
+    || Object.hasOwn(request, 'empty_report_confirmed') && typeof request.empty_report_confirmed !== 'boolean'
     || !uuid(result.report_id) || !uuid(result.import_id) || typeof result.idempotent !== 'boolean'
     || !['row_count', 'new_count', 'open_count', 'changed_count', 'paid_count', 'written_off_count', 'automatic_paid_count', 'payment_cents']
       .every(key => count(result[key]))) return false;
   const filtered = dailyReportSourceRows(sourceRows, request.report_kind);
-  return (filtered.length > 0 && request.empty_cheques_confirmed !== true
-      || request.report_kind === 'CHEQUES' && request.empty_cheques_confirmed === true && sourceRows.length === 0)
+  return (filtered.length > 0 && request.empty_report_confirmed !== true
+      || request.empty_report_confirmed === true && sourceRows.length === 0)
     && result.row_count === filtered.length
     && result.new_count + result.open_count === result.row_count && result.changed_count <= result.open_count
     && result.automatic_paid_count <= result.paid_count;

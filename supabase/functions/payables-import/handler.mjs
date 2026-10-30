@@ -42,6 +42,7 @@ const SAFE_MESSAGES = new Set([
   'O relatório de pagamentos contém situação incompatível com pagamento confirmado.',
   'Lançamento repetido no relatório de pagamentos.',
   'O relatório contém títulos. Desmarque a declaração de posição sem cheques pendentes.',
+  'O relatório contém títulos. Desmarque a declaração de relatório sem títulos em aberto.',
 ]);
 const safeMessage = message => SAFE_MESSAGES.has(message) || /^Limite de (?:150|300|1500) caracteres excedido\.$/.test(message) ? message : PARSE_FAILURE;
 
@@ -168,6 +169,9 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
       if (code === 'P0043') return respond(409, { code, error: 'Confira as escolhas da conciliação e atualize o banco e a função de importação quando solicitado.' });
       if (code === 'P0050') return respond(409, { code, activation_required: true, error: 'Ative as regras de bancos e baixas de Caixa Interno no banco e na função payables-import antes de importar.' });
       if (code === 'P0059') return respond(409, { code, activation_required: true, error: 'Ative o SQL 059 de atualização das colunas de Contas a Pagar e atualize a função payables-import.' });
+      if (code === 'P0060') return result.payload?.activation_required === true
+        ? respond(409, { code, activation_required: true, error: 'Ative o SQL 060 do relatório único de Contas a Pagar e atualize a função payables-import.' })
+        : respond(409, { code, activation_required: false, error: 'Use o relatório diário único completo e confira as exceções antes de concluir.' });
       if (code === 'P0058') return result.payload?.activation_required === true
         ? respond(409, { code, activation_required: true, error: 'Ative a conciliação diária de títulos e cheques no banco e atualize a função payables-import.' })
         : respond(409, { code, activation_required: false, error: 'Confira as exceções e use o relatório completo atualizado antes de concluir a conciliação diária.' });
@@ -258,7 +262,7 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
         // The service supplies the reference day. Browser clocks and the
         // forecast due date cannot establish that a payment already happened.
         parsed = body.mode === 'payments' ? validatePayablePaidRows(matrix, { excel1904, today: officialToday(now()), useExplicitPaymentDate, allowInternalCashWriteoff: useBankRules, ...(useColumnRules ? { columnRulesVersion: '059' } : {}) })
-          : daily ? validatePayableDailyRows(matrix, { excel1904, allowEmptyCheques: body.empty_cheques_confirmed === true }) : validatePayableRows(matrix, { excel1904 });
+          : daily ? validatePayableDailyRows(matrix, { excel1904, allowEmptyReport: body.empty_report_confirmed === true }) : validatePayableRows(matrix, { excel1904 });
       } catch (error) {
         return respond(422, { code: 'SOURCE_VALIDATION_FAILED', error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: [{ line: 0, column: 'Arquivo', problem: safeMessage(error instanceof Error ? error.message : ''), correction: CORRECTION }] });
       }
@@ -268,22 +272,22 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
       if (signal.aborted) throw new Error('request_timed_out');
       if (daily) {
         const selectedRows = dailyReportSourceRows(parsed.rows, body.report_kind);
-        if (!selectedRows.length && body.empty_cheques_confirmed !== true || body.report_kind === 'CHEQUES' && selectedRows.length !== parsed.rows.length) {
-          return respond(422, { code: 'SOURCE_VALIDATION_FAILED', error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: [{ line: 0, column: 'Tipo do relatório',
-            problem: body.report_kind === 'CHEQUES' ? 'O relatório de cheques deve conter somente títulos identificados como CHEQUE ou com número de cheque informado.' : 'O relatório selecionado não contém títulos comuns. Escolha o relatório completo de títulos ou a opção Cheques.',
-            correction: 'Confira o conteúdo e selecione o tipo correto de relatório antes de importar.' }] });
+        if (!selectedRows.length && body.empty_report_confirmed !== true) {
+          return respond(422, { code: 'SOURCE_VALIDATION_FAILED', error: 'Importação bloqueada. Nenhum dado foi alterado.', errors: [{ line: 0, column: 'Relatório completo',
+            problem: 'Confirme expressamente a posição sem títulos em aberto para importar somente os cabeçalhos.',
+            correction: 'Use o relatório completo ou marque a declaração de posição sem títulos em aberto.' }] });
         }
         if (!validResolutionChoices(body.resolution_choices ?? {}, selectedRows.length)) return respond(400, { error: INVALID_REQUEST });
         const capabilities = await call('/rest/v1/rpc/payables_import_capabilities', { data: {} });
         const missingSchema = !capabilities.ok && ['PGRST202', '42883', '42P01'].includes(capabilities.payload?.code);
-        if (missingSchema || capabilities.ok && (capabilities.payload?.daily_reports !== true || capabilities.payload?.daily_report_version !== '059' || capabilities.payload?.column_rules_version !== '059')) {
-          return upstreamFailure({ status: 409, payload: { code: 'P0059', activation_required: true } });
+        if (missingSchema || capabilities.ok && (capabilities.payload?.daily_reports !== true || capabilities.payload?.daily_report_version !== '060' || capabilities.payload?.unified_daily_report !== true || capabilities.payload?.column_rules_version !== '059')) {
+          return upstreamFailure({ status: 409, payload: { code: 'P0060', activation_required: true } });
         }
         if (!capabilities.ok) return upstreamFailure(capabilities);
         const data = { p_scope: 'grupo-consolidado', p_rows: parsed.rows, p_report_kind: body.report_kind,
           p_mappings: body.mappings ?? {}, p_bank_mappings: body.bank_mappings ?? {}, p_resolution_choices: body.resolution_choices ?? {},
-          p_empty_cheques_confirmed: body.empty_cheques_confirmed ?? false };
-        const path = body.action === 'preview' ? 'preview_payables_daily_report' : 'commit_payables_daily_report_from_gateway';
+          p_empty_report_confirmed: body.empty_report_confirmed ?? false };
+        const path = body.action === 'preview' ? 'preview_payables_unified_report' : 'commit_payables_unified_report_from_gateway';
         const previewStartedOn = officialToday(now());
         const result = await call(`/rest/v1/rpc/${path}`, { service: body.action === 'commit', data: {
           ...data, ...(body.action === 'commit' ? { p_user_id: auth.payload.id, p_session_id: sessionId,
@@ -291,22 +295,23 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
             p_previous_import_id: body.previous_import_id, p_previous_financial_revision: body.previous_financial_revision,
             p_expected_report_date: body.expected_report_date, p_request_id: body.request_id } : {}),
         } });
-        if (!result.ok && ['PGRST202', '42883', '42P01'].includes(result.payload?.code)) return upstreamFailure({ status: 409, payload: { code: 'P0059', activation_required: true } });
+        if (!result.ok && ['PGRST202', '42883', '42P01'].includes(result.payload?.code)) return upstreamFailure({ status: 409, payload: { code: 'P0060', activation_required: true } });
         if (!result.ok) return upstreamFailure(result);
         if (body.action === 'preview') {
-          if (!validDailyPreview(result.payload, { sourceRows: parsed.rows, reportKind: body.report_kind, resolutionChoices: body.resolution_choices ?? {}, emptyChequesConfirmed: body.empty_cheques_confirmed ?? false })
+          if (!validDailyPreview(result.payload, { sourceRows: parsed.rows, reportKind: body.report_kind, resolutionChoices: body.resolution_choices ?? {}, emptyReportConfirmed: body.empty_report_confirmed ?? false })
             || ![previewStartedOn, officialToday(now())].includes(result.payload.report_date)) throw new Error('invalid_daily_preview');
           return respond(200, { rows: result.payload.rows, preview: result.payload, file_sha256: hash });
         }
         if (!validDailyCommit(result.payload, { sourceRows: parsed.rows, request: body })) throw new Error('invalid_daily_commit');
         return respond(200, result.payload);
       }
-      // Older clients without an explicit mode retain their reviewed import
-      // contract. New modes must never fall back to disappearance settlement.
+      // Legacy contracts remain available only before unified-report activation.
+      // Every route, including old unversioned requests, checks that policy first.
       const hasCheque = parsed.rows.some(row => Object.hasOwn(row, 'cheque_number'));
-      if (body.mode || hasCheque) {
+      {
         const capabilities = await call('/rest/v1/rpc/payables_import_capabilities', { data: {} });
-        const required = body.mode === 'forecast' ? 'forecast_incremental' : body.mode === 'payments' ? 'paid_import' : 'cheque_number';
+        const required = body.mode === 'forecast' ? 'forecast_incremental' : body.mode === 'payments' ? 'paid_import' : hasCheque ? 'cheque_number' : null;
+        if (capabilities.ok && capabilities.payload?.unified_daily_report === true) return upstreamFailure({ status: 409, payload: { code: 'P0060', activation_required: false } });
         const missingSchema = !capabilities.ok && ['PGRST202', '42883'].includes(capabilities.payload?.code);
         if (useColumnRules && (missingSchema || capabilities.ok && capabilities.payload?.column_rules_version !== '059')) return upstreamFailure({ status: 409, payload: { code: 'P0059', activation_required: true } });
         if (useBankRules && (missingSchema || capabilities.ok && (capabilities.payload?.paid_bank_rules_version !== '050' || capabilities.payload?.internal_cash_writeoff !== true))) {
@@ -315,11 +320,11 @@ export function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, 
         if (reconciled && (missingSchema || capabilities.ok && (capabilities.payload?.reconciliation_version !== '043' || capabilities.payload?.import_reconciliation !== true))) {
           return respond(409, { code: 'P0043', activation_required: true, error: 'Ative a conciliação na importação no banco e atualize a função payables-import antes de confirmar.' });
         }
-        if (missingSchema || (capabilities.ok && capabilities.payload?.[required] !== true)) {
+        if (required !== null && (missingSchema || (capabilities.ok && capabilities.payload?.[required] !== true))) {
           const code = body.mode ? 'P0021' : 'P0019';
           return upstreamFailure({ status: 409, payload: { code } });
         }
-        if (!capabilities.ok) return upstreamFailure(capabilities);
+        if (!capabilities.ok && !(required === null && missingSchema)) return upstreamFailure(capabilities);
         if (hasCheque && capabilities.payload?.cheque_number !== true) return upstreamFailure({ status: 409, payload: { code: 'P0019' } });
       }
       if (signal.aborted) throw new Error('request_timed_out');

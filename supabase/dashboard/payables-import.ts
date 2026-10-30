@@ -316,14 +316,14 @@ function validatePayableRows(matrix, { excel1904 = false } = {}) {
   if (!rows.length && !errors.length) errors.push({ line: 2, column: "Arquivo", problem: "N\xE3o h\xE1 t\xEDtulos no relat\xF3rio.", correction: "Selecione um relat\xF3rio completo com lan\xE7amentos; base vazia n\xE3o pode baixar t\xEDtulos." });
   return { rows: errors.length ? [] : rows, errors };
 }
-function validatePayableDailyRows(matrix, { excel1904 = false, allowEmptyCheques = false } = {}) {
+function validatePayableDailyRows(matrix, { excel1904 = false, allowEmptyCheques = false, allowEmptyReport = false } = {}) {
   const parsed = validatePayableRows(matrix, { excel1904 });
-  if (allowEmptyCheques !== true) return parsed;
+  if (allowEmptyCheques !== true && allowEmptyReport !== true) return parsed;
   if (parsed.errors.length === 1 && parsed.errors[0].line === 2 && parsed.errors[0].column === "Arquivo" && parsed.errors[0].problem === "N\xE3o h\xE1 t\xEDtulos no relat\xF3rio.") return { rows: [], errors: [] };
   if (!parsed.errors.length && parsed.rows.length > 0) return { rows: [], errors: [{
     line: 0,
-    column: "Declara\xE7\xE3o de cheques",
-    problem: "O relat\xF3rio cont\xE9m t\xEDtulos. Desmarque a declara\xE7\xE3o de posi\xE7\xE3o sem cheques pendentes.",
+    column: allowEmptyReport === true ? "Declara\xE7\xE3o de relat\xF3rio sem t\xEDtulos" : "Declara\xE7\xE3o de cheques",
+    problem: allowEmptyReport === true ? "O relat\xF3rio cont\xE9m t\xEDtulos. Desmarque a declara\xE7\xE3o de relat\xF3rio sem t\xEDtulos em aberto." : "O relat\xF3rio cont\xE9m t\xEDtulos. Desmarque a declara\xE7\xE3o de posi\xE7\xE3o sem cheques pendentes.",
     correction: "Confira o conte\xFAdo do arquivo e a declara\xE7\xE3o antes de analisar novamente."
   }] };
   return parsed;
@@ -527,12 +527,12 @@ var text2 = (value, max) => typeof value === "string" && value.length > 0 && val
 var uuid = (value) => typeof value === "string" && UUID2.test(value);
 var count = (value) => Number.isSafeInteger(value) && value >= 0;
 var mapping = (value, max, keyMax, validValue) => object2(value) && Object.keys(value).length <= max && Object.entries(value).every(([key, item]) => text2(key, keyMax) && validValue(item));
-var DAILY_REPORT_VERSION = "059";
+var DAILY_REPORT_VERSION = "060";
 function isDailyCheque(row) {
   return String(row.source_status ?? "").trim().toUpperCase() === "CHEQUE" || typeof row.cheque_number === "string" && row.cheque_number.trim() !== "";
 }
 function dailyReportSourceRows(rows, kind) {
-  return kind === "CHEQUES" ? rows.filter(isDailyCheque) : rows;
+  return rows;
 }
 function validDailyRequest(body) {
   const fields = [
@@ -550,19 +550,19 @@ function validDailyRequest(body) {
     "previous_financial_revision",
     "expected_report_date",
     "request_id",
-    "empty_cheques_confirmed"
+    "empty_report_confirmed"
   ];
-  if (!object2(body) || Object.keys(body).some((key) => !fields.includes(key)) || body.mode !== "daily" || body.daily_report_version !== DAILY_REPORT_VERSION || !["NORMAL", "CHEQUES"].includes(body.report_kind) || !["preview", "commit"].includes(body.action) || !text2(body.file_name, 250) || /[/\\]/.test(body.file_name) || Object.hasOwn(body, "empty_cheques_confirmed") && (body.report_kind !== "CHEQUES" || typeof body.empty_cheques_confirmed !== "boolean") || !mapping(body.mappings ?? {}, 5e3, 300, (value) => text2(value, 100)) || !mapping(body.bank_mappings ?? {}, 1e4, 1e3, uuid) || !validResolutionChoices(body.resolution_choices ?? {})) return false;
+  if (!object2(body) || Object.keys(body).some((key) => !fields.includes(key)) || body.mode !== "daily" || body.daily_report_version !== DAILY_REPORT_VERSION || body.report_kind !== "ALL" || !["preview", "commit"].includes(body.action) || !text2(body.file_name, 250) || /[/\\]/.test(body.file_name) || Object.hasOwn(body, "empty_report_confirmed") && typeof body.empty_report_confirmed !== "boolean" || !mapping(body.mappings ?? {}, 5e3, 300, (value) => text2(value, 100)) || !mapping(body.bank_mappings ?? {}, 1e4, 1e3, uuid) || !validResolutionChoices(body.resolution_choices ?? {})) return false;
   if (body.action === "preview") return !["complete", "previous_import_id", "previous_financial_revision", "expected_report_date", "request_id"].some((key) => Object.hasOwn(body, key));
   return body.complete === true && (body.previous_import_id === null || uuid(body.previous_import_id)) && text2(body.previous_financial_revision, 256) && validReconciliationDate(body.expected_report_date) && uuid(body.request_id);
 }
 function sameSourceRow(first, second) {
   return object2(first) && Object.keys(first).length === Object.keys(second).length && Object.keys(second).every((key) => Object.hasOwn(first, key) && first[key] === second[key]);
 }
-function validDailyPreview(preview, { sourceRows, reportKind, resolutionChoices = {}, emptyChequesConfirmed = false } = {}) {
-  if (!object2(preview) || !Array.isArray(sourceRows) || preview.mode !== "daily" || preview.daily_report_version !== DAILY_REPORT_VERSION || preview.report_kind !== reportKind || !validReconciliationDate(preview.report_date) || !text2(preview.financial_revision, 256) || !(preview.previous_import_id === null || uuid(preview.previous_import_id)) || typeof preview.can_commit !== "boolean" || typeof preview.baseline_only !== "boolean" || preview.empty_cheques_confirmed !== emptyChequesConfirmed || typeof emptyChequesConfirmed !== "boolean" || emptyChequesConfirmed && (reportKind !== "CHEQUES" || sourceRows.length !== 0)) return false;
+function validDailyPreview(preview, { sourceRows, reportKind, resolutionChoices = {}, emptyReportConfirmed = false } = {}) {
+  if (!object2(preview) || !Array.isArray(sourceRows) || reportKind !== "ALL" || preview.mode !== "daily" || preview.daily_report_version !== DAILY_REPORT_VERSION || preview.report_kind !== reportKind || !validReconciliationDate(preview.report_date) || !text2(preview.financial_revision, 256) || !(preview.previous_import_id === null || uuid(preview.previous_import_id)) || typeof preview.can_commit !== "boolean" || typeof preview.baseline_only !== "boolean" || preview.empty_report_confirmed !== emptyReportConfirmed || typeof emptyReportConfirmed !== "boolean" || emptyReportConfirmed && sourceRows.length !== 0) return false;
   const filtered = dailyReportSourceRows(sourceRows, reportKind);
-  if (!filtered.length && !emptyChequesConfirmed || reportKind === "CHEQUES" && filtered.length !== sourceRows.length || !Array.isArray(preview.rows) || preview.rows.length !== filtered.length || preview.rows.some((row, index) => !sameSourceRow(row, filtered[index])) || preview.row_count !== filtered.length || preview.ignored_cheque_count !== sourceRows.length - filtered.length || !["new_count", "open_count", "changed_count", "missing_count", "auto_payment_count", "auto_payment_cents"].every((key) => count(preview[key])) || preview.new_count + preview.open_count !== preview.row_count || preview.changed_count > preview.open_count || !["exceptions", "automatic_actions", "reconciliation_items", "errors", "bank_options"].every((key) => Array.isArray(preview[key]) && preview[key].length <= 15e3) || !["EXISTING_BASE", "PREVIOUS_REPORT", "FIRST_REPORT"].includes(preview.baseline_origin) || preview.can_commit && preview.errors.length > 0) return false;
+  if (!filtered.length && !emptyReportConfirmed || !Array.isArray(preview.rows) || preview.rows.length !== filtered.length || preview.rows.some((row, index) => !sameSourceRow(row, filtered[index])) || preview.row_count !== filtered.length || preview.ignored_cheque_count !== sourceRows.length - filtered.length || !["new_count", "open_count", "changed_count", "missing_count", "auto_payment_count", "auto_payment_cents"].every((key) => count(preview[key])) || preview.new_count + preview.open_count !== preview.row_count || preview.changed_count > preview.open_count || !["exceptions", "automatic_actions", "reconciliation_items", "errors", "bank_options"].every((key) => Array.isArray(preview[key]) && preview[key].length <= 15e3) || !["PREVIOUS_REPORT", "FIRST_REPORT"].includes(preview.baseline_origin) || preview.can_commit && preview.errors.length > 0) return false;
   if (preview.bank_options.some((bank) => !object2(bank) || !uuid(bank.id) || !text2(bank.display_name, 200))) return false;
   if (new Set(preview.bank_options.map((bank) => bank.id)).size !== preview.bank_options.length) return false;
   if (JSON.stringify(preview.exceptions) !== JSON.stringify(preview.reconciliation_items)) return false;
@@ -571,21 +571,20 @@ function validDailyPreview(preview, { sourceRows, reportKind, resolutionChoices 
   let automaticCents = 0n, missing = 0;
   for (const [items, automatic] of [[preview.exceptions, false], [preview.automatic_actions, true]]) {
     for (const item of items) {
-      if (!object2(item) || !validResolutionKey(item.key, filtered.length) || keys.has(item.key) || !["CENT", "MISSING", "REAPPEARED"].includes(item.kind) || !(item.line === null || Number.isSafeInteger(item.line) && item.line >= 1 && item.line <= filtered.length) || !(item.title_id === null && item.kind === "CENT" || uuid(item.title_id)) || !text2(item.branch, 300) || !text2(item.entry_number, 300) || typeof item.description !== "string" || item.description.length > 1500 || !validReconciliationDate(item.due_date) || !count(item.amount_cents) || !count(item.payment_remaining_cents) || !Array.isArray(item.allowed_actions) || item.allowed_actions.length > 3 || new Set(item.allowed_actions).size !== item.allowed_actions.length || item.allowed_actions.some((action) => !["PAID", "WRITE_OFF", "REOPEN"].includes(action)) || !(item.selected_action === null || item.allowed_actions.includes(item.selected_action)) || typeof item.requires_resolution !== "boolean" || !(item.problem === null || text2(item.problem, 2e3)) || !(item.paid_on === null || validReconciliationDate(item.paid_on)) || !(item.bank_account_id === null || uuid(item.bank_account_id)) || !(item.bank_label === null || text2(item.bank_label, 200)) || !(item.cheque_number === null || typeof item.cheque_number === "string" && item.cheque_number.length <= 150) || item.rule !== (reportKind === "NORMAL" ? "DUE_DATE" : "IMPORT_DATE")) return false;
+      if (!object2(item) || !validResolutionKey(item.key, filtered.length) || keys.has(item.key) || !["CENT", "MISSING", "REAPPEARED"].includes(item.kind) || !(item.line === null || Number.isSafeInteger(item.line) && item.line >= 1 && item.line <= filtered.length) || !(item.title_id === null && item.kind === "CENT" || uuid(item.title_id)) || !text2(item.branch, 300) || !text2(item.entry_number, 300) || typeof item.description !== "string" || item.description.length > 1500 || !validReconciliationDate(item.due_date) || !count(item.amount_cents) || !count(item.payment_remaining_cents) || !Array.isArray(item.allowed_actions) || item.allowed_actions.length > 3 || new Set(item.allowed_actions).size !== item.allowed_actions.length || item.allowed_actions.some((action) => !["PAID", "WRITE_OFF", "REOPEN"].includes(action)) || !(item.selected_action === null || item.allowed_actions.includes(item.selected_action)) || typeof item.requires_resolution !== "boolean" || !(item.problem === null || text2(item.problem, 2e3)) || !(item.paid_on === null || validReconciliationDate(item.paid_on)) || !(item.bank_account_id === null || uuid(item.bank_account_id)) || !(item.bank_label === null || text2(item.bank_label, 200)) || !(item.cheque_number === null || typeof item.cheque_number === "string" && item.cheque_number.length <= 150) || typeof item.is_cheque !== "boolean" || item.rule !== (item.is_cheque ? "IMPORT_DATE" : "DUE_DATE") || typeof item.cheque_number === "string" && item.cheque_number.trim() && !item.is_cheque) return false;
       if (item.title_id !== null && titleIds.has(item.title_id)) return false;
       if (item.kind === "MISSING") {
         if (item.line !== null || !uuid(item.title_id) || item.key !== `title:${item.title_id}`) return false;
-        if (reportKind === "NORMAL" && typeof item.cheque_number === "string" && item.cheque_number.trim()) return false;
         missing++;
       } else if (item.line === null) return false;
       if (item.kind === "CENT" && (item.key !== `row:${item.line}` || filtered[item.line - 1].amount_cents !== 1 || !(item.allowed_actions.length === 1 && item.allowed_actions[0] === "WRITE_OFF" || !preview.can_commit && item.allowed_actions.length === 0 && item.problem !== null))) return false;
       if (item.kind === "REAPPEARED" && item.key !== `title:${item.title_id}`) return false;
       if (item.line !== null) {
         const row = filtered[item.line - 1];
-        if (item.branch !== row.branch || item.entry_number !== row.entry_number || item.due_date !== row.due_date) return false;
+        if (item.branch !== row.branch || item.entry_number !== row.entry_number || item.due_date !== row.due_date || item.is_cheque !== isDailyCheque(row)) return false;
       }
       if (automatic) {
-        if (item.kind !== "MISSING" || item.amount_cents === 1 || item.payment_remaining_cents <= 0 || item.requires_resolution || item.selected_action !== "PAID" || item.allowed_actions.length !== 1 || item.allowed_actions[0] !== "PAID" || item.problem !== null || !banks.has(item.bank_account_id) || item.bank_label === null || item.paid_on !== (reportKind === "NORMAL" ? item.due_date : preview.report_date) || item.paid_on > preview.report_date) return false;
+        if (item.kind !== "MISSING" || item.amount_cents === 1 || item.payment_remaining_cents <= 0 || item.requires_resolution || item.selected_action !== "PAID" || item.allowed_actions.length !== 1 || item.allowed_actions[0] !== "PAID" || item.problem !== null || !banks.has(item.bank_account_id) || item.bank_label === null || item.paid_on !== (item.is_cheque ? preview.report_date : item.due_date) || item.paid_on > preview.report_date) return false;
         automaticCents += BigInt(item.payment_remaining_cents);
       } else {
         const choice = resolutionChoices[item.key];
@@ -600,14 +599,14 @@ function validDailyPreview(preview, { sourceRows, reportKind, resolutionChoices 
       if (item.title_id !== null) titleIds.add(item.title_id);
     }
   }
-  if (preview.auto_payment_count !== preview.automatic_actions.length || automaticCents !== BigInt(preview.auto_payment_cents) || missing !== preview.missing_count || preview.baseline_only && (missing > 0 || reportKind !== "CHEQUES") || preview.baseline_only !== (preview.baseline_origin === "FIRST_REPORT") || preview.can_commit && Object.keys(resolutionChoices).some((key) => !keys.has(key))) return false;
+  if (preview.auto_payment_count !== preview.automatic_actions.length || automaticCents !== BigInt(preview.auto_payment_cents) || missing !== preview.missing_count || preview.baseline_only && missing > 0 || preview.baseline_only !== (preview.baseline_origin === "FIRST_REPORT") || preview.can_commit && Object.keys(resolutionChoices).some((key) => !keys.has(key))) return false;
   for (let index = 0; index < filtered.length; index++) if (filtered[index].amount_cents === 1 && !preview.exceptions.some((item) => item.kind === "CENT" && item.line === index + 1)) return false;
   return true;
 }
 function validDailyCommit(result, { sourceRows, request } = {}) {
-  if (!object2(result) || !Array.isArray(sourceRows) || !object2(request) || result.mode !== "daily" || result.daily_report_version !== DAILY_REPORT_VERSION || result.report_kind !== request.report_kind || result.report_date !== request.expected_report_date || result.request_id !== request.request_id || result.empty_cheques_confirmed !== (request.empty_cheques_confirmed ?? false) || Object.hasOwn(request, "empty_cheques_confirmed") && (request.report_kind !== "CHEQUES" || typeof request.empty_cheques_confirmed !== "boolean") || !uuid(result.report_id) || !uuid(result.import_id) || typeof result.idempotent !== "boolean" || !["row_count", "new_count", "open_count", "changed_count", "paid_count", "written_off_count", "automatic_paid_count", "payment_cents"].every((key) => count(result[key]))) return false;
+  if (!object2(result) || !Array.isArray(sourceRows) || !object2(request) || result.mode !== "daily" || request.report_kind !== "ALL" || result.daily_report_version !== DAILY_REPORT_VERSION || result.report_kind !== request.report_kind || result.report_date !== request.expected_report_date || result.request_id !== request.request_id || result.empty_report_confirmed !== (request.empty_report_confirmed ?? false) || Object.hasOwn(request, "empty_report_confirmed") && typeof request.empty_report_confirmed !== "boolean" || !uuid(result.report_id) || !uuid(result.import_id) || typeof result.idempotent !== "boolean" || !["row_count", "new_count", "open_count", "changed_count", "paid_count", "written_off_count", "automatic_paid_count", "payment_cents"].every((key) => count(result[key]))) return false;
   const filtered = dailyReportSourceRows(sourceRows, request.report_kind);
-  return (filtered.length > 0 && request.empty_cheques_confirmed !== true || request.report_kind === "CHEQUES" && request.empty_cheques_confirmed === true && sourceRows.length === 0) && result.row_count === filtered.length && result.new_count + result.open_count === result.row_count && result.changed_count <= result.open_count && result.automatic_paid_count <= result.paid_count;
+  return (filtered.length > 0 && request.empty_report_confirmed !== true || request.empty_report_confirmed === true && sourceRows.length === 0) && result.row_count === filtered.length && result.new_count + result.open_count === result.row_count && result.changed_count <= result.open_count && result.automatic_paid_count <= result.paid_count;
 }
 
 // supabase/functions/payables-import/handler.mjs
@@ -671,7 +670,8 @@ var SAFE_MESSAGES = /* @__PURE__ */ new Set([
   "A data de refer\xEAncia da confer\xEAncia \xE9 inv\xE1lida.",
   "O relat\xF3rio de pagamentos cont\xE9m situa\xE7\xE3o incompat\xEDvel com pagamento confirmado.",
   "Lan\xE7amento repetido no relat\xF3rio de pagamentos.",
-  "O relat\xF3rio cont\xE9m t\xEDtulos. Desmarque a declara\xE7\xE3o de posi\xE7\xE3o sem cheques pendentes."
+  "O relat\xF3rio cont\xE9m t\xEDtulos. Desmarque a declara\xE7\xE3o de posi\xE7\xE3o sem cheques pendentes.",
+  "O relat\xF3rio cont\xE9m t\xEDtulos. Desmarque a declara\xE7\xE3o de relat\xF3rio sem t\xEDtulos em aberto."
 ]);
 var safeMessage = (message) => SAFE_MESSAGES.has(message) || /^Limite de (?:150|300|1500) caracteres excedido\.$/.test(message) ? message : PARSE_FAILURE;
 function officialToday(value) {
@@ -810,6 +810,7 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
       if (code === "P0043") return respond(409, { code, error: "Confira as escolhas da concilia\xE7\xE3o e atualize o banco e a fun\xE7\xE3o de importa\xE7\xE3o quando solicitado." });
       if (code === "P0050") return respond(409, { code, activation_required: true, error: "Ative as regras de bancos e baixas de Caixa Interno no banco e na fun\xE7\xE3o payables-import antes de importar." });
       if (code === "P0059") return respond(409, { code, activation_required: true, error: "Ative o SQL 059 de atualiza\xE7\xE3o das colunas de Contas a Pagar e atualize a fun\xE7\xE3o payables-import." });
+      if (code === "P0060") return result.payload?.activation_required === true ? respond(409, { code, activation_required: true, error: "Ative o SQL 060 do relat\xF3rio \xFAnico de Contas a Pagar e atualize a fun\xE7\xE3o payables-import." }) : respond(409, { code, activation_required: false, error: "Use o relat\xF3rio di\xE1rio \xFAnico completo e confira as exce\xE7\xF5es antes de concluir." });
       if (code === "P0058") return result.payload?.activation_required === true ? respond(409, { code, activation_required: true, error: "Ative a concilia\xE7\xE3o di\xE1ria de t\xEDtulos e cheques no banco e atualize a fun\xE7\xE3o payables-import." }) : respond(409, { code, activation_required: false, error: "Confira as exce\xE7\xF5es e use o relat\xF3rio completo atualizado antes de concluir a concilia\xE7\xE3o di\xE1ria." });
       if (code === "22023" || code === "23514") return respond(400, { code, error: "A importa\xE7\xE3o foi recusada. Confira as linhas, a origem completa e a classifica\xE7\xE3o de todos os planos." });
       if (result.status === 401) return respond(401, { error: "Sua sess\xE3o expirou. Entre novamente." });
@@ -873,7 +874,7 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
         if (!Array.isArray(matrix) || matrix.length > MAX_ROWS + 1 || matrix.some((row) => !Array.isArray(row) || row.length > 100)) {
           throw new Error("Planilha excede 5.000 linhas ou 100 colunas.");
         }
-        parsed = body.mode === "payments" ? validatePayablePaidRows(matrix, { excel1904, today: officialToday(now()), useExplicitPaymentDate, allowInternalCashWriteoff: useBankRules, ...useColumnRules ? { columnRulesVersion: "059" } : {} }) : daily ? validatePayableDailyRows(matrix, { excel1904, allowEmptyCheques: body.empty_cheques_confirmed === true }) : validatePayableRows(matrix, { excel1904 });
+        parsed = body.mode === "payments" ? validatePayablePaidRows(matrix, { excel1904, today: officialToday(now()), useExplicitPaymentDate, allowInternalCashWriteoff: useBankRules, ...useColumnRules ? { columnRulesVersion: "059" } : {} }) : daily ? validatePayableDailyRows(matrix, { excel1904, allowEmptyReport: body.empty_report_confirmed === true }) : validatePayableRows(matrix, { excel1904 });
       } catch (error) {
         return respond(422, { code: "SOURCE_VALIDATION_FAILED", error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: [{ line: 0, column: "Arquivo", problem: safeMessage(error instanceof Error ? error.message : ""), correction: CORRECTION }] });
       }
@@ -883,19 +884,19 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
       if (signal.aborted) throw new Error("request_timed_out");
       if (daily) {
         const selectedRows = dailyReportSourceRows(parsed.rows, body.report_kind);
-        if (!selectedRows.length && body.empty_cheques_confirmed !== true || body.report_kind === "CHEQUES" && selectedRows.length !== parsed.rows.length) {
+        if (!selectedRows.length && body.empty_report_confirmed !== true) {
           return respond(422, { code: "SOURCE_VALIDATION_FAILED", error: "Importa\xE7\xE3o bloqueada. Nenhum dado foi alterado.", errors: [{
             line: 0,
-            column: "Tipo do relat\xF3rio",
-            problem: body.report_kind === "CHEQUES" ? "O relat\xF3rio de cheques deve conter somente t\xEDtulos identificados como CHEQUE ou com n\xFAmero de cheque informado." : "O relat\xF3rio selecionado n\xE3o cont\xE9m t\xEDtulos comuns. Escolha o relat\xF3rio completo de t\xEDtulos ou a op\xE7\xE3o Cheques.",
-            correction: "Confira o conte\xFAdo e selecione o tipo correto de relat\xF3rio antes de importar."
+            column: "Relat\xF3rio completo",
+            problem: "Confirme expressamente a posi\xE7\xE3o sem t\xEDtulos em aberto para importar somente os cabe\xE7alhos.",
+            correction: "Use o relat\xF3rio completo ou marque a declara\xE7\xE3o de posi\xE7\xE3o sem t\xEDtulos em aberto."
           }] });
         }
         if (!validResolutionChoices(body.resolution_choices ?? {}, selectedRows.length)) return respond(400, { error: INVALID_REQUEST });
         const capabilities = await call("/rest/v1/rpc/payables_import_capabilities", { data: {} });
         const missingSchema = !capabilities.ok && ["PGRST202", "42883", "42P01"].includes(capabilities.payload?.code);
-        if (missingSchema || capabilities.ok && (capabilities.payload?.daily_reports !== true || capabilities.payload?.daily_report_version !== "059" || capabilities.payload?.column_rules_version !== "059")) {
-          return upstreamFailure({ status: 409, payload: { code: "P0059", activation_required: true } });
+        if (missingSchema || capabilities.ok && (capabilities.payload?.daily_reports !== true || capabilities.payload?.daily_report_version !== "060" || capabilities.payload?.unified_daily_report !== true || capabilities.payload?.column_rules_version !== "059")) {
+          return upstreamFailure({ status: 409, payload: { code: "P0060", activation_required: true } });
         }
         if (!capabilities.ok) return upstreamFailure(capabilities);
         const data = {
@@ -905,9 +906,9 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
           p_mappings: body.mappings ?? {},
           p_bank_mappings: body.bank_mappings ?? {},
           p_resolution_choices: body.resolution_choices ?? {},
-          p_empty_cheques_confirmed: body.empty_cheques_confirmed ?? false
+          p_empty_report_confirmed: body.empty_report_confirmed ?? false
         };
-        const path2 = body.action === "preview" ? "preview_payables_daily_report" : "commit_payables_daily_report_from_gateway";
+        const path2 = body.action === "preview" ? "preview_payables_unified_report" : "commit_payables_unified_report_from_gateway";
         const previewStartedOn = officialToday(now());
         const result = await call(`/rest/v1/rpc/${path2}`, { service: body.action === "commit", data: {
           ...data,
@@ -923,19 +924,20 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
             p_request_id: body.request_id
           } : {}
         } });
-        if (!result.ok && ["PGRST202", "42883", "42P01"].includes(result.payload?.code)) return upstreamFailure({ status: 409, payload: { code: "P0059", activation_required: true } });
+        if (!result.ok && ["PGRST202", "42883", "42P01"].includes(result.payload?.code)) return upstreamFailure({ status: 409, payload: { code: "P0060", activation_required: true } });
         if (!result.ok) return upstreamFailure(result);
         if (body.action === "preview") {
-          if (!validDailyPreview(result.payload, { sourceRows: parsed.rows, reportKind: body.report_kind, resolutionChoices: body.resolution_choices ?? {}, emptyChequesConfirmed: body.empty_cheques_confirmed ?? false }) || ![previewStartedOn, officialToday(now())].includes(result.payload.report_date)) throw new Error("invalid_daily_preview");
+          if (!validDailyPreview(result.payload, { sourceRows: parsed.rows, reportKind: body.report_kind, resolutionChoices: body.resolution_choices ?? {}, emptyReportConfirmed: body.empty_report_confirmed ?? false }) || ![previewStartedOn, officialToday(now())].includes(result.payload.report_date)) throw new Error("invalid_daily_preview");
           return respond(200, { rows: result.payload.rows, preview: result.payload, file_sha256: hash });
         }
         if (!validDailyCommit(result.payload, { sourceRows: parsed.rows, request: body })) throw new Error("invalid_daily_commit");
         return respond(200, result.payload);
       }
       const hasCheque = parsed.rows.some((row) => Object.hasOwn(row, "cheque_number"));
-      if (body.mode || hasCheque) {
+      {
         const capabilities = await call("/rest/v1/rpc/payables_import_capabilities", { data: {} });
-        const required = body.mode === "forecast" ? "forecast_incremental" : body.mode === "payments" ? "paid_import" : "cheque_number";
+        const required = body.mode === "forecast" ? "forecast_incremental" : body.mode === "payments" ? "paid_import" : hasCheque ? "cheque_number" : null;
+        if (capabilities.ok && capabilities.payload?.unified_daily_report === true) return upstreamFailure({ status: 409, payload: { code: "P0060", activation_required: false } });
         const missingSchema = !capabilities.ok && ["PGRST202", "42883"].includes(capabilities.payload?.code);
         if (useColumnRules && (missingSchema || capabilities.ok && capabilities.payload?.column_rules_version !== "059")) return upstreamFailure({ status: 409, payload: { code: "P0059", activation_required: true } });
         if (useBankRules && (missingSchema || capabilities.ok && (capabilities.payload?.paid_bank_rules_version !== "050" || capabilities.payload?.internal_cash_writeoff !== true))) {
@@ -944,11 +946,11 @@ function createPayablesGateway({ env, fetch: fetcher = globalThis.fetch, loadWor
         if (reconciled && (missingSchema || capabilities.ok && (capabilities.payload?.reconciliation_version !== "043" || capabilities.payload?.import_reconciliation !== true))) {
           return respond(409, { code: "P0043", activation_required: true, error: "Ative a concilia\xE7\xE3o na importa\xE7\xE3o no banco e atualize a fun\xE7\xE3o payables-import antes de confirmar." });
         }
-        if (missingSchema || capabilities.ok && capabilities.payload?.[required] !== true) {
+        if (required !== null && (missingSchema || capabilities.ok && capabilities.payload?.[required] !== true)) {
           const code = body.mode ? "P0021" : "P0019";
           return upstreamFailure({ status: 409, payload: { code } });
         }
-        if (!capabilities.ok) return upstreamFailure(capabilities);
+        if (!capabilities.ok && !(required === null && missingSchema)) return upstreamFailure(capabilities);
         if (hasCheque && capabilities.payload?.cheque_number !== true) return upstreamFailure({ status: 409, payload: { code: "P0019" } });
       }
       if (signal.aborted) throw new Error("request_timed_out");

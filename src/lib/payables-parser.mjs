@@ -273,16 +273,16 @@ export function validatePayableRows(matrix, { excel1904 = false } = {}) {
   return { rows: errors.length ? [] : rows, errors };
 }
 
-// An empty cheque position requires a separate explicit declaration. Retain
+// An empty complete position requires a separate explicit declaration. Retain
 // every header, formula and malformed-row check from the ordinary validator;
 // only its final, unambiguous "no titles" diagnostic can be waived.
-export function validatePayableDailyRows(matrix, { excel1904 = false, allowEmptyCheques = false } = {}) {
+export function validatePayableDailyRows(matrix, { excel1904 = false, allowEmptyCheques = false, allowEmptyReport = false } = {}) {
   const parsed = validatePayableRows(matrix, { excel1904 });
-  if (allowEmptyCheques !== true) return parsed;
+  if (allowEmptyCheques !== true && allowEmptyReport !== true) return parsed;
   if (parsed.errors.length === 1 && parsed.errors[0].line === 2
     && parsed.errors[0].column === 'Arquivo' && parsed.errors[0].problem === 'Não há títulos no relatório.') return { rows: [], errors: [] };
-  if (!parsed.errors.length && parsed.rows.length > 0) return { rows: [], errors: [{ line: 0, column: 'Declaração de cheques',
-    problem: 'O relatório contém títulos. Desmarque a declaração de posição sem cheques pendentes.',
+  if (!parsed.errors.length && parsed.rows.length > 0) return { rows: [], errors: [{ line: 0, column: allowEmptyReport === true ? 'Declaração de relatório sem títulos' : 'Declaração de cheques',
+    problem: allowEmptyReport === true ? 'O relatório contém títulos. Desmarque a declaração de relatório sem títulos em aberto.' : 'O relatório contém títulos. Desmarque a declaração de posição sem cheques pendentes.',
     correction: 'Confira o conteúdo do arquivo e a declaração antes de analisar novamente.' }] };
   return parsed;
 }

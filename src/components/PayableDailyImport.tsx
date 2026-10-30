@@ -5,7 +5,7 @@ import { dailyCivilDate, dailyImportError, dailyProblems, payableDailyRequest, v
 import type { ResolutionDraft } from './PayableImportReconciliation';
 import { hasPayableChequeNumber, payableChequePaymentBank } from '../lib/payable-cheque-bank';
 
-interface Prepared { file: File; base64: string; hash: string; rows: PayableImportRow[]; emptyChequesConfirmed: boolean }
+interface Prepared { file: File; base64: string; hash: string; rows: PayableImportRow[]; emptyReportConfirmed: boolean }
 interface Analysis extends DailyCanonical { source: Prepared; choices: Record<string, PayableResolutionChoice>; mappings: Record<string, string>; bankMappings: Record<string, string> }
 interface Frozen { body: DailyRequest; rows: number; paid: number; writtenOff: number; cents: number; automatic: number }
 const decimal = (cents: number) => `${BigInt(cents) / 100n},${String(BigInt(cents) % 100n).padStart(2, '0')}`;
@@ -43,7 +43,7 @@ export default function PayableDailyImport({ canImport, reportKind, onBusyChange
   const [busy, setBusy] = useState<'analyzing' | 'saving' | null>(null), [pending, setPending] = useState<Frozen | null>(null);
   const [drafts, setDrafts] = useState<Record<string, ResolutionDraft>>({}), [mappings, setMappings] = useState<Record<string, string>>({});
   const [bankMappings, setBankMappings] = useState<Record<string, string>>({});
-  const [emptyChequesConfirmed, setEmptyChequesConfirmed] = useState(false);
+  const [emptyReportConfirmed, setEmptyReportConfirmed] = useState(false);
   const [dirty, setDirty] = useState(false), [error, setError] = useState(''), [success, setSuccess] = useState(''), [problems, setProblems] = useState<ImportProblem[]>([]);
   const [actionsPage, setActionsPage] = useState(0), [exceptionPage, setExceptionPage] = useState(0);
   const prepared = useRef<Prepared | null>(null), frozen = useRef<Frozen | null>(null), controller = useRef<AbortController | null>(null), busyRef = useRef(false), generation = useRef(0);
@@ -55,24 +55,23 @@ export default function PayableDailyImport({ canImport, reportKind, onBusyChange
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
     window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
   }, [pending, busy]);
-  async function analyze(selected: File, selectedDrafts = drafts, selectedMappings = mappings, selectedBanks = bankMappings, emptyConfirmed = emptyChequesConfirmed) {
+  async function analyze(selected: File, selectedDrafts = drafts, selectedMappings = mappings, selectedBanks = bankMappings, emptyConfirmed = emptyReportConfirmed) {
     if (!canImport || busyRef.current || frozen.current) return;
     busyRef.current = true; setBusy('analyzing'); setError(''); setSuccess(''); setProblems([]); setDirty(true);
     const current = ++generation.current, abort = new AbortController(); controller.current?.abort(); controller.current = abort;
     try {
-      const source = prepared.current?.file === selected && prepared.current.emptyChequesConfirmed === emptyConfirmed ? prepared.current : { file: selected, emptyChequesConfirmed: emptyConfirmed, ...await analyzePayableFile(selected, abort.signal, emptyConfirmed) };
+      const source = prepared.current?.file === selected && prepared.current.emptyReportConfirmed === emptyConfirmed ? prepared.current : { file: selected, emptyReportConfirmed: emptyConfirmed, ...await analyzePayableFile(selected, abort.signal, emptyConfirmed) };
       if (current !== generation.current || abort.signal.aborted) return;
       if ('errors' in source && Array.isArray(source.errors) && source.errors.length) { setProblems(source.errors); setAnalysis(null); return; }
       prepared.current = source;
       const previous = analysis?.source.file === selected ? analysis.preview : null;
       const choices = previous ? choicesFor([...previous.automatic_actions, ...previous.exceptions], selectedDrafts, previous.report_date, previous.bank_options) : {};
-      const body: DailyRequest = { action: 'preview', mode: 'daily', daily_report_version: '059', report_kind: reportKind, file_name: selected.name, file_base64: source.base64, mappings: { ...selectedMappings }, bank_mappings: { ...selectedBanks }, resolution_choices: choices, ...(emptyConfirmed ? { empty_cheques_confirmed: true } : {}) };
+      const body: DailyRequest = { action: 'preview', mode: 'daily', daily_report_version: '060', report_kind: reportKind, file_name: selected.name, file_base64: source.base64, mappings: { ...selectedMappings }, bank_mappings: { ...selectedBanks }, resolution_choices: choices, ...(emptyConfirmed ? { empty_report_confirmed: true } : {}) };
       const canonical = await payableDailyRequest<unknown>(body, abort.signal);
       if (current !== generation.current || abort.signal.aborted) return;
       if (!validDailyCanonical(canonical, source.hash, reportKind, emptyConfirmed)) throw new Error('invalid-preview');
-      const isCheque = (row: PayableImportRow) => row.source_status.trim().toUpperCase() === 'CHEQUE' || !!row.cheque_number?.trim();
       const expected = source.rows;
-      if (reportKind === 'CHEQUES' && source.rows.some(row => !isCheque(row)) || canonical.rows.length !== expected.length || canonical.rows.some((row, index) => rowIdentity(row) !== rowIdentity(expected[index]))
+      if (canonical.rows.length !== expected.length || canonical.rows.some((row, index) => rowIdentity(row) !== rowIdentity(expected[index]))
         || canonical.preview.ignored_cheque_count !== source.rows.length - expected.length
         || canonical.preview.exceptions.some(item => item.selected_action !== (choices[item.key]?.action ?? null))) throw new Error('invalid-partition');
       setAnalysis({ ...canonical, source, choices, mappings: { ...selectedMappings }, bankMappings: { ...selectedBanks } }); setProblems(canonical.preview.errors); setDirty(false); setActionsPage(0); setExceptionPage(0);
@@ -89,10 +88,10 @@ export default function PayableDailyImport({ canImport, reportKind, onBusyChange
       const result = await payableDailyRequest<unknown>(request.body);
       if (!validDailyResult(result, request.body, request.rows) || result.paid_count !== request.paid || result.written_off_count !== request.writtenOff || result.payment_cents !== request.cents || result.automatic_paid_count !== request.automatic) throw new Error('unconfirmed');
       frozen.current = null; setPending(null); setSuccess(`${result.idempotent ? 'Este envio já estava concluído, sem duplicar baixas.' : 'Importação diária concluída.'} ${result.row_count} título(s) atualizado(s), ${result.paid_count} pagamento(s), total ${formatCents(result.payment_cents)}, e ${result.written_off_count} baixa(s) de R$ 0,01 sem pagamento.`);
-      setAnalysis(null); prepared.current = null; setFile(null); setDrafts({}); setMappings({}); setBankMappings({}); setEmptyChequesConfirmed(false); setDirty(false); setProblems([]); if (input.current) input.current.value = '';
+      setAnalysis(null); prepared.current = null; setFile(null); setDrafts({}); setMappings({}); setBankMappings({}); setEmptyReportConfirmed(false); setDirty(false); setProblems([]); if (input.current) input.current.value = '';
     } catch (failure) {
       const code = failure && typeof failure === 'object' && 'code' in failure ? String(failure.code) : '';
-      if (['P0058', 'P0059', 'PGRST202', '42883', '42P01', '40001', '42501', 'PGRST301', 'PGRST303', '22023', '23514', '23505', 'P0016', 'P0042', 'SOURCE_VALIDATION_FAILED'].includes(code)) { frozen.current = null; setPending(null); setDirty(true); }
+      if (['P0058', 'P0059', 'P0060', 'PGRST202', '42883', '42P01', '40001', '42501', 'PGRST301', 'PGRST303', '22023', '23514', '23505', 'P0016', 'P0042', 'SOURCE_VALIDATION_FAILED'].includes(code)) { frozen.current = null; setPending(null); setDirty(true); }
       setProblems(dailyProblems(failure && typeof failure === 'object' && 'errors' in failure ? failure.errors : []));
       setError(dailyImportError(failure, 'A confirmação do resultado não chegou. O arquivo, as escolhas e o protocolo estão preservados. Confira o mesmo envio pelo botão abaixo, sem iniciar uma nova importação.'));
     } finally { busyRef.current = false; setBusy(null); }
@@ -103,9 +102,9 @@ export default function PayableDailyImport({ canImport, reportKind, onBusyChange
     const total = p.automatic_actions.reduce((sum, item) => sum + BigInt(item.payment_remaining_cents), 0n) + paid.reduce((sum, choice) => sum + BigInt(choice.amount_paid_cents!), 0n);
     if (total > BigInt(Number.MAX_SAFE_INTEGER)) { setError('A soma dos pagamentos excede o limite seguro. Confira os valores antes de importar.'); return; }
     const writtenOff = selected.filter(choice => choice.action === 'WRITE_OFF').length;
-    const settlementNotice = p.baseline_only ? 'Esta primeira importação estabelece a referência de cheques, sem baixar cheques ausentes.' : reportKind === 'CHEQUES' ? 'Os cheques ausentes serão considerados pagos no dia desta importação, respeitando os dados efetivos confirmados nas exceções.' : 'Os títulos ausentes serão considerados pagos nas respectivas datas de vencimento, respeitando as datas efetivas confirmadas nas exceções; os cheques terão conferência separada.';
-    if (!window.confirm(`Importar o relatório completo de ${reportKind === 'CHEQUES' ? 'cheques' : 'títulos'} e concluir a conciliação?\n\nArquivo: ${analysis.source.file.name}\nData da importação: ${dateLabel(p.report_date)}\nTítulos no relatório: ${p.row_count}\nPagamentos: ${p.auto_payment_count + paid.length}\nValor dos pagamentos: ${formatCents(Number(total))}\nBaixas individuais de R$ 0,01 sem pagamento: ${writtenOff}\n\nConfirmo que o arquivo contém todos os ${reportKind === 'CHEQUES' ? 'cheques em aberto de todas as filiais' : 'títulos comuns em aberto de todas as filiais'}. ${settlementNotice} Os pagamentos entram no realizado. O histórico será preservado.`)) return;
-    const body: DailyRequest = { action: 'commit', mode: 'daily', daily_report_version: '059', report_kind: reportKind, file_name: analysis.source.file.name, file_base64: analysis.source.base64, mappings: { ...analysis.mappings }, bank_mappings: { ...analysis.bankMappings }, resolution_choices: structuredClone(analysis.choices), complete: true, previous_import_id: p.previous_import_id, previous_financial_revision: p.financial_revision, expected_report_date: p.report_date, request_id: crypto.randomUUID(), ...(analysis.source.emptyChequesConfirmed ? { empty_cheques_confirmed: true } : {}) };
+    const settlementNotice = p.baseline_only ? 'Este primeiro arquivo estabelece a base inicial. Nenhum título ausente será baixado agora.' : 'Os títulos ausentes serão considerados pagos: títulos comuns na data de vencimento e cheques na data desta importação, respeitando os dados efetivos conferidos nas exceções.';
+    if (!window.confirm(`Importar o relatório completo de Contas a Pagar e concluir as atualizações e baixas?\n\nArquivo: ${analysis.source.file.name}\nData da importação: ${dateLabel(p.report_date)}\nTítulos no relatório: ${p.row_count}\nPagamentos: ${p.auto_payment_count + paid.length}\nValor dos pagamentos: ${formatCents(Number(total))}\nBaixas individuais de R$ 0,01 sem pagamento: ${writtenOff}\n\nConfirmo que o arquivo contém todos os títulos em aberto de todas as filiais, incluindo os cheques. ${settlementNotice} Os pagamentos entram no realizado. O histórico será preservado.`)) return;
+    const body: DailyRequest = { action: 'commit', mode: 'daily', daily_report_version: '060', report_kind: reportKind, file_name: analysis.source.file.name, file_base64: analysis.source.base64, mappings: { ...analysis.mappings }, bank_mappings: { ...analysis.bankMappings }, resolution_choices: structuredClone(analysis.choices), complete: true, previous_import_id: p.previous_import_id, previous_financial_revision: p.financial_revision, expected_report_date: p.report_date, request_id: crypto.randomUUID(), ...(analysis.source.emptyReportConfirmed ? { empty_report_confirmed: true } : {}) };
     void execute({ body, rows: p.row_count, paid: p.auto_payment_count + paid.length, writtenOff, cents: Number(total), automatic: p.auto_payment_count });
   }
   const p = analysis?.preview, disabled = !!busy || !!pending;
@@ -118,27 +117,25 @@ export default function PayableDailyImport({ canImport, reportKind, onBusyChange
   const pages = Math.max(1, Math.ceil((p?.exceptions.length ?? 0) / 20)), currentPage = Math.min(exceptionPage, pages - 1);
   const updateDraft = (item: DailyAction, value: Partial<ResolutionDraft>) => { if (!p || disabled) return; setDrafts(previous => ({ ...previous, [item.key]: { ...(previous[item.key] ?? emptyDraft(item, p.report_date)), ...value } })); setDirty(true); setError(''); };
   return <section className="panel stack" aria-labelledby="payable-daily-title">
-    <div><h2 id="payable-daily-title">{reportKind === 'CHEQUES' ? 'Importar relatório diário de cheques' : 'Importar relatório diário de títulos'}</h2><p>Selecione o relatório completo. A conferência começa automaticamente; a conclusão aplica as atualizações e baixas em uma única confirmação.</p></div>
-    <p className="notice">{reportKind === 'CHEQUES' ? 'Use o relatório completo dos cheques ainda em aberto. A primeira importação cria a referência de comparação; nas próximas, os cheques ausentes terão pagamento na data da importação.' : 'Use o relatório completo de títulos em aberto. Todos os lançamentos, incluindo cheques, terão a previsão atualizada. Somente os títulos comuns ausentes terão pagamento na data de vencimento; as baixas de cheques usam o relatório próprio.'}</p>
-    <label className="field">{reportKind === 'CHEQUES' ? 'Relatório completo de cheques em aberto' : 'Relatório completo diário de Contas a Pagar'}<input ref={input} aria-label={reportKind === 'CHEQUES' ? 'Relatório completo de cheques em aberto' : 'Relatório completo diário de Contas a Pagar'} type="file" accept=".xlsx,.xlsm,.csv,.xls" disabled={disabled || !canImport} onChange={event => {
+    <div><h2 id="payable-daily-title">Importar relatório diário de Contas a Pagar</h2><p>Selecione o relatório completo dos títulos em aberto. A conferência começa automaticamente; confira o resumo e confirme a importação.</p></div>
+    <p className="notice">Use um único relatório completo, com todos os títulos em aberto de todas as filiais. Inclua os cheques no mesmo arquivo. Títulos ausentes no relatório seguinte serão baixados como pagos: títulos comuns no vencimento e cheques no dia da importação.</p>
+    <label className="field">Relatório completo diário de Contas a Pagar<input ref={input} aria-label="Relatório completo diário de Contas a Pagar" type="file" accept=".xlsx,.xlsm,.csv,.xls" disabled={disabled || !canImport} onChange={event => {
       if (busyRef.current || frozen.current) return;
-      const selected = event.target.files?.[0] ?? null; generation.current++; controller.current?.abort(); prepared.current = null; setFile(selected); setAnalysis(null); setDrafts({}); setMappings({}); setBankMappings({}); setEmptyChequesConfirmed(false); setDirty(false); setProblems([]); setError(''); setSuccess('');
+      const selected = event.target.files?.[0] ?? null; generation.current++; controller.current?.abort(); prepared.current = null; setFile(selected); setAnalysis(null); setDrafts({}); setMappings({}); setBankMappings({}); setEmptyReportConfirmed(false); setDirty(false); setProblems([]); setError(''); setSuccess('');
       if (selected) void analyze(selected, {}, {}, {}, false);
-    }} /></label><p className="help-text">Até 2 MiB e 5.000 títulos. .xlsx, .xlsm ou .csv UTF-8. O arquivo original será preservado. Para incluir apenas alguns títulos, use Previsões / novos títulos.</p>
-    {reportKind === 'CHEQUES' && <label className="checkbox-field"><input type="checkbox" aria-label="Confirmo que o relatório completo não contém cheques pendentes" checked={emptyChequesConfirmed} disabled={disabled || !file || !canImport} onChange={event => {
+    }} /></label><p className="help-text">Até 2 MiB e 5.000 títulos. .xlsx, .xlsm ou .csv UTF-8. Inclua todos os títulos ainda em aberto; um arquivo parcial pode gerar baixas incorretas. O arquivo original será preservado.</p>
+    <label className="checkbox-field"><input type="checkbox" aria-label="Confirmo que o relatório completo não contém títulos em aberto" checked={emptyReportConfirmed} disabled={disabled || !file || !canImport} onChange={event => {
       if (busyRef.current || frozen.current || !file) return;
-      const confirmed = event.target.checked; setEmptyChequesConfirmed(confirmed); setAnalysis(null); prepared.current = null; setProblems([]); setDirty(true); setError('');
+      const confirmed = event.target.checked; setEmptyReportConfirmed(confirmed); setAnalysis(null); prepared.current = null; setProblems([]); setDirty(true); setError('');
       void analyze(file, drafts, mappings, bankMappings, confirmed);
-    }} />Confirmo que o relatório completo não contém cheques pendentes. O arquivo deve conter somente os cabeçalhos, sem linhas de cheques.</label>}
+    }} />Confirmo que o relatório completo não contém títulos em aberto. Use esta opção somente quando não restar nenhum título em aberto. O arquivo deve conter apenas os cabeçalhos.</label>
     {busy === 'analyzing' && <p role="status">Conferindo o relatório e calculando as baixas…</p>}
     {error && <p className="notice error" role="alert">{error}</p>}{success && <p className="notice success" role="status">{success}</p>}
     {pending && <div className="notice" role="status"><p>A confirmação está pendente. Mantenha esta tela para conferir o mesmo arquivo e protocolo.</p><button type="button" className="button secondary" disabled={!!busy} onClick={() => void execute(pending)}>Conferir importação diária pendente</button></div>}
     {!!problems.length && <div className="table-wrap"><table><caption>Pendências do relatório diário</caption><thead><tr><th>Linha</th><th>Campo</th><th>Problema</th><th>Como corrigir</th></tr></thead><tbody>{problems.slice(0, 100).map((problem, index) => <tr key={index}><td>{problem.line || '—'}</td><td>{problem.column}</td><td>{problem.problem}</td><td>{problem.correction}</td></tr>)}</tbody></table></div>}
     {p && analysis && <>
       <h3>Conferência da importação diária</h3><p>Arquivo: {analysis.source.file.name} · Data da importação: <strong>{dateLabel(p.report_date)}</strong>.</p>
-      {p.baseline_only && <p className="notice">Primeiro relatório de cheques: esta importação estabelece a base de comparação. Nenhum cheque ausente será baixado agora.</p>}
-      {reportKind === 'NORMAL' && p.baseline_origin === 'EXISTING_BASE' && <p className="notice">A primeira conferência diária compara este relatório com os títulos comuns já cadastrados na Central.</p>}
-      {reportKind === 'NORMAL' && analysis.rows.some(row => hasPayableChequeNumber(row.cheque_number) || row.source_status.trim().toUpperCase() === 'CHEQUE') && <p className="notice">A previsão dos cheques presentes também será atualizada por este arquivo. A ausência de cheques neste relatório não gera baixa; use Relatório diário de cheques para essa conciliação.</p>}
+      {p.baseline_only && <p className="notice">Primeiro relatório: esta importação cria a base inicial. Nenhum título ausente será baixado agora.</p>}
       <dl className="payable-paid-metrics"><div><dt>Títulos no relatório</dt><dd>{p.row_count}</dd></div><div><dt>Novos títulos</dt><dd>{p.new_count}</dd></div><div><dt>Títulos existentes</dt><dd>{p.open_count}</dd></div><div><dt>Pagamentos automáticos</dt><dd>{p.auto_payment_count}</dd></div><div><dt>Valor automático</dt><dd>{formatCents(p.auto_payment_cents)}</dd></div><div><dt>Exceções para conferir</dt><dd>{p.exceptions.length}</dd></div></dl>
       <p><strong>Valor do relatório sem os marcadores de R$ 0,01: {formatCents(Number(analysis.rows.reduce((sum, row) => sum + (row.amount_cents === 1 ? 0n : BigInt(row.amount_cents)), 0n)))}</strong></p>
       <div className="table-wrap"><table><caption>Previsão atualizada · primeiros {Math.min(10, analysis.rows.length)} de {analysis.rows.length} lançamentos</caption><thead><tr><th>Lançamento / filial</th><th>Histórico / parcela</th><th>Plano cp</th><th>Banco previsto (Plano cc)</th><th>Valor provisionado</th><th>Emissão</th><th>Vencimento atualizado</th><th>Nº cheque</th></tr></thead><tbody>{analysis.rows.slice(0, 10).map(row => <tr key={`${row.branch}:${row.entry_number}`}><td>{row.entry_number} · {row.branch}</td><td>{row.description}</td><td>{row.plan}</td><td>{row.bank_account || 'Não informado'}{hasPayableChequeNumber(row.cheque_number) && <small>Pagamento do cheque: BRADESCO F2G</small>}</td><td>{formatCents(row.amount_cents)}</td><td>{dateLabel(row.issued_on)}</td><td>{dateLabel(row.due_date)}</td><td>{row.cheque_number || '—'}</td></tr>)}</tbody></table></div>
