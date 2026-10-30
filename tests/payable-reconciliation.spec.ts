@@ -6,7 +6,7 @@ const project = 'https://sjimddcqgrsauzvffcol.supabase.co';
 const now = new Date('2026-10-18T15:00:00Z');
 const uuid = (value: number) => `73000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const labels = ['BRADESCO ECOPLAST', 'BRADESCO LIMPE FACIL', 'BRADESCO GAMMA IND', 'BRADESCO F2G', 'BRADESCO FAST CLEAN', 'BRADESCO EASY CLEAN', 'BANCO DO BRASIL FAST CLEAN', 'BANCO DO BRASIL EASY CLEAN', 'BANCO DO BRASIL ECOPLAST', 'BANCO CORA LIMPE FACIL', 'BANCO CORA MY CLEAN', 'BANCO CORA ECO PLAST', 'CAIXA ECOPLAST', 'CAIXA LIMPE FACIL', 'CAIXA GAMMA', 'CAIXA FAST CLEAN', 'CAIXA EASY CLEAN'];
-interface Options { director?: boolean; missing?: boolean; stale?: boolean; ambiguous?: boolean; uncertain?: boolean; commitBeforeError?: boolean; initialPayments?: number; initialPaymentAmount?: number; titleValue?: number; extraTitle?: boolean; changedFinancialRevision?: boolean; chequeNumber?: string | null; entryNumber?: string }
+interface Options { director?: boolean; missing?: boolean; stale?: boolean; ambiguous?: boolean; uncertain?: boolean; commitBeforeError?: boolean; initialPayments?: number; initialPaymentAmount?: number; titleValue?: number; extraTitle?: boolean; changedFinancialRevision?: boolean; chequeNumber?: string | null; entryNumber?: string; missingChequeBank?: boolean; ambiguousChequeBank?: boolean }
 async function setup(page: Page, options: Options = {}) {
   await page.clock.setFixedTime(now);
   const id = uuid(1); const role = options.director ? 'diretor' : 'contas_pagar';
@@ -16,7 +16,8 @@ async function setup(page: Page, options: Options = {}) {
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify({ sub: id, session_id: uuid(2), exp: Math.floor(now.getTime() / 1000) + 3600, role: 'authenticated' })).toString('base64url'), 'synthetic-test-only'].join('.');
   const title: any = { id: uuid(3), scope: 'grupo-consolidado', source_key: 'synthetic-title', entry_number: options.entryNumber ?? '8001', description: 'Fornecedor sintético de conciliação', branch: '3', due_date: '2026-10-14', amount_cents: options.titleValue ?? 20000, source_status: 'ABERTO', plan: 'ENERGIA', bank_account: 'Banco original da base', issued_on: '2026-10-01', macro: 'FIXO', status: 'SETTLED_IMPORT', settled_at: '2026-10-18T12:00:00Z', last_import_id: uuid(4), payment_revision: null, ...(Object.hasOwn(options, 'chequeNumber') ? { cheque_number: options.chequeNumber } : {}) };
   const sourceTitles = [title, ...(options.extraTitle ? [{ ...title, id: uuid(3000), source_key: 'synthetic-second-title', entry_number: '8002', description: 'Outro fornecedor sintético', amount_cents: 12345, due_date: '2026-10-20', macro: 'VARIÁVEL', status: 'OPEN', settled_at: null }] : [])];
-  const accounts = labels.map((label, index) => ({ id: uuid(100 + index), display_name: label, company: label, bank: 'Conta sintética', account_label: label, account_type: index >= 12 ? 'CASH' : 'BANK' }));
+  const accounts = labels.map((label, index) => ({ id: uuid(100 + index), display_name: label, company: label, bank: 'Conta sintética', account_label: label, account_type: index >= 12 ? 'CASH' : 'BANK' })).filter(account => !options.missingChequeBank || account.display_name !== 'BRADESCO F2G');
+  if (options.ambiguousChequeBank) accounts.push({ ...accounts.find(account => account.display_name === 'BRADESCO F2G')!, id: uuid(999) });
   const payments: any[] = []; let event = 0, revisionReads = 0; const calls: { name: string; body: any; query: string; method: string }[] = [];
   function payment(amount = 100, paidOn = '2026-10-17', requestId = uuid(700 + event)) { event += 1; return { id: uuid(200 + event), request_id: requestId, title_id: title.id, event_revision: event, entry_number: title.entry_number, cheque_number: title.cheque_number ?? null, description: title.description, branch: title.branch, macro_snapshot: title.macro, plan_snapshot: title.plan, due_date: title.due_date, title_amount_cents: title.amount_cents, amount_cents: amount, paid_on: paidOn, bank_account_id: accounts[0].id, bank_label: accounts[0].display_name, observation: 'Comprovante sintético', created_at: '2026-10-18T15:00:00Z', created_by: id, created_by_name: 'Pessoa de Teste', created_by_username: 'FinanceiroTeste', cancelled_at: null, cancelled_by_name: null, cancellation_observation: null, status: 'ACTIVE' }; }
   // Somente registros históricos podem conter valores menores que o título.
@@ -154,6 +155,22 @@ test('updated source amount, due date and bank preserve the paid ledger and the 
   await expect(editor(page)).toContainText('R$ 300,00'); await expect(editor(page)).toContainText('03/11/2026'); await expect(editor(page)).toContainText('Banco atualizado do relatório'); await expect(editor(page)).toContainText('R$ 299,00');
   await expect(editor(page).locator('tbody tr')).toContainText('BRADESCO ECOPLAST'); await expect(actual(page)).toContainText('R$ 1,00'); await expect(page.locator('.payable-payment-macros>div').filter({ hasText: 'FIXO' })).toContainText('R$ 1,00'); expect(payments[0].macro_snapshot).toBe('FIXO'); expect(payments[0].amount_cents).toBe(100);
 });
+for (const condition of ['missingChequeBank', 'ambiguousChequeBank'] as const) test(`numbered cheque blocks payment when official F2G account is ${condition}`, async ({ page }) => {
+  const { calls } = await setup(page, { chequeNumber: '000123', [condition]: true }); await openTitle(page);
+  await expect(page.getByLabel('Banco / conta do pagamento', { exact: true })).toBeDisabled();
+  await expect(editor(page).getByRole('alert')).toContainText('Ative uma única conta bancária oficial BRADESCO F2G');
+  await expect(page.getByRole('button', { name: 'Confirmar pagamento', exact: true })).toBeDisabled();
+  expect(calls.some(call => call.name === 'register_payable_payment')).toBe(false);
+});
+test('ordinary actual bank can differ from preserved source bank', async ({ page }) => {
+  const { calls, title, payments } = await setup(page); await openTitle(page); await fillPayment(page, '2026-10-17', uuid(110));
+  await expect(page.getByLabel('Banco / conta do pagamento', { exact: true })).toBeEnabled(); await expect(editor(page)).toContainText('Banco previsto (Plano cc): Banco original da base');
+  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Confirmar pagamento', exact: true }).click();
+  await expect(editor(page)).toContainText('Pago integralmente');
+  expect(payments[0].bank_label).toBe('BANCO CORA MY CLEAN'); expect(title.bank_account).toBe('Banco original da base');
+  expect(calls.filter(call => call.name === 'register_payable_payment').at(-1)?.body.p_bank_account_id).toBe(uuid(110));
+  expect(calls.some(call => call.method === 'PATCH')).toBe(false);
+});
 
 test('an audited macro correction appears in realized values while payment history preserves the original classification', async ({ page }) => {
   const { payments } = await setup(page, { initialPayments: 1 }); payments[0].effective_macro = 'VARIÁVEL';
@@ -227,13 +244,15 @@ test('the server rejects a tampered partial request and the UI preserves the ful
 });
 
 test('cheque number stays separate from entry, bank and dates and its payment snapshot survives later imports', async ({ page }) => {
-  const { title, payments, calls } = await setup(page, { chequeNumber: '000123', entryNumber: '14' }); await openTitle(page); await fillPayment(page, '2026-10-17', uuid(110));
+  const { title, payments, calls } = await setup(page, { chequeNumber: '000123', entryNumber: '14' }); await openTitle(page);
+  await page.getByLabel('Data real do pagamento', { exact: true }).fill('2026-10-17'); await page.getByLabel('Observação do pagamento', { exact: true }).fill('Cheque conferido no comprovante.');
+  await expect(page.getByLabel('Banco / conta do pagamento', { exact: true })).toHaveValue(uuid(103)); await expect(page.getByLabel('Banco / conta do pagamento', { exact: true })).toBeDisabled();
   await expect(editor(page).getByRole('heading', { name: 'Conciliação do título 14', exact: true })).toBeVisible(); await expect(editor(page).locator('.payable-source-cheque')).toContainText('000123'); await expect(page.getByLabel('Valor integral a pagar (R$)', { exact: true })).toHaveValue('200,00'); await expect(page.getByLabel('Valor integral a pagar (R$)', { exact: true })).not.toBeEditable();
-  page.once('dialog', dialog => { expect(dialog.message()).toContain('pagamento INTEGRAL'); expect(dialog.message()).toContain('Lançamento: 14'); expect(dialog.message()).toContain('Nº cheque da base: 000123'); expect(dialog.message()).toContain('Banco/conta: BANCO CORA MY CLEAN'); expect(dialog.message()).toContain('Data efetiva: 17/10/2026'); return dialog.accept(); }); await page.getByRole('button', { name: 'Confirmar pagamento', exact: true }).click();
-  await expect(editor(page)).toContainText('Pago integralmente'); await expect(editor(page).getByRole('columnheader', { name: 'Nº cheque registrado', exact: true })).toBeVisible(); await expect(editor(page).getByRole('cell', { name: '000123', exact: true })).toBeVisible(); await expect(editor(page).getByRole('cell', { name: 'BANCO CORA MY CLEAN', exact: true })).toBeVisible(); expect(payments[0].cheque_number).toBe('000123'); expect(payments[0].entry_number).toBe('14'); expect(payments[0].paid_on).toBe('2026-10-17');
+  page.once('dialog', dialog => { expect(dialog.message()).toContain('pagamento INTEGRAL'); expect(dialog.message()).toContain('Lançamento: 14'); expect(dialog.message()).toContain('Nº cheque da base: 000123'); expect(dialog.message()).toContain('Banco/conta: BRADESCO F2G'); expect(dialog.message()).toContain('Data efetiva: 17/10/2026'); return dialog.accept(); }); await page.getByRole('button', { name: 'Confirmar pagamento', exact: true }).click();
+  await expect(editor(page)).toContainText('Pago integralmente'); await expect(editor(page).getByRole('columnheader', { name: 'Nº cheque registrado', exact: true })).toBeVisible(); await expect(editor(page).getByRole('cell', { name: '000123', exact: true })).toBeVisible(); await expect(editor(page).getByRole('cell', { name: 'BRADESCO F2G', exact: true })).toBeVisible(); expect(payments[0].cheque_number).toBe('000123'); expect(payments[0].entry_number).toBe('14'); expect(payments[0].paid_on).toBe('2026-10-17');
   title.cheque_number = '000999'; title.last_import_id = uuid(91); await page.getByRole('button', { name: 'Conferir título e histórico', exact: true }).click(); await expect(editor(page).locator('.payable-source-cheque')).toContainText('000999'); await expect(editor(page).getByRole('cell', { name: '000123', exact: true })).toBeVisible(); await expect(editor(page).getByRole('cell', { name: '000999', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Atualizar conciliação', exact: true }).click(); await expect(page.getByText('Carregando valores realizados…', { exact: true })).toHaveCount(0);
-  const downloading = page.waitForEvent('download'); await page.getByRole('button', { name: 'Baixar realizado em CSV', exact: true }).click(); const contents = await readFile((await (await downloading).path())!, 'utf8'); expect(contents).toContain('Nº cheque registrado no pagamento'); expect(contents).toContain('"000123"'); expect(contents).not.toContain('"000999"'); expect(contents).toContain('"14"'); expect(contents).toContain('"BANCO CORA MY CLEAN"');
+  const downloading = page.waitForEvent('download'); await page.getByRole('button', { name: 'Baixar realizado em CSV', exact: true }).click(); const contents = await readFile((await (await downloading).path())!, 'utf8'); expect(contents).toContain('Nº cheque registrado no pagamento'); expect(contents).toContain('"000123"'); expect(contents).not.toContain('"000999"'); expect(contents).toContain('"14"'); expect(contents).toContain('"BRADESCO F2G"');
   expect(new URLSearchParams(calls.find(call => call.name === 'payable_financial_titles' && new URLSearchParams(call.query).has('id'))!.query).get('select')).toBe('*');
 });
 

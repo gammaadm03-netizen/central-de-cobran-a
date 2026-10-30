@@ -260,8 +260,8 @@ export function validatePayableRows(matrix, { excel1904 = false } = {}) {
       } catch (error) { errors.push({ line: index + 1, column: COLUMN_LABELS[key], problem: error.message, correction: 'Corrija a célula no arquivo original e selecione uma nova cópia.' }); }
     }
     // Stable across sorting and imports, never derived from worksheet row position.
-    const identity = JSON.stringify([row.branch, row.entry_number, row.due_date, row.amount_cents]);
-    if (errors.length === before && keys.has(identity)) errors.push({ line: index + 1, column: 'Nº lançamento', problem: 'Chave de título duplicada na mesma base.', correction: 'Confira filial, lançamento, vencimento e valor. Não remova duplicados sem validar a origem.' });
+    const identity = JSON.stringify([row.branch.toUpperCase(), row.entry_number.toUpperCase()]);
+    if (errors.length === before && keys.has(identity)) errors.push({ line: index + 1, column: 'Nº lançamento', problem: 'Chave de título duplicada na mesma base.', correction: 'Mantenha uma única linha por filial e número de lançamento. Valor e vencimento atualizam o mesmo título; não identificam outra parcela.' });
     if (errors.length === before) {
       total += row.amount_cents;
       if (!Number.isSafeInteger(total)) errors.push({ line: index + 1, column: 'Valor', problem: 'Total do relatório excede o limite de precisão.', correction: 'Confira valores e origem da base antes de importar.' });
@@ -292,7 +292,7 @@ export function validatePayableDailyRows(matrix, { excel1904 = false, allowEmpty
 // legacy reports without it use Vencimento as the user-confirmed payment date.
 // Plano CC is the actual paying bank, as confirmed by the user.
 // It never creates financial titles or derives payment facts from disappearance.
-export function validatePayablePaidRows(matrix, { excel1904 = false, today, useExplicitPaymentDate = true, allowInternalCashWriteoff = false } = {}) {
+export function validatePayablePaidRows(matrix, { excel1904 = false, today, useExplicitPaymentDate = true, allowInternalCashWriteoff = false, columnRulesVersion } = {}) {
   const errors = [], rows = [];
   if (today !== undefined) {
     try { if (typeof today !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(today) || parseCivilDate(today) !== today) throw new Error('invalid-today'); }
@@ -324,10 +324,27 @@ export function validatePayablePaidRows(matrix, { excel1904 = false, today, useE
     if (nonempty > MAX_ROWS) { errors.push({ line: index + 1, column: 'Arquivo', problem: 'Mais de 5.000 linhas.', correction: 'Exporte uma origem completa dentro do limite.' }); break; }
     // The bank can occur after the date column. Classify its source value
     // independently of header order; the regular loop still validates it.
-    let internalCash = false;
+    let internalCash = false, cashDateNeedsTitleLookup = false;
     if (allowInternalCashWriteoff === true) {
       try { internalCash = isInternalCashBank(scalar(source[columns.get('bank_account')])); }
       catch { /* The bank validation below reports unsupported content. */ }
+    }
+    if (internalCash && columnRulesVersion === '059') {
+      try {
+        const cent = parseMoneyCents(scalar(source[columns.get('amount_cents')])) === 1;
+        const hasChequeColumn = columns.has('cheque_number');
+        const cheque = hasChequeColumn && parseChequeNumber(source[columns.get('cheque_number')]);
+        // A missing cheque column can still belong to a known cheque in SQL.
+        // Preserve a supplied actual date so that lookup can validate payment;
+        // blank cash dates remain acceptable for a genuine administrative row.
+        const suppliedDate = String(scalar(source[columns.get(paymentDateKey)]) ?? '').trim() !== '';
+        cashDateNeedsTitleLookup = !cent && !hasChequeColumn && suppliedDate;
+        // An explicitly blank cheque column clears a prior number. Only an
+        // omitted column needs the server lookup; that lookup also decides
+        // whether a supplied future date describes a cheque or a cash writeoff.
+        if (!cent && (cheque || cashDateNeedsTitleLookup)) internalCash = false;
+      }
+      catch { /* The cheque validation below reports unsupported content. */ }
     }
     const row = { branch: '', entry_number: '', source_status: 'PAGO', paid_on: internalCash ? null : '', amount_paid_cents: 0, paid_bank: '' };
     const before = errors.length;
@@ -344,7 +361,7 @@ export function validatePayablePaidRows(matrix, { excel1904 = false, today, useE
           if (internalCash) row.paid_on = null;
           else {
             row.paid_on = timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904);
-            if (today !== undefined && row.paid_on > today) throw new Error('A data do pagamento é futura.');
+            if (today !== undefined && row.paid_on > today && !cashDateNeedsTitleLookup) throw new Error('A data do pagamento é futura.');
           }
         } else if (key === 'cheque_number') row.cheque_number = parseChequeNumber(value);
         else if (key === 'issued_on') row.issued_on = String(value).trim() ? (timestampColumns.has(column) ? parsePayableErpDate(value, excel1904) : parseCivilDate(value, excel1904)) : null;

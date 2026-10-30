@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { dailyBank, dailyBankKey, dailyChequeCsv, dailyCsv, dailyDate, setupDailyImport as setup, selectDailyFile as selectFile } from './helpers/payable-daily-import';
+import { dailyBank, dailyOtherBank, dailyChequeBank, dailyBankKey, dailyChequeCsv, dailyCsv, dailyDate, setupDailyImport as setup, selectDailyFile as selectFile } from './helpers/payable-daily-import';
 
 const finish = 'Importar e conciliar relatório diário';
 test('selecionar o relatório completo inicia uma única prévia e uma confirmação aplica a baixa no vencimento', async ({ page }) => {
@@ -11,7 +11,7 @@ test('selecionar o relatório completo inicia uma única prévia e uma confirma�
   page.once('dialog', dialog => { expect(dialog.message()).toContain('todos os títulos comuns em aberto de todas as filiais'); expect(dialog.message()).toContain('respectivas datas de vencimento'); return dialog.accept(); });
   await page.getByRole('button', { name: finish, exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Importação diária concluída.');
-  expect(seen.commits).toHaveLength(1); expect(seen.commits[0]).toMatchObject({ mode: 'daily', daily_report_version: '058', report_kind: 'NORMAL', expected_report_date: dailyDate, complete: true, resolution_choices: {} });
+  expect(seen.commits).toHaveLength(1); expect(seen.commits[0]).toMatchObject({ mode: 'daily', daily_report_version: '059', report_kind: 'NORMAL', expected_report_date: dailyDate, complete: true, resolution_choices: {} });
   expect(Buffer.from(seen.commits[0].file_base64, 'base64').toString('utf8')).toBe(dailyCsv);
   expect(seen.payments).toEqual([{ title_id: expect.any(String), amount: 10000, date: '2026-10-16', bank: dailyBank.id }]); expect(seen.otherWrites).toEqual([]);
 });
@@ -19,9 +19,33 @@ test('cancelar a confirmação preserva a conferência sem aplicar pagamentos', 
   const seen = await setup(page); await selectFile(page); await expect(page.getByRole('button', { name: finish })).toBeEnabled();
   page.once('dialog', dialog => dialog.dismiss()); await page.getByRole('button', { name: finish }).click(); expect(seen.commits).toHaveLength(0); expect(seen.payments).toHaveLength(0);
 });
-test('relatório global separa os cheques sem baixá-los pela ausência dos títulos comuns', async ({ page }) => {
+test('banco efetivo de baixa comum pode mudar após nova conferência, preservando data e banco previsto', async ({ page }) => {
+  const seen = await setup(page); await selectFile(page);
+  const preview = page.getByRole('table', { name: 'Previsão atualizada · primeiros 1 de 1 lançamentos', exact: true });
+  await expect(preview).toContainText('Banco sintético');
+  await page.getByLabel('Banco efetivo da baixa AUSENTE-1 filial 3', { exact: true }).selectOption(dailyOtherBank.id);
+  await expect(page.getByRole('button', { name: finish, exact: true })).toBeDisabled(); expect(seen.payments).toEqual([]);
+  await page.getByRole('button', { name: 'Conferir ajustes do relatório diário', exact: true }).click();
+  await expect(page.getByRole('button', { name: finish, exact: true })).toBeEnabled();
+  expect(Object.values(seen.previews.at(-1).resolution_choices)).toEqual([expect.objectContaining({ action: 'PAID', paid_on: '2026-10-16', bank_account_id: dailyOtherBank.id, amount_paid_cents: 10000 })]);
+  await expect(preview).toContainText('Banco sintético');
+  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: finish, exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Importação diária concluída.');
+  expect(seen.payments).toEqual([{ amount: 10000, date: '2026-10-16', bank: dailyOtherBank.id }]);
+  expect(seen.commits[0].bank_mappings).toEqual({});
+});
+test('banco efetivo de cheque com número fica fixo em BRADESCO F2G', async ({ page }) => {
+  const seen = await setup(page); await selectFile(page, dailyChequeCsv, true);
+  const bank = page.getByLabel('Banco efetivo da baixa AUSENTE-1 filial 3', { exact: true });
+  await expect(bank).toHaveValue(dailyChequeBank.id); await expect(bank).toBeDisabled();
+  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: finish, exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Importação diária concluída.'); expect(seen.payments[0].bank).toBe(dailyChequeBank.id);
+});
+test('relatório global atualiza a previsão dos cheques sem baixá-los pela ausência dos títulos comuns', async ({ page }) => {
   const seen = await setup(page); await selectFile(page, `${dailyCsv}\r\n15;Cheque sintético;20/10/2026;500,00;ENERGIA;Banco sintético;3;CHEQUE;000123`);
-  await expect(page.getByText('1 cheque(s) do arquivo foram separados desta conferência.', { exact: false })).toBeVisible();
+  await expect(page.getByText('A previsão dos cheques presentes também será atualizada', { exact: false })).toBeVisible();
+  const preview = page.getByRole('table', { name: 'Previsão atualizada · primeiros 2 de 2 lançamentos', exact: true });
+  await expect(preview.locator('tbody tr')).toHaveCount(2); await expect(preview).toContainText('Cheque sintético'); await expect(preview).toContainText('Pagamento do cheque: BRADESCO F2G');
   await expect(page.getByRole('button', { name: finish })).toBeEnabled();
   expect(seen.previews).toHaveLength(1); expect(seen.payments).toHaveLength(0);
 });

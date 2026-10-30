@@ -11,4 +11,4 @@ export function inspectWorkbookZip(buffer: ArrayBuffer): { start: number; compre
 export function validateWorkbookExpandedSize(buffer: ArrayBuffer): Promise<void>;
 export function validatePayableRows(matrix: unknown[][], options?: { excel1904?: boolean }): { rows: PayableImportRow[]; errors: ImportProblem[] };
 export function validatePayableDailyRows(matrix: unknown[][], options?: { excel1904?: boolean; allowEmptyCheques?: boolean }): { rows: PayableImportRow[]; errors: ImportProblem[] };
-export function validatePayablePaidRows(matrix: unknown[][], options?: { excel1904?: boolean; today?: string; useExplicitPaymentDate?: boolean; allowInternalCashWriteoff?: boolean }): { rows: PayablePaidRow[]; errors: ImportProblem[] };
+export function validatePayablePaidRows(matrix: unknown[][], options?: { excel1904?: boolean; today?: string; useExplicitPaymentDate?: boolean; allowInternalCashWriteoff?: boolean; columnRulesVersion?: '059' }): { rows: PayablePaidRow[]; errors: ImportProblem[] };

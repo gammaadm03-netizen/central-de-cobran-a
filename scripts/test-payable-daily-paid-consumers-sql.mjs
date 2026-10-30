@@ -10,7 +10,7 @@ const chequeFragment = await readFile(new URL('../supabase/fragments/payable-dai
 const signature = 'cf_private.preview_payable_paid_rows(jsonb,jsonb,jsonb)';
 const chequeConsumers = ['public.payables_management_summary(date,date)','public.payables_forecast(date)'];
 const scope = 'grupo-consolidado', mappings = { 'PLANO COMPAT DIARIA': 'FIXO' };
-let passed = 0, sequence = 0, today, yesterday, bank, bankLabel;
+let passed = 0, sequence = 0, today, yesterday, bank, bankLabel, chequeBank;
 const source = () => { const bytes = Buffer.from('Relatório de compatibilidade sintético ' + ++sequence); return { name: `compat-diaria-${sequence}.csv`, sha: createHash('sha256').update(bytes).digest('hex'), base64: bytes.toString('base64') }; };
 const emptySource = (suffix = '') => { const bytes = Buffer.from('Lançamento;Histórico;Plano cp - Conta: nome;Plano cc - Conta: nome;Emissão: valor do lançamento;Emissão: data;Vencimento: data;Cheque: número;Filial\r\n' + suffix); return { name: 'sem-cheques-sinteticos.csv', sha: createHash('sha256').update(bytes).digest('hex'), base64: bytes.toString('base64') }; };
 const row = entry => ({ entry_number: entry, branch: 'FILIAL SINTETICA', description: 'Fornecedor sintético ' + entry, due_date: yesterday, amount_cents: 10000, issued_on: yesterday, source_status: 'ABERTO', plan: 'PLANO COMPAT DIARIA', bank_account: bankLabel });
@@ -78,6 +78,9 @@ try {
  const beforeMetadata = await metadata(), beforeChequeMetadata = new Map();
  for (const target of chequeConsumers) beforeChequeMetadata.set(target, await metadata(target));
  await db.exec(await file('058_payable_daily_reports.sql'));
+ await db.exec(await file('059_payable_column_rules.sql'));
+ chequeBank = await scalar("SELECT id r FROM public.bank_accounts WHERE enabled AND account_type='BANK' AND display_name='BRADESCO F2G'");
+ assert(chequeBank, 'Synthetic bank catalog must contain the official cheque account');
  assert((await file('058_payable_daily_reports.sql')).includes(fragment.trim()), '058 must embed the reviewed paid-consumer fragment');
  assert((await file('058_payable_daily_reports.sql')).includes(chequeFragment.trim()), '058 must embed the reviewed cheque-consumer fragment');
  assert.deepEqual(await metadata(), beforeMetadata, 'Function identity, grants and execution settings remain unchanged');
@@ -171,7 +174,7 @@ try {
  await test('titles sharing one cheque number stay separate and settled cheques leave both open subtotals exactly once', async () => {
   await owner(); await db.query('UPDATE public.payable_titles SET due_date=$1', [today]); await db.exec("UPDATE public.payable_titles SET cheque_number='000123',source_status='ABERTO' WHERE entry_number IN('KEEP','MIXED')"); await actor();
   assert.equal((await scalar('SELECT public.payables_management_summary($1) r', [today])).cheques_week_count, 2);
-  const keep = await title('KEEP'); await scalar('SELECT public.register_payable_payment($1,$2,$3,$4,$5,$6,$7,$8) r', [keep.id, keep.amount_cents, today, bank, 'Pagamento efetivo sintético de um título do cheque compartilhado', keep.payment_revision, randomUUID(), keep.last_import_id]);
+  const keep = await title('KEEP'); await scalar('SELECT public.register_payable_payment($1,$2,$3,$4,$5,$6,$7,$8) r', [keep.id, keep.amount_cents, today, chequeBank, 'Pagamento efetivo sintético de um título do cheque compartilhado', keep.payment_revision, randomUUID(), keep.last_import_id]);
   const summary = await scalar('SELECT public.payables_management_summary($1) r', [today]), forecast = await scalar('SELECT public.payables_forecast() r');
   assert.equal(summary.planned_week_cents, 50000); assert.equal(summary.open_week_cents, 40000); assert.equal(summary.paid_week_cents, 10000);
   assert.equal(summary.cheques_week_cents, 10000); assert.equal(summary.cheques_week_count, 1);

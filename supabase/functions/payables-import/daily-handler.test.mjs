@@ -19,7 +19,7 @@ const NORMAL = 'NORMAL-001;Fornecedor sintético;20/10/2026;100,00;PLANO SINTETI
 const CHEQUE = 'CHEQUE-001;Fornecedor sintético;20/10/2026;50,00;PLANO SINTETICO;Filial sintética;01/10/2026;BANCO TESTE;CHEQUE;000123';
 const CSV = HEADER + '\r\n' + NORMAL + '\r\n';
 const encode = value => Buffer.from(value).toString('base64');
-const body = (extra = {}) => ({ action: 'preview', mode: 'daily', daily_report_version: '058', report_kind: 'NORMAL',
+const body = (extra = {}) => ({ action: 'preview', mode: 'daily', daily_report_version: '059', report_kind: 'NORMAL',
   file_name: 'relatorio-sintetico.csv', file_base64: encode(CSV), mappings: {}, bank_mappings: {}, resolution_choices: {}, ...extra });
 const commit = extra => body({ action: 'commit', complete: true, previous_import_id: null, previous_financial_revision: '17',
   expected_report_date: '2026-10-29', request_id: REQUEST, ...extra });
@@ -38,12 +38,12 @@ function setup(options = {}) {
       calls.push({ path, data, init });
       if (path === '/auth/v1/user') return json({ id: USER });
       if (path === '/rest/v1/rpc/current_access') return json({ profile: { id: USER, enabled: options.enabled ?? true }, permissions });
-      if (path === '/rest/v1/rpc/payables_import_capabilities') return json(options.capabilities ?? { daily_reports: true, daily_report_version: '058' }, options.capabilityStatus ?? 200);
+      if (path === '/rest/v1/rpc/payables_import_capabilities') return json(options.capabilities ?? { daily_reports: true, daily_report_version: '059', column_rules_version: '059' }, options.capabilityStatus ?? 200);
       if (path === '/rest/v1/rpc/preview_payables_daily_report') {
         assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`); assert.equal(init.headers.apikey, ANON);
         if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
         const rows = dailyReportSourceRows(data.p_rows, data.p_report_kind), baseline = data.p_report_kind === 'CHEQUES';
-        const preview = { mode: 'daily', daily_report_version: '058', report_kind: data.p_report_kind, report_date: '2026-10-29',
+        const preview = { mode: 'daily', daily_report_version: '059', report_kind: data.p_report_kind, report_date: '2026-10-29',
           empty_cheques_confirmed: data.p_empty_cheques_confirmed,
           previous_import_id: null, financial_revision: '17', rows, ignored_cheque_count: data.p_rows.length - rows.length,
           row_count: rows.length, new_count: rows.length, open_count: 0, changed_count: 0, baseline_only: baseline,
@@ -55,7 +55,7 @@ function setup(options = {}) {
         assert.equal(init.headers.Authorization, `Bearer ${SERVICE}`); assert.equal(init.headers.apikey, SERVICE);
         if (options.rpcError) return json(options.rpcError, options.rpcStatus ?? 400);
         const rows = dailyReportSourceRows(data.p_rows, data.p_report_kind);
-        const result = { mode: 'daily', daily_report_version: '058', report_kind: data.p_report_kind, report_date: data.p_expected_report_date,
+        const result = { mode: 'daily', daily_report_version: '059', report_kind: data.p_report_kind, report_date: data.p_expected_report_date,
           empty_cheques_confirmed: data.p_empty_cheques_confirmed,
           request_id: data.p_request_id, report_id: REPORT, import_id: IMPORT, row_count: rows.length, new_count: rows.length,
           open_count: 0, changed_count: 0, paid_count: 0, written_off_count: 0, automatic_paid_count: 0,
@@ -94,12 +94,12 @@ test('daily commit forwards only verified identity, raw-file integrity and froze
   assert.equal(call.data.p_rows[0].amount_cents, 10000);
 });
 
-test('normal global report forwards all preserved rows for server partition and proves excluded cheques', async () => {
+test('normal global report provisions every source row including cheques without advancing the cheque channel', async () => {
   const app = setup(), response = await app.send(body({ file_base64: encode(HEADER + '\r\n' + NORMAL + '\r\n' + CHEQUE) }));
   assert.equal(response.status, 200); const value = await response.json();
   assert.equal(app.calls.at(-1).data.p_rows.length, 2);
-  assert.equal(value.rows.length, 1); assert.equal(value.rows[0].entry_number, 'NORMAL-001');
-  assert.equal(value.preview.ignored_cheque_count, 1);
+  assert.equal(value.rows.length, 2); assert.equal(value.rows[0].entry_number, 'NORMAL-001');
+  assert.equal(value.rows[1].cheque_number, '000123'); assert.equal(value.preview.ignored_cheque_count, 0);
 });
 
 test('explicit cheque report gets separate initial baseline without invoking common forecast settlement', async () => {
@@ -111,8 +111,7 @@ test('explicit cheque report gets separate initial baseline without invoking com
 });
 
 test('wrong or empty source partition is blocked before querying any financial report', async () => {
-  for (const input of [body({ file_base64: encode(HEADER + '\r\n' + CHEQUE) }),
-    body({ report_kind: 'CHEQUES' }), body({ report_kind: 'CHEQUES', file_base64: encode(HEADER + '\r\n' + NORMAL + '\r\n' + CHEQUE) }),
+  for (const input of [body({ report_kind: 'CHEQUES' }), body({ report_kind: 'CHEQUES', file_base64: encode(HEADER + '\r\n' + NORMAL + '\r\n' + CHEQUE) }),
     body({ file_base64: encode(HEADER) })]) {
     const app = setup(), response = await app.send(input);
     assert.equal(response.status, 422); assert.equal(app.calls.length, 2);
@@ -158,7 +157,7 @@ test('a confirmed zero-cheque position can settle every preceding cheque without
     bank_label: 'BANCO TESTE', cheque_number: '000009', rule: 'IMPORT_DATE' };
   const app = setup({ preview: value => ({ ...value, baseline_only: false, baseline_origin: 'PREVIOUS_REPORT',
     missing_count: 1, auto_payment_count: 1, auto_payment_cents: 5000, automatic_actions: [automatic],
-    bank_options: [{ id: BANK, display_name: 'BANCO TESTE' }] }) });
+    bank_options: [{ id: BANK, display_name: 'BRADESCO F2G', account_type: 'BANK' }] }) });
   const response = await app.send(body({ report_kind: 'CHEQUES', empty_cheques_confirmed: true, file_base64: encode(HEADER) }));
   assert.equal(response.status, 200); const value = await response.json();
   assert.equal(value.preview.missing_count, 1); assert.equal(value.preview.auto_payment_cents, 5000); assert.deepEqual(value.rows, []);
@@ -212,7 +211,7 @@ test('missing daily SQL or RPC returns explicit activation notice without fallin
     { rpcError: { code: '42883', message: 'private schema' }, rpcStatus: 404 }]) {
     const app = setup(options), response = await app.send();
     assert.equal(response.status, 409); const value = await response.json();
-    assert.equal(value.code, 'P0058'); assert.equal(value.activation_required, true);
+    assert.equal(value.code, 'P0059'); assert.equal(value.activation_required, true);
     assert(!JSON.stringify(value).includes('private schema'));
     assert(app.calls.every(call => !/forecast|commit_/.test(call.path)));
   }

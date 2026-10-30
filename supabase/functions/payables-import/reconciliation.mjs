@@ -1,4 +1,4 @@
-import { isInternalCashBank } from '../../../src/lib/payable-bank-rules.mjs';
+import { isInternalCashBank, normalizePaidBankDescription } from '../../../src/lib/payable-bank-rules.mjs';
 
 const UUID = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i;
 const ROW_KEY = /^row:([1-9]\d{0,3})$/;
@@ -29,12 +29,30 @@ export function validResolutionChoices(value, rowCount = 5000) {
       && Number.isSafeInteger(choice.amount_paid_cents) && choice.amount_paid_cents > 0 && typeof choice.bank_account_id === 'string' && UUID.test(choice.bank_account_id);
   });
 }
-export function validReconciliationPreview(preview, { rowCount, mode, fullReport, sourceRows, resolutionChoices = {}, bankRulesVersion } = {}) {
+export function validColumnRulesPaidPreview(preview, sourceRows) {
+  if (!object(preview) || preview.column_rules_version !== '059' || !Array.isArray(sourceRows)
+    || !Array.isArray(preview.rows) || preview.rows.length !== sourceRows.length || !Array.isArray(preview.bank_options)
+    || !(preview.cheque_payment_bank_id === null || typeof preview.cheque_payment_bank_id === 'string' && UUID.test(preview.cheque_payment_bank_id))) return false;
+  const canonical = preview.bank_options.filter(bank => object(bank) && bank.account_type === 'BANK' && normalizePaidBankDescription(bank.display_name) === 'BRADESCO F2G');
+  if (preview.cheque_payment_bank_id !== (canonical.length === 1 ? canonical[0].id : null)) return false;
+  return preview.rows.every((row, index) => {
+    const source = sourceRows[index];
+    if (!object(row) || !['CHEQUE_F2G', 'SOURCE_BANK'].includes(row.payment_bank_rule)
+      || typeof source.cheque_number === 'string' && source.cheque_number.trim() && row.cheque_number !== source.cheque_number
+      || typeof source.cheque_number === 'string' && source.cheque_number.trim() && row.payment_bank_rule !== 'CHEQUE_F2G') return false;
+    if (row.payment_bank_rule !== 'CHEQUE_F2G' || row.amount_paid_cents === 1) return true;
+    if (row.bank_account_id === null) return !preview.can_commit && !['NEW_PAYMENT', 'MATCHED', 'CORRECTION'].includes(row.outcome);
+    return row.bank_account_id === preview.cheque_payment_bank_id && canonical.length === 1;
+  });
+}
+export function validReconciliationPreview(preview, { rowCount, mode, fullReport, sourceRows, resolutionChoices = {}, bankRulesVersion, columnRulesVersion } = {}) {
   const internalCashAllowed = bankRulesVersion === '050' && mode === 'payments';
+  const columnRules = columnRulesVersion === '059' && internalCashAllowed;
+  if (columnRulesVersion !== undefined && !columnRules || columnRules && !validColumnRulesPaidPreview(preview, sourceRows)) return false;
   if (bankRulesVersion !== undefined && !internalCashAllowed) return false;
   if (internalCashAllowed && (!Array.isArray(sourceRows) || sourceRows.length !== rowCount || sourceRows.some(row => !row
     || !Number.isSafeInteger(row.amount_paid_cents) || row.amount_paid_cents <= 0 || !text(row.paid_bank, 300)
-    || (isInternalCashBank(row.paid_bank) ? row.paid_on !== null : !validReconciliationDate(row.paid_on))))) return false;
+    || (isInternalCashBank(row.paid_bank) ? columnRules ? row.paid_on !== null && !validReconciliationDate(row.paid_on) : row.paid_on !== null : !validReconciliationDate(row.paid_on))))) return false;
   if (!object(preview) || preview.reconciliation_version !== '043' || preview.row_count !== rowCount || preview.mode !== mode
     || !text(preview.financial_revision, 256) || preview.financial_revision !== preview.financial_revision.trim()
     || typeof preview.can_commit !== 'boolean' || !Array.isArray(preview.reconciliation_items) || preview.reconciliation_items.length > 15000
@@ -67,7 +85,7 @@ export function validReconciliationPreview(preview, { rowCount, mode, fullReport
       const row = sourceRows[item.line - 1];
       if (!row || identity(item.branch) !== identity(row.branch) || identity(item.entry_number) !== identity(row.entry_number)
         || item.kind === 'CENT' && (mode === 'payments' ? row.amount_paid_cents : row.amount_cents) !== 1
-        || item.kind === 'INTERNAL_CASH' && (!isInternalCashBank(row.paid_bank) || row.amount_paid_cents === 1
+        || item.kind === 'INTERNAL_CASH' && (!isInternalCashBank(row.paid_bank) || columnRules && preview.rows[item.line - 1]?.payment_bank_rule === 'CHEQUE_F2G' || row.amount_paid_cents === 1
           || item.source_amount_cents !== row.amount_paid_cents)) return false;
       if (internalCashAllowed && ['CENT', 'INTERNAL_CASH'].includes(item.kind)
         && (item.source_amount_cents !== row.amount_paid_cents || item.title_id !== null
@@ -78,7 +96,7 @@ export function validReconciliationPreview(preview, { rowCount, mode, fullReport
   }
   if (Array.isArray(sourceRows) && sourceRows.some((row, index) => {
     const cent = (mode === 'payments' ? row.amount_paid_cents : row.amount_cents) === 1;
-    const cash = internalCashAllowed && isInternalCashBank(row.paid_bank);
+    const cash = internalCashAllowed && isInternalCashBank(row.paid_bank) && !(columnRules && preview.rows[index]?.payment_bank_rule === 'CHEQUE_F2G');
     return (cent || cash) && !preview.reconciliation_items.some(item => item.key === `row:${index + 1}` && item.kind === (cent ? 'CENT' : 'INTERNAL_CASH'));
   })) return false;
   if (preview.can_commit && Object.keys(resolutionChoices).some(key => !keys.has(key))) return false;

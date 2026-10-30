@@ -7,7 +7,7 @@ export function resolvePaidBankMappings(rows, mappings = {}) {
   const result = { ...mappings }, resolved = new Map();
   let changed = false;
   for (const row of rows) {
-    if (row.amount_paid_cents === 1 || isInternalCashBank(row.paid_bank) || row.bank_account_id === null) continue;
+    if (row.amount_paid_cents === 1 || row.payment_bank_rule === 'CHEQUE_F2G' || isInternalCashBank(row.paid_bank) || row.bank_account_id === null) continue;
     if (typeof row.bank_mapping_key !== 'string' || !row.bank_mapping_key || row.bank_mapping_key.length > 1000
       || typeof row.bank_account_id !== 'string' || !uuid.test(row.bank_account_id)) throw new Error('invalid-bank-plan');
     const previous = resolved.get(row.bank_mapping_key);

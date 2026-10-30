@@ -64,6 +64,7 @@ async function seed() {
   await db.exec(await file('056_receivable_receipt_reversal.sql'));
   await db.exec(await file('057_receivable_return_approval.sql'));
   await db.exec(await file('058_payable_daily_reports.sql'));
+  await db.exec(await file('059_payable_column_rules.sql'));
   await db.query('INSERT INTO cf_private.payable_paid_bank_aliases(source_key,official_bank_name) VALUES($1,$2)', [paidBankAlias.source_key, paidBankAlias.official_bank_name]);
   ({ today, older, month } = (await db.query("SELECT d::text today,(d-90)::text older,date_trunc('month',d)::date::text AS \"month\" FROM(SELECT(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date d)s")).rows[0]);
   await db.query('INSERT INTO public.collection_agents(id,display_name) VALUES($1,$2)', [id(101), 'Responsável sintética de preparação']);

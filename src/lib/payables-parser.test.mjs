@@ -495,3 +495,40 @@ test('a dispensa administrativa não relaxa fórmulas nem a data efetiva de banc
     assert.equal(future.errors[0].problem, 'A data do pagamento é futura.');
   }
 });
+
+test('forecast identity is filial plus lançamento even when value, due date, case or whitespace changes', () => {
+  const first = ['  ab-001  ', 'Descrição parcela 1/2', '16/10/2026', '100,00', 'PLANO', ' Filial  4 '];
+  const changed = ['AB-001', 'Descrição parcela 1/2 alterada', '20/11/2026', '150,00', 'OUTRO PLANO', 'filial 4'];
+  const duplicate = validatePayableRows([header, first, changed]);
+  assert.deepEqual(duplicate.rows, []); assert.equal(duplicate.errors[0].line, 3);
+  assert.match(duplicate.errors[0].correction, /Valor e vencimento atualizam o mesmo título/);
+  assert.deepEqual(validatePayableRows([header, changed]).errors, []);
+  assert.deepEqual(validatePayableRows([header, first, [...changed.slice(0, 5), 'Filial 5']]).errors, []);
+  assert.deepEqual(validatePayableRows([header, first, ['AB-002', ...changed.slice(1)]]).errors, []);
+});
+test('059 numbered cash cheques preserve actual date and original bank while cent writeoffs remain nonfinancial', () => {
+  const columns = ['Lançamento', 'Filial', 'Emissão: valor do lançamento', 'Plano cc - Conta: nome', 'Quitação: data do pagamento', 'Cheque: número'];
+  const values = ['1', '4', '125,90', 'CAIXA INTERNO', '20/10/2026', '000123'];
+  const options = { allowInternalCashWriteoff: true, columnRulesVersion: '059', today: '2026-10-27' };
+  const result = validatePayablePaidRows([columns, values], options);
+  assert.deepEqual(result.errors, []); assert.equal(result.rows[0].paid_on, '2026-10-20');
+  assert.equal(result.rows[0].paid_bank, 'CAIXA INTERNO'); assert.equal(result.rows[0].cheque_number, '000123');
+  assert.equal(validatePayablePaidRows([columns, values], { allowInternalCashWriteoff: true }).rows[0].paid_on, null);
+  assert.ok(validatePayablePaidRows([columns, [...values.slice(0, 4), '', '000123']], options).errors.length);
+  assert.ok(validatePayablePaidRows([columns, [...values.slice(0, 4), '30/10/2026', '000123']], options).errors.length);
+  for (const date of ['20/10/2026', '30/10/2026', '']) {
+    const cleared = validatePayablePaidRows([columns, ['1', '4', '125,90', 'CAIXA INTERNO', date, '']], options);
+    assert.deepEqual(cleared.errors, []); assert.equal(cleared.rows[0].paid_on, null); assert.equal(cleared.rows[0].cheque_number, '');
+  }
+  const cent = validatePayablePaidRows([columns, ['1', '4', '0,01', 'CAIXA INTERNO', '', '000123']], options);
+  assert.deepEqual(cent.errors, []); assert.equal(cent.rows[0].paid_on, null);
+});
+test('059 preserves a supplied cash date for existing-cheque lookup without requiring fabricated dates for genuine cash writeoffs', () => {
+  const columns = ['Lançamento', 'Filial', 'Valor', 'Banco', 'Quitação: data do pagamento'];
+  const options = { allowInternalCashWriteoff: true, columnRulesVersion: '059', today: '2026-10-27' };
+  for (const [source, expected] of [['20/10/2026', '2026-10-20'], ['30/10/2026', '2026-10-30'], ['', null]]) {
+    const result = validatePayablePaidRows([columns, ['1', '4', '125,90', 'CAIXA INTERNO', source]], options);
+    assert.deepEqual(result.errors, []); assert.equal(result.rows[0].paid_on, expected);
+  }
+  for (const date of ['31/02/2026', '=1+1']) assert.ok(validatePayablePaidRows([columns, ['1', '4', '125,90', 'CAIXA INTERNO', date]], options).errors.length);
+});

@@ -15,3 +15,10 @@ test('a conflicting official result or mismatched manual account cannot replace 
   assert.throws(() => resolvePaidBankMappings([row()], { 'chave-sintetica': other }), /conflicting-bank-plan/);
   assert.throws(() => resolvePaidBankMappings([row({ bank_account_id: 'invalid' })]), /invalid-bank-plan/);
 });
+
+test('a fixed cheque bank never teaches a raw source-bank alias to ordinary payments', () => {
+  const cheque = row({ payment_bank_rule: 'CHEQUE_F2G', bank_account_id: other });
+  assert.deepEqual(resolvePaidBankMappings([cheque]), { mappings: {}, changed: false });
+  assert.deepEqual(resolvePaidBankMappings([row(), cheque]), { mappings: { 'chave-sintetica': id }, changed: true });
+  assert.deepEqual(resolvePaidBankMappings([cheque], { 'chave-sintetica': id }), { mappings: { 'chave-sintetica': id }, changed: false });
+});

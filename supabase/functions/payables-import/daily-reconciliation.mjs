@@ -1,3 +1,4 @@
+import { normalizePaidBankDescription } from '../../../src/lib/payable-bank-rules.mjs';
 import { validReconciliationDate, validResolutionChoices, validResolutionKey } from './reconciliation.mjs';
 
 const UUID = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i;
@@ -9,13 +10,13 @@ const count = value => Number.isSafeInteger(value) && value >= 0;
 const mapping = (value, max, keyMax, validValue) => object(value) && Object.keys(value).length <= max
   && Object.entries(value).every(([key, item]) => text(key, keyMax) && validValue(item));
 
-export const DAILY_REPORT_VERSION = '058';
+export const DAILY_REPORT_VERSION = '059';
 export function isDailyCheque(row) {
   return String(row.source_status ?? '').trim().toUpperCase() === 'CHEQUE'
     || typeof row.cheque_number === 'string' && row.cheque_number.trim() !== '';
 }
 export function dailyReportSourceRows(rows, kind) {
-  return rows.filter(row => kind === 'CHEQUES' ? isDailyCheque(row) : !isDailyCheque(row));
+  return kind === 'CHEQUES' ? rows.filter(isDailyCheque) : rows;
 }
 export function validDailyRequest(body) {
   const fields = ['action', 'mode', 'daily_report_version', 'report_kind', 'file_name', 'file_base64', 'mappings', 'bank_mappings',
@@ -87,6 +88,7 @@ export function validDailyPreview(preview, { sourceRows, reportKind, resolutionC
       if (item.title_id !== null && titleIds.has(item.title_id)) return false;
       if (item.kind === 'MISSING') {
         if (item.line !== null || !uuid(item.title_id) || item.key !== `title:${item.title_id}`) return false;
+        if (reportKind === 'NORMAL' && typeof item.cheque_number === 'string' && item.cheque_number.trim()) return false;
         missing++;
       } else if (item.line === null) return false;
       if (item.kind === 'CENT' && (item.key !== `row:${item.line}` || filtered[item.line - 1].amount_cents !== 1
@@ -113,6 +115,11 @@ export function validDailyPreview(preview, { sourceRows, reportKind, resolutionC
         if (preview.can_commit && (item.problem !== null || !choice
           || choice.action === 'PAID' && (choice.paid_on !== item.paid_on || choice.amount_paid_cents !== item.payment_remaining_cents
             || choice.bank_account_id !== item.bank_account_id || !banks.has(item.bank_account_id) || item.paid_on > preview.report_date))) return false;
+      }
+      if (item.amount_cents !== 1 && typeof item.cheque_number === 'string' && item.cheque_number.trim()
+        && item.selected_action === 'PAID' && item.problem === null) {
+        const official = preview.bank_options.filter(bank => bank.account_type === 'BANK' && normalizePaidBankDescription(bank.display_name) === 'BRADESCO F2G');
+        if (official.length !== 1 || official[0].id !== item.bank_account_id) return false;
       }
       keys.add(item.key);
       if (item.title_id !== null) titleIds.add(item.title_id);

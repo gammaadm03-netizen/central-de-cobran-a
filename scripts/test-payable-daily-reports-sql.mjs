@@ -4,7 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { PGlite } from '@electric-sql/pglite';
-import { buildPayableDailyReportsSql } from './bundle-payable-daily-reports.mjs';
+import { buildPayableColumnRulesSql } from './bundle-payable-column-rules.mjs';
 import { validDailyPreview, validDailyCommit } from '../supabase/functions/payables-import/daily-reconciliation.mjs';
 
 // Disposable local PostgreSQL; every customer, report, account and amount is synthetic.
@@ -52,7 +52,7 @@ async function commit(request, index = 0) {
     const result = await scalar('SELECT public.commit_payables_daily_report_from_gateway($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14::date,$15,$16) r', [ids[index], sessions[index], scope, request.original.name, request.original.sha, request.original.base64, JSON.stringify(request.rows), request.kind, JSON.stringify(request.mappings), JSON.stringify(request.banks), JSON.stringify(request.choices), request.previous, request.financial, request.date, request.request, request.empty ?? false]);
     const guardRequest = { report_kind: request.kind, expected_report_date: request.date, request_id: request.request, ...(request.kind === 'CHEQUES' ? { empty_cheques_confirmed: request.empty ?? false } : {}) };
     assert.equal(validDailyCommit(result, { sourceRows: request.rows, request: guardRequest }), true, 'Actual SQL result must satisfy the gateway contract: ' + JSON.stringify(result));
-    const expectedRows = request.rows.filter(item => request.kind === 'CHEQUES' || !(String(item.source_status).trim().toUpperCase() === 'CHEQUE' || item.cheque_number?.trim()));
+    const expectedRows = request.rows;
     assert.equal(validDailyResult(result, guardRequest, expectedRows.length), true, 'Actual SQL result must satisfy the browser contract: ' + JSON.stringify(result));
     return result;
   } finally { await actor(); }
@@ -89,10 +89,10 @@ try {
   await actor();
   for (const name of ['042_payable_administrative_writeoff.sql', '043_payable_import_reconciliation.sql', '050_paid_bank_rules.sql']) { await owner(); await db.exec(await source(name)); await actor(); }
   await owner(); await db.query('INSERT INTO cf_private.payable_paid_bank_aliases(source_key,official_bank_name) VALUES(cf_private.payable_paid_bank_text_key($1),$2)', [alias, bankLabel]); await actor();
-  const beforeInstall = await state(); await owner(); await db.exec(await source('058_payable_daily_reports.sql')); await actor();
-  await test('058 installation does not change titles, payments, balances, roles or original reports', async () => {
+  const beforeInstall = await state(); await owner(); await db.exec(await source('058_payable_daily_reports.sql')); await db.exec(await source('059_payable_column_rules.sql')); await actor();
+  await test('058/059 installation does not change titles, payments, balances, roles or original reports', async () => {
     const after = await state(); for (const name of Object.keys(beforeInstall)) assert.deepEqual(after[name], beforeInstall[name], name);
-    const capabilities = await scalar('SELECT public.payables_import_capabilities() r'); assert.equal(capabilities.daily_report_version, '058');
+    const capabilities = await scalar('SELECT public.payables_import_capabilities() r'); assert.equal(capabilities.daily_report_version, '059');
   });
   await test('an explicitly empty first CHEQUES report establishes only its own baseline without fake titles or legacy payments', async () => {
     const before = await state(); await owner(); await db.exec('BEGIN');
@@ -112,16 +112,16 @@ try {
     await actor(); assert.deepEqual(await state(), before);
   });
   let normalRequest, normalResult;
-  await test('first NORMAL adopts existing ordinary positions and ignores cheques before automatic due-date settlement', async () => {
+  await test('first NORMAL updates ordinary and cheque source rows and settles only absent ordinary titles', async () => {
     const rows = [row('NORMAL-KEEP'), cheque('LEGACY-CHEQUE', 45000)], before = await state(), p = await preview(rows);
-    assert.equal(p.daily_report_version, '058'); assert.equal(p.report_date, today); assert.equal(p.report_kind, 'NORMAL');
-    assert.equal(p.ignored_cheque_count, 1); assert.equal(p.row_count, 1); assert.equal(p.missing_count, 2); assert.equal(p.auto_payment_count, 1); assert.equal(p.auto_payment_cents, 30000); assert.equal(p.can_commit, false);
+    assert.equal(p.daily_report_version, '059'); assert.equal(p.report_date, today); assert.equal(p.report_kind, 'NORMAL');
+    assert.equal(p.ignored_cheque_count, 0); assert.equal(p.row_count, 2); assert.equal(p.missing_count, 2); assert.equal(p.auto_payment_count, 1); assert.equal(p.auto_payment_cents, 30000); assert.equal(p.can_commit, false);
     assert.deepEqual(await state(), before);
     await reject(commit(await frozen(rows)), 'P0058'); assert.deepEqual(await state(), before);
     const cent = await title('LEGACY-MISSING-CENT'), choices = { ['title:' + cent.id]: { action: 'WRITE_OFF', reason: 'Baixa individual do marcador de um centavo ausente' } };
     assert.equal((await preview(rows, 'NORMAL', choices)).can_commit, true);
     normalRequest = await frozen(rows, 'NORMAL', choices); normalResult = await commit(normalRequest, 1);
-    assert.equal(normalResult.daily_report_version, '058'); assert.equal(normalResult.paid_count, 1); assert.equal(normalResult.written_off_count, 1);
+    assert.equal(normalResult.daily_report_version, '059'); assert.equal(normalResult.paid_count, 1); assert.equal(normalResult.written_off_count, 1);
     const missing = await title('NORMAL-MISSING'); assert.equal(missing.financial_status, 'PAID'); assert.equal(missing.review_status, 'CONCILIADO'); assert.equal(dateText(missing.last_payment_date), yesterday);
     assert.equal((await title('LEGACY-CHEQUE')).paid_cents, 0); assert.equal((await title('NORMAL-KEEP')).paid_cents, 0);
     const summary = await scalar('SELECT public.payable_payment_summary($1,$1) r', [yesterday]); assert.equal(summary.total_paid_cents, 30000);
@@ -151,7 +151,7 @@ try {
     await reject(commit(await frozen(chequeSeedRequest.rows, 'CHEQUES', {}, { original: chequeSeedRequest.original })), '23505');
   });
   await test('cheque classification requires an explicit status or number and a wrong or empty report never closes a channel', async () => {
-    const before = await state(); await reject(preview([row('WRONG-CHANNEL')], 'CHEQUES'), '22023'); await reject(preview([], 'CHEQUES'), '22023'); await reject(preview([], 'NORMAL'), '22023'); await reject(preview([cheque('ONLY-CHEQUES')], 'NORMAL'), '22023');
+    const before = await state(); await reject(preview([row('WRONG-CHANNEL')], 'CHEQUES'), '22023'); await reject(preview([], 'CHEQUES'), '22023'); await reject(preview([], 'NORMAL'), '22023'); const allCheques = await preview([cheque('ONLY-CHEQUES')], 'NORMAL'); assert.equal(allCheques.row_count, 1); assert.equal(allCheques.ignored_cheque_count, 0);
     await reject(preview([row('INVALID-KIND')], 'OUTRO'), '22023'); assert.deepEqual(await state(), before);
   });
   await test('empty confirmation is valid only for zero CHEQUES rows and cannot authorize another report shape', async () => {
@@ -249,10 +249,10 @@ try {
     try { await reject(commit(request), '40001'); } finally { await owner(); await db.query('UPDATE cf_private.payable_paid_bank_aliases SET official_bank_name=$2 WHERE source_key=cf_private.payable_paid_bank_text_key($1)', [alias, bankLabel]); await actor(); }
     assert.deepEqual(await state(), before);
   });
-  await test('an ordinary title listed explicitly as a cheque is excluded without being treated as absent or paid', async () => {
+  await test('an ordinary title listed explicitly as a cheque is provisioned without being treated as absent or paid', async () => {
     const rows = await normalRows(), target = rows.find(item => item.entry_number === 'NORMAL-KEEP'), before = await state(); assert(target);
     const mixed = rows.map(item => item.entry_number === target.entry_number ? { ...item, source_status: 'CHEQUE', cheque_number: '0000042' } : item), p = await preview(mixed);
-    assert.equal(p.ignored_cheque_count, 1); assert.equal(p.missing_count, 0); assert.equal(p.can_commit, true); assert(!p.automatic_actions.some(item => item.entry_number === target.entry_number));
+    assert.equal(p.ignored_cheque_count, 0); assert.equal(p.missing_count, 0); assert.equal(p.can_commit, true); assert(!p.automatic_actions.some(item => item.entry_number === target.entry_number));
     assert.deepEqual(await state(), before); assert.equal((await title(target.entry_number)).paid_cents, 0);
   });
   await test('an unchanged legacy partial payment remains registered and a changed financial source requires review', async () => {
@@ -328,7 +328,7 @@ try {
     await reject(commit(stale), '40001'); assert.deepEqual(await state(), after);
   });
   await test('standalone installer is byte exact and repeated activation preserves daily and financial history', async () => {
-    const sql = await buildPayableDailyReportsSql(); assert.equal(await readFile(new URL('../supabase/dashboard/ativar-conciliacao-diaria-contas-pagar.sql', import.meta.url), 'utf8'), sql);
+    const sql = await buildPayableColumnRulesSql(); assert.equal(await readFile(new URL('../supabase/dashboard/ativar-colunas-contas-pagar.sql', import.meta.url), 'utf8'), sql);
     const before = await state(); await owner(); await db.exec(sql); await actor(); assert.deepEqual(await state(), before);
   });
   console.log(`${passed} passed (daily payable reports, synthetic local PostgreSQL)`);

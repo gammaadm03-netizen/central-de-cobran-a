@@ -11,8 +11,8 @@ const bankRulesVersion = '050';
 const uuid = (value: number) => `76000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const bankLabels = ['BRADESCO ECOPLAST', 'BRADESCO LIMPE FACIL', 'BRADESCO GAMMA IND', 'BRADESCO F2G', 'BRADESCO FAST CLEAN', 'BRADESCO EASY CLEAN', 'BANCO DO BRASIL FAST CLEAN', 'BANCO DO BRASIL EASY CLEAN', 'BANCO DO BRASIL ECOPLAST', 'BANCO CORA LIMPE FACIL', 'BANCO CORA MY CLEAN', 'BANCO CORA ECO PLAST', 'CAIXA ECOPLAST', 'CAIXA LIMPE FACIL', 'CAIXA GAMMA', 'CAIXA FAST CLEAN', 'CAIXA EASY CLEAN'];
 const headers = ['Filial', 'Lançamento', 'Situação', 'Vencimento: data', 'Emissão: valor do lançamento', 'Plano cc - Conta: nome', 'Cheque: número', 'Histórico', 'Plano cp - Conta: nome', 'Emissão: data'];
-const csv = `${headers.join(';')}\r\n3;14;PAGO;17/10/2026 23:59:59;200,00;BANCO ERP PAGO;000123;Fornecedor pago sintético;ENERGIA;01/10/2026 10:15:00`;
-interface Options { director?: boolean; knownBank?: boolean; newPlan?: boolean; conflict?: boolean; correction?: boolean; stale?: boolean; uncertain?: boolean; commitBeforeError?: boolean; badHash?: boolean; financialRevision?: unknown; unknownCent?: boolean; staleChoice?: boolean; oldProtocol?: boolean; holdPreview?: () => Promise<void>; serverToday?: string; missingPaymentDateVersion?: boolean; dateReviewRequired?: boolean; missingBankRulesVersion?: boolean; bankRulesUnavailable?: boolean; conflictingBankIds?: boolean; changeFreezeRevision?: boolean }
+const csv = `${headers.join(';')}\r\n3;14;PAGO;17/10/2026 23:59:59;200,00;BANCO ERP PAGO;;Fornecedor pago sintético;ENERGIA;01/10/2026 10:15:00`;
+interface Options { director?: boolean; knownBank?: boolean; newPlan?: boolean; conflict?: boolean; correction?: boolean; stale?: boolean; uncertain?: boolean; commitBeforeError?: boolean; badHash?: boolean; financialRevision?: unknown; unknownCent?: boolean; staleChoice?: boolean; oldProtocol?: boolean; holdPreview?: () => Promise<void>; serverToday?: string; missingPaymentDateVersion?: boolean; dateReviewRequired?: boolean; missingBankRulesVersion?: boolean; bankRulesUnavailable?: boolean; conflictingBankIds?: boolean; changeFreezeRevision?: boolean; existingTitleCheque?: boolean; missingColumnRules?: boolean; missingChequeBank?: boolean; badChequeBank?: boolean }
 
 async function parseOriginal(body: any, today = '2026-10-18') {
   const bytes = Buffer.from(body.file_base64, 'base64'); let matrix: unknown[][];
@@ -23,7 +23,7 @@ async function parseOriginal(body: any, today = '2026-10-18') {
     sheet.getRow(1).eachCell((cell, column) => { if (isChequeNumberHeader(cell.value)) chequeColumns.push(column); });
     matrix = []; for (let index=1;index<=sheet.rowCount;index++) { const row=sheet.getRow(index),values=(row.values as unknown[]).slice(1); if (index > 1) for (const column of chequeColumns) values[column - 1] = readPayableChequeCell(row.getCell(column).value, row.getCell(column).numFmt); matrix.push(values); }
   }
-  const parsed = validatePayablePaidRows(matrix, { excel1904: false, today, allowInternalCashWriteoff: body.bank_rules_version === bankRulesVersion });
+  const parsed = validatePayablePaidRows(matrix, { excel1904: false, today, allowInternalCashWriteoff: body.bank_rules_version === bankRulesVersion, columnRulesVersion: body.column_rules_version });
   return { ...parsed, hash: createHash('sha256').update(bytes).digest('hex') };
 }
 async function setup(page: Page, options: Options = {}) {
@@ -33,7 +33,7 @@ async function setup(page: Page, options: Options = {}) {
   if (!options.director) permissions.push({ resource: 'contas_pagar', action: 'import' }, { resource: 'contas_pagar', action: 'write' });
   const access = { profile: { id, username: 'ImportadorTeste', display_name: 'Pessoa de Teste', role_key: role, enabled: true }, permissions, collector_id: null };
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify({ sub: id, session_id: uuid(2), exp: Math.floor(now.getTime() / 1000) + 3600, role: 'authenticated' })).toString('base64url'), 'synthetic-test-only'].join('.');
-  const accounts = bankLabels.map((label, index) => ({ id: uuid(100 + index), display_name: label, company: 'Empresa de Teste', bank: label, account_type: index < 12 ? 'BANK' : 'CASH' }));
+  const accounts = bankLabels.map((label, index) => ({ id: uuid(100 + index), display_name: label, company: 'Empresa de Teste', bank: label, account_type: index < 12 ? 'BANK' : 'CASH' })).filter(account => !options.missingChequeBank || account.display_name !== 'BRADESCO F2G');
   const calls: { name: string; body: any }[] = []; const previews: any[] = [], commits: any[] = [];
   let committed = false, ledgerCount = 0, writeoffLedgerCount = 0; const paidRequests = new Map<string, { body: any; result: any }>(); let storedBanks: Record<string, string> = {}, storedPlans: Record<string, string> = {};
   await page.route(`${project}/**`, async route => {
@@ -55,19 +55,20 @@ async function setup(page: Page, options: Options = {}) {
     if (['payable_review_titles', 'payable_financial_titles'].includes(name)) return reply({ code: 'PGRST205' }, 404);
     if (name === 'get_payable_payment_accounts') return reply(accounts);
     if (name === 'payables-import') {
-      expect(body.mode).toBe('payments'); expect(body.payment_date_version).toBe(paymentDateVersion); expect(body.bank_rules_version).toBe(bankRulesVersion);
+      expect(body.mode).toBe('payments'); expect(body.payment_date_version).toBe(paymentDateVersion); expect(body.bank_rules_version).toBe(bankRulesVersion); expect(body.column_rules_version).toBe('059');
       if (options.bankRulesUnavailable) return reply({code:'P0050',activation_required:true,error:'private SQL query secret'},409);
       const parsed = await parseOriginal(body,options.serverToday); if (parsed.errors.length) return reply({ code: parsed.errors.some(error=>error.problem==='A data do pagamento é futura.')?'SOURCE_VALIDATION_FAILED':'INVALID_FILE', errors: parsed.errors }, 422);
       expect(body.reconciliation_version).toBe('043'); expect(body.resolution_choices).toBeDefined();
       const rows: any[] = [], banks: any[] = [], plans: any[] = [], errors: any[] = [], items: any[] = [], resolutionErrors: any[] = [];
       let newCount = 0, matched = 0, corrections = 0, conflicts = 0, writeoffs = 0;
       for (const [index, row] of parsed.rows.entries()) {
-        const key = JSON.stringify(['source-bank', row.branch, row.paid_bank]), cent = row.amount_paid_cents === 1, internalCash = isInternalCashBank(row.paid_bank), administrative = cent || internalCash;
+        const key = JSON.stringify(['source-bank', row.branch, row.paid_bank]), cent = row.amount_paid_cents === 1, numberedCheque = !!row.cheque_number?.trim() || !!options.existingTitleCheque, internalCash = isInternalCashBank(row.paid_bank) && !numberedCheque, administrative = cent || internalCash;
+        const chequeAccount = accounts.find(account => account.display_name === 'BRADESCO F2G');
         const approvedName=officialPaidBankName(row.paid_bank,approvedBankAliases.map(([source,official_name])=>({source,official_name}))),officialAccount=accounts.find(account=>account.account_type==='BANK'&&account.display_name===approvedName);
         const resolutionKey = `row:${index + 1}`, selected = body.resolution_choices?.[resolutionKey];
-        const bankId = administrative ? null : options.conflictingBankIds&&index>0?accounts[1].id:officialAccount?.id ?? body.bank_mappings?.[key] ?? storedBanks[key] ?? (options.knownBank ? accounts[0].id : null);
+        const bankId = administrative ? null : numberedCheque ? options.badChequeBank ? accounts[0].id : chequeAccount?.id ?? null : options.conflictingBankIds&&index>0?accounts[1].id:officialAccount?.id ?? body.bank_mappings?.[key] ?? storedBanks[key] ?? (options.knownBank ? accounts[0].id : null);
         const classified = administrative || !options.newPlan || !!body.mappings?.[row.plan] || !!storedPlans[row.plan];
-        if (!administrative && !bankId) banks.push({ key, branch: row.branch, paid_bank: row.paid_bank, count: 1 });
+        if (!administrative && !bankId) banks.push({ key, branch: row.branch, paid_bank: row.paid_bank, count: 1, ...(numberedCheque ? { official_bank_name: 'BRADESCO F2G' } : {}) });
         if (!classified) { plans.push({ plan: row.plan, count: 1, total_cents: row.amount_paid_cents }); errors.push({ line: index + 2, column: 'Plano de Contas', problem: 'Plano novo sem Centro de Custo Macro.', correction: 'Escolha o Macro do plano e reanalise este arquivo.' }); }
         let outcome = !bankId ? 'UNMAPPED_BANK' : !classified || options.conflict ? 'CONFLICT' : committed ? 'MATCHED' : options.correction ? 'CORRECTION' : 'NEW_PAYMENT';
         let problem = options.conflict ? 'Pagamento manual divergente.' : '';
@@ -83,11 +84,11 @@ async function setup(page: Page, options: Options = {}) {
           if (problem) { const error = { line: index + 2, column: 'Baixa sem pagamento', problem, correction: unknown ? 'Importe primeiro a previsão original.' : 'Confirme esta baixa individual e reanalise o arquivo.' }; errors.push(error); resolutionErrors.push(error); }
         }
         if (outcome === 'NEW_PAYMENT') newCount++; if (outcome === 'MATCHED') matched++; if (outcome === 'CORRECTION') corrections++; if (outcome === 'CONFLICT') conflicts++;
-        rows.push({ ...row, line: index + 1, bank_mapping_key: key, bank_account_id: bankId, title_id: administrative && options.unknownCent ? null : uuid(10 + index), title_amount_cents: 20000,
+        rows.push({ ...row, payment_bank_rule: numberedCheque ? 'CHEQUE_F2G' : 'SOURCE_BANK', line: index + 1, bank_mapping_key: key, bank_account_id: bankId, title_id: administrative && options.unknownCent ? null : uuid(10 + index), title_amount_cents: 20000,
           forecast_due_date: administrative && options.unknownCent ? null : '2026-10-25', outcome, payment_ids: committed && !administrative ? [uuid(40)] : [], problem,
           target_macro: body.mappings?.[row.plan] ?? storedPlans[row.plan] ?? 'FIXO' });
       }
-      const preview = { mode: 'payments', reconciliation_version: options.oldProtocol ? '021' : '043', full_report: false, reconciliation_items: items, resolution_errors: resolutionErrors,
+      const preview = { ...(options.missingColumnRules ? {} : { column_rules_version: '059' }), cheque_payment_bank_id: accounts.find(account => account.display_name === 'BRADESCO F2G')?.id ?? null, mode: 'payments', reconciliation_version: options.oldProtocol ? '021' : '043', full_report: false, reconciliation_items: items, resolution_errors: resolutionErrors,
         writeoff_count: writeoffs, new_writeoff_count: committed ? 0 : writeoffs, matched_writeoff_count: committed ? writeoffs : 0,
         financial_revision: 'financialRevision' in options ? options.financialRevision : options.changeFreezeRevision&&previews.length>0?'changed-during-bank-freeze':committed ? '1:1' : '0:0', previous_import_id: committed ? uuid(30) : uuid(20),
         row_count: rows.length, new_payment_count: newCount, matched_payment_count: matched, correction_count: corrections, conflict_count: conflicts + resolutionErrors.length,
@@ -127,7 +128,28 @@ test('paid XLSX keeps actual date, bank, leading-zero cheque and original bytes,
   const original = Buffer.from(await workbook.xlsx.writeBuffer()); await page.getByLabel('Relatório de títulos pagos', { exact: true }).setInputFiles({ name: 'pagos.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: original }); await page.getByRole('checkbox', { name: /Confirmo que este é o relatório de pagamentos do período/ }).check(); await analyze(page);
   await expect(panel(page)).toContainText('000123'); await expect(panel(page)).toContainText('17/10/2026'); await expect(panel(page)).toContainText('25/10/2026'); await expect(panel(page)).toContainText('BANCO ERP PAGO'); await expect(panel(page)).toContainText('Fornecedor pago sintético'); await expect(panel(page)).toContainText('ENERGIA');
   page.once('dialog', dialog => { expect(dialog.message()).toContain('serão conciliados'); expect(dialog.message()).toContain('Nenhum título ausente será baixado'); return dialog.accept(); }); await page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true }).click(); await expect(panel(page).getByRole('status')).toContainText('1 conciliado(s)');
-  expect(commits).toHaveLength(1); expect(Buffer.from(commits[0].file_base64, 'base64')).toEqual(original); expect(commits[0].file_base64).toBe(previews[0].file_base64); expect(commits[0]).toMatchObject({ mode: 'payments', complete: true, previous_import_id: uuid(20), previous_financial_revision: '0:0', confirm_corrections: false }); expect(commits[0]).not.toHaveProperty('rows'); expect(commits[0]).not.toHaveProperty('p_rows');
+  expect(commits).toHaveLength(1); expect(Buffer.from(commits[0].file_base64, 'base64')).toEqual(original); expect(commits[0].file_base64).toBe(previews[0].file_base64); expect(commits[0]).toMatchObject({ mode: 'payments', column_rules_version: '059', complete: true, previous_import_id: uuid(20), previous_financial_revision: '0:0', confirm_corrections: false }); expect(commits[0]).not.toHaveProperty('rows'); expect(commits[0]).not.toHaveProperty('p_rows');
+  expect(commits[0].bank_mappings).toEqual({});
+});
+test('existing forecast cheque uses F2G even when paid file omits its number, without saving a raw bank alias', async ({ page }) => {
+  const { commits, previews } = await setup(page, { existingTitleCheque: true });
+  await selectExplicitPaidDate(page, new Date('2026-10-17T00:00:00Z'));
+  await expect(page.getByRole('table', { name: /Prévia dos pagamentos/ })).toContainText('Regra do cheque: BRADESCO F2G');
+  await expect(page.getByLabel(/^Conta oficial para banco/)).toHaveCount(0);
+  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true }).click();
+  await expect(panel(page).getByRole('status')).toContainText('Importação concluída');
+  expect(previews).toHaveLength(1); expect(commits[0].bank_mappings).toEqual({});
+});
+for (const option of ['missingColumnRules', 'badChequeBank'] as const) test(`${option} cannot authorize a cheque payment`, async ({ page }) => {
+  const { commits } = await setup(page, { [option]: true }); await selectCsv(page, csv.replace(';BANCO ERP PAGO;;', ';BANCO ERP PAGO;000123;')); await analyze(page);
+  await expect(panel(page).getByRole('alert')).toContainText('Não foi possível concluir a análise');
+  await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toHaveCount(0); expect(commits).toEqual([]);
+});
+test('missing official F2G account remains blocked with a visible instruction instead of another bank selector', async ({ page }) => {
+  const { commits } = await setup(page, { missingChequeBank: true }); await selectCsv(page, csv.replace(';BANCO ERP PAGO;;', ';BANCO ERP PAGO;000123;')); await analyze(page);
+  await expect(panel(page)).toContainText('A conta oficial precisa estar ativa e sem duplicidade');
+  await expect(page.getByLabel(/^Conta oficial para banco/)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Concluir importação dos pagamentos', exact: true })).toBeDisabled(); expect(commits).toEqual([]);
 });
 
 test('unknown bank and new plan require explicit official mappings and a new server analysis before commit', async ({ page }) => {
@@ -351,7 +373,7 @@ const internalCashCsv=csv.replace(';200,00;',';100,00;').replace(';BANCO ERP PAG
 
 test('all seven approved source-bank descriptions resolve the official bank without inferring it from the branch',async({page})=>{
   const {previews,commits,accounts,ledgerCount,writeoffLedgerCount}=await setup(page);
-  const report=headers.join(';')+'\r\n'+approvedBankAliases.map(([source],index)=>[`97`,String(100+index),'PAGO','17/10/2026 23:59:59','200,00',source,'000123',`Fornecedor bancário sintético ${index+1}`,'ENERGIA','01/10/2026 10:15:00'].join(';')).join('\r\n');
+  const report=headers.join(';')+'\r\n'+approvedBankAliases.map(([source],index)=>[`97`,String(100+index),'PAGO','17/10/2026 23:59:59','200,00',source,'',`Fornecedor bancário sintético ${index+1}`,'ENERGIA','01/10/2026 10:15:00'].join(';')).join('\r\n');
   await selectCsv(page,report);await analyze(page);
   const table=page.getByRole('table',{name:/Prévia dos pagamentos/});await expect(table.locator('tbody tr')).toHaveCount(7);
   for(const [index,[source,official]]of approvedBankAliases.entries()){

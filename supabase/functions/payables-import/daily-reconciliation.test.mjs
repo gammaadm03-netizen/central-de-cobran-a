@@ -10,7 +10,7 @@ const IMPORT = '50000000-0000-4000-8000-000000000001';
 const normal = { entry_number: 'TESTE-001', branch: 'Filial sintética', description: 'Fornecedor sintético',
   due_date: '2026-10-20', amount_cents: 10000, plan: 'PLANO TESTE', bank_account: 'BANCO TESTE', issued_on: null, source_status: 'PENDENTE' };
 const cheque = { ...normal, entry_number: 'CHEQUE-001', source_status: 'CHEQUE', cheque_number: '000123' };
-const request = extra => ({ action: 'preview', mode: 'daily', daily_report_version: '058', report_kind: 'NORMAL',
+const request = extra => ({ action: 'preview', mode: 'daily', daily_report_version: '059', report_kind: 'NORMAL',
   file_name: 'sintetico.csv', file_base64: 'YQ==', mappings: {}, bank_mappings: {}, resolution_choices: {}, ...extra });
 const committedRequest = extra => request({ action: 'commit', complete: true, previous_import_id: null,
   previous_financial_revision: '17', expected_report_date: '2026-10-29', request_id: REQUEST, ...extra });
@@ -19,14 +19,14 @@ const action = extra => ({ key: `title:${TITLE}`, kind: 'MISSING', line: null, t
   payment_remaining_cents: 15000, allowed_actions: ['PAID'], selected_action: 'PAID', requires_resolution: false,
   already_written_off: false, problem: null, paid_on: '2026-10-20', bank_account_id: BANK, bank_label: 'BANCO TESTE',
   cheque_number: null, rule: 'DUE_DATE', payment_revision: TITLE, last_import_id: IMPORT, ...extra });
-const preview = extra => ({ mode: 'daily', daily_report_version: '058', report_kind: 'NORMAL', report_date: '2026-10-29',
+const preview = extra => ({ mode: 'daily', daily_report_version: '059', report_kind: 'NORMAL', report_date: '2026-10-29',
   empty_cheques_confirmed: false,
   previous_import_id: null, financial_revision: '17', rows: [normal], ignored_cheque_count: 0, row_count: 1,
   new_count: 0, open_count: 1, changed_count: 0, baseline_only: false, baseline_origin: 'EXISTING_BASE',
   auto_payment_count: 1, auto_payment_cents: 15000, missing_count: 1, automatic_actions: [action()],
-  exceptions: [], reconciliation_items: [], errors: [], bank_options: [{ id: BANK, display_name: 'BANCO TESTE' }], can_commit: true, ...extra });
+  exceptions: [], reconciliation_items: [], errors: [], bank_options: [{ id: BANK, display_name: 'BRADESCO F2G', account_type: 'BANK' }], can_commit: true, ...extra });
 const options = extra => ({ sourceRows: [normal], reportKind: 'NORMAL', resolutionChoices: {}, ...extra });
-const result = extra => ({ mode: 'daily', daily_report_version: '058', report_kind: 'NORMAL', report_date: '2026-10-29',
+const result = extra => ({ mode: 'daily', daily_report_version: '059', report_kind: 'NORMAL', report_date: '2026-10-29',
   empty_cheques_confirmed: false,
   request_id: REQUEST, report_id: REPORT, import_id: IMPORT, row_count: 1, new_count: 0, open_count: 1, changed_count: 0,
   paid_count: 1, written_off_count: 0, automatic_paid_count: 1, payment_cents: 15000, idempotent: false, ...extra });
@@ -78,7 +78,8 @@ test('cheque classification only follows explicit status or explicit cheque numb
 
 test('normal preview proves the exact source partition and never silently drops ordinary obligations', () => {
   assert(validDailyPreview(preview(), options()));
-  assert(validDailyPreview(preview({ ignored_cheque_count: 1 }), options({ sourceRows: [normal, cheque] })));
+  assert(validDailyPreview(preview({ rows: [normal, cheque], row_count: 2, open_count: 2 }), options({ sourceRows: [normal, cheque] })));
+  assert(!validDailyPreview(preview({ ignored_cheque_count: 1 }), options({ sourceRows: [normal, cheque] })));
   for (const change of [{ rows: [] }, { rows: [{ ...normal, amount_cents: 1 }] }, { rows: [{ ...normal, due_date: '2026-10-21' }] },
     { rows: [{ ...normal, extra: 'untrusted' }] }, { ignored_cheque_count: 1 }, { row_count: 2 }, { report_kind: 'CHEQUES' },
     { new_count: 1 }, { changed_count: 2 }, { daily_report_version: '057' }]) assert(!validDailyPreview(preview(change), options()));
@@ -92,7 +93,7 @@ test('automatic actions prove exact date rule, bank, sums and unique canonical i
     assert(!validDailyPreview(preview({ automatic_actions: [action(change)] }), options()), JSON.stringify(change));
   }
   for (const change of [{ auto_payment_count: 0 }, { auto_payment_cents: 14999 }, { missing_count: 0 },
-    { automatic_actions: [action(), action()] }, { bank_options: [{ id: BANK, display_name: 'BANCO TESTE' }, { id: BANK, display_name: 'DUPLICADO' }] }]) {
+    { automatic_actions: [action(), action()] }, { bank_options: [{ id: BANK, display_name: 'BRADESCO F2G', account_type: 'BANK' }, { id: BANK, display_name: 'DUPLICADO' }] }]) {
     assert(!validDailyPreview(preview(change), options()));
   }
 });
@@ -154,4 +155,18 @@ test('daily commit result must prove original request, report date, channel and 
   for (const change of [{ request_id: REPORT }, { report_date: '2026-10-30' }, { report_kind: 'CHEQUES' }, { import_id: null },
     { report_id: 'other' }, { automatic_paid_count: 2 }, { paid_count: -1 }, { payment_cents: 1.5 }, { row_count: 0 },
     { idempotent: undefined }]) assert(!validDailyCommit(result(change), { sourceRows: [normal], request: committedRequest() }));
+});
+
+test('059 numbered cheque payments prove the unique official BANK account and ordinary absence cannot consume a cheque', () => {
+  const paidCheque = action({ cheque_number: '000009', paid_on: '2026-10-29', rule: 'IMPORT_DATE' });
+  const chequePreview = preview({ report_kind: 'CHEQUES', rows: [cheque], baseline_origin: 'PREVIOUS_REPORT', automatic_actions: [paidCheque] });
+  const chequeOptions = options({ sourceRows: [cheque], reportKind: 'CHEQUES' });
+  assert(validDailyPreview(chequePreview, chequeOptions));
+  for (const bank_options of [
+    [{ id: BANK, display_name: 'OUTRO BANCO', account_type: 'BANK' }],
+    [{ id: BANK, display_name: 'BRADESCO F2G', account_type: 'CASH' }],
+    [{ id: BANK, display_name: 'BRADESCO F2G', account_type: 'BANK' }, { id: TITLE, display_name: 'BRADESCO F2G', account_type: 'BANK' }],
+  ]) assert(!validDailyPreview({ ...chequePreview, bank_options }, chequeOptions));
+  assert(!validDailyPreview(preview({ automatic_actions: [action({ cheque_number: '000009' })] }), options()));
+  assert(validDailyPreview({ ...chequePreview, bank_options: [{ id: BANK, display_name: 'Brádesco  F2G', account_type: 'BANK' }, { id: TITLE, display_name: 'BRADESCO F2G', account_type: 'CASH' }] }, chequeOptions));
 });

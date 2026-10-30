@@ -1,1 +1,1 @@
-export function resolvePaidBankMappings(rows: { amount_paid_cents: number; paid_bank: string; bank_mapping_key: string; bank_account_id: string | null }[], mappings?: Record<string,string>): { mappings: Record<string,string>; changed: boolean };
+export function resolvePaidBankMappings(rows: { amount_paid_cents: number; paid_bank: string; bank_mapping_key: string; bank_account_id: string | null; payment_bank_rule?: 'CHEQUE_F2G' | 'SOURCE_BANK' }[], mappings?: Record<string,string>): { mappings: Record<string,string>; changed: boolean };

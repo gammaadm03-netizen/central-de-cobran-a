@@ -1,3 +1,4 @@
+import { normalizePaidBankDescription } from './payable-bank-rules.mjs';
 import { addCivilDays } from './financial-dates';
 import { payableImportRequest, type ImportProblem, type PayableImportRow, type PayableResolutionChoice } from './payables';
 import { payableUuid, validReconciliationItems, type ImportBank, type ReconciliationItem } from '../components/PayableImportReconciliation';
@@ -9,7 +10,7 @@ export interface DailyAction extends ReconciliationItem {
   bank_mapping_key?: string | null; source_bank?: string | null;
 }
 export interface DailyPreview {
-  daily_report_version: '058'; mode: 'daily'; report_kind: DailyReportKind; report_date: string;
+  daily_report_version: '059'; mode: 'daily'; report_kind: DailyReportKind; report_date: string;
   empty_cheques_confirmed: boolean;
   previous_import_id: string | null; financial_revision: string; rows: PayableImportRow[];
   row_count: number; ignored_cheque_count: number; new_count: number; open_count: number; changed_count: number;
@@ -21,14 +22,14 @@ export interface DailyPreview {
 }
 export interface DailyCanonical { rows: PayableImportRow[]; preview: DailyPreview; file_sha256: string }
 export interface DailyRequest {
-  action: 'preview' | 'commit'; mode: 'daily'; daily_report_version: '058'; report_kind: DailyReportKind;
+  action: 'preview' | 'commit'; mode: 'daily'; daily_report_version: '059'; report_kind: DailyReportKind;
   file_name: string; file_base64: string; mappings: Record<string, string>; bank_mappings: Record<string, string>;
   resolution_choices: Record<string, PayableResolutionChoice>; complete?: true;
   empty_cheques_confirmed?: true;
   previous_import_id?: string | null; previous_financial_revision?: string; expected_report_date?: string; request_id?: string;
 }
 export interface DailyResult {
-  daily_report_version: '058'; mode: 'daily'; report_kind: DailyReportKind; report_date: string;
+  daily_report_version: '059'; mode: 'daily'; report_kind: DailyReportKind; report_date: string;
   empty_cheques_confirmed: boolean;
   request_id: string; report_id: string; import_id: string; row_count: number; new_count: number; open_count: number;
   changed_count: number; paid_count: number; automatic_paid_count: number; payment_cents: number; written_off_count: number; idempotent: boolean;
@@ -52,6 +53,12 @@ function validAction(item: unknown, preview: DailyPreview, automatic: boolean): 
     || !(item.source_bank === undefined || item.source_bank === null || text(item.source_bank, 300))
     || item.rule !== (preview.report_kind === 'CHEQUES' ? 'IMPORT_DATE' : 'DUE_DATE')
     || !(item.paid_on === null || dailyCivilDate(item.paid_on))) return false;
+  if (item.kind === 'MISSING' && preview.report_kind === 'NORMAL' && typeof item.cheque_number === 'string' && item.cheque_number.trim()) return false;
+  if (item.amount_cents !== 1 && typeof item.cheque_number === 'string' && item.cheque_number.trim()
+    && item.selected_action === 'PAID' && item.problem === null) {
+    const official = preview.bank_options.filter(bank => bank.account_type === 'BANK' && normalizePaidBankDescription(bank.display_name) === 'BRADESCO F2G');
+    if (official.length !== 1 || official[0].id !== item.bank_account_id) return false;
+  }
   if (!automatic) return true;
   return item.kind === 'MISSING' && item.title_id !== null && item.line === null && item.requires_resolution === false
     && item.selected_action === 'PAID' && item.problem === null && item.payment_remaining_cents > 0
@@ -63,13 +70,13 @@ function validAction(item: unknown, preview: DailyPreview, automatic: boolean): 
 export function validDailyCanonical(value: unknown, hash: string, kind: DailyReportKind, emptyChequesConfirmed = false): value is DailyCanonical {
   if (!object(value) || value.file_sha256 !== hash || !Array.isArray(value.rows) || !object(value.preview)) return false;
   const p = value.preview as unknown as DailyPreview;
-  if (p.daily_report_version !== '058' || p.mode !== 'daily' || p.report_kind !== kind || !dailyCivilDate(p.report_date)
+  if (p.daily_report_version !== '059' || p.mode !== 'daily' || p.report_kind !== kind || !dailyCivilDate(p.report_date)
     || p.empty_cheques_confirmed !== emptyChequesConfirmed || emptyChequesConfirmed && kind !== 'CHEQUES'
     || !nullableUuid(p.previous_import_id) || !text(p.financial_revision, 256) || !p.financial_revision.trim()
     || !['row_count', 'ignored_cheque_count', 'new_count', 'open_count', 'changed_count', 'auto_payment_count', 'auto_payment_cents', 'missing_count'].every(key => count(p[key as keyof DailyPreview]))
     || p.row_count > 5000 || p.row_count !== value.rows.length || p.row_count === 0 && !(kind === 'CHEQUES' && emptyChequesConfirmed)
     || emptyChequesConfirmed && p.row_count !== 0 || p.new_count + p.open_count !== p.row_count || p.changed_count > p.open_count
-    || p.ignored_cheque_count > 5000 || kind === 'CHEQUES' && p.ignored_cheque_count !== 0
+    || p.ignored_cheque_count !== 0
     || !Array.isArray(p.rows) || JSON.stringify(p.rows) !== JSON.stringify(value.rows)
     || typeof p.baseline_only !== 'boolean' || !['EXISTING_BASE', 'PREVIOUS_REPORT', 'FIRST_REPORT'].includes(p.baseline_origin)
     || p.baseline_only && (kind !== 'CHEQUES' || p.baseline_origin !== 'FIRST_REPORT' || p.missing_count !== 0)
@@ -93,7 +100,7 @@ export function validDailyCanonical(value: unknown, hash: string, kind: DailyRep
     && value.rows.reduce((sum, row) => sum + BigInt(row.amount_cents), 0n) <= BigInt(Number.MAX_SAFE_INTEGER);
 }
 export function validDailyResult(value: unknown, request: DailyRequest, rowCount: number): value is DailyResult {
-  if (!object(value) || value.daily_report_version !== '058' || value.mode !== 'daily' || value.report_kind !== request.report_kind
+  if (!object(value) || value.daily_report_version !== '059' || value.mode !== 'daily' || value.report_kind !== request.report_kind
     || value.empty_cheques_confirmed !== (request.empty_cheques_confirmed === true)
     || rowCount === 0 && !(request.report_kind === 'CHEQUES' && request.empty_cheques_confirmed === true)
     || request.empty_cheques_confirmed === true && (request.report_kind !== 'CHEQUES' || rowCount !== 0)
@@ -106,8 +113,8 @@ export function validDailyResult(value: unknown, request: DailyRequest, rowCount
 export async function payableDailyRequest<T>(body: DailyRequest, signal?: AbortSignal): Promise<T> { return payableImportRequest<T>(body, signal); }
 export function dailyImportError(failure: unknown, fallback: string) {
   const code = object(failure) && typeof failure.code === 'string' ? failure.code : '';
-  if (['PGRST202', '42883', '42P01'].includes(code) || code === 'P0058' && object(failure) && failure.activation_required === true) return 'Ative o SQL 058 de conciliação diária e publique a função payables-import atualizada para usar este relatório.';
-  if (code === 'P0058') return 'Confira as exceções indicadas e utilize o relatório completo atualizado antes de concluir a conciliação diária.';
+  if (['PGRST202', '42883', '42P01'].includes(code) || code === 'P0059' && object(failure) && failure.activation_required === true) return 'Ative o SQL 059 de atualização das colunas de Contas a Pagar e publique a função payables-import atualizada para usar este relatório.';
+  if (['P0058', 'P0059'].includes(code)) return 'Confira as exceções indicadas e utilize o relatório completo atualizado antes de concluir a conciliação diária.';
   if (code === '40001') return 'A base ou o dia da importação mudou. Confira novamente este arquivo antes de concluir.';
   if (code === '23505') return 'Este relatório já foi importado. Exporte o relatório completo atualizado para registrar a nova posição, sem repetir baixas.';
   if (code === '42501') return 'Seu perfil não tem permissão para importar e conciliar Contas a Pagar.';

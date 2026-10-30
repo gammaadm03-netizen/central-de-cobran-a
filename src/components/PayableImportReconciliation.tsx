@@ -4,7 +4,7 @@ import { dateLabel, formatCents } from '../lib/payables';
 import { parseMoneyCents } from '../lib/payables-parser.mjs';
 import '../payable-import-review.css';
 
-export interface ImportBank { id: string; display_name: string; company?: string; bank?: string }
+export interface ImportBank { id: string; display_name: string; company?: string; bank?: string; account_type?: 'BANK' | 'CASH' }
 export interface ReconciliationItem {
   key: string; kind: 'CENT' | 'INTERNAL_CASH' | 'MISSING' | 'REAPPEARED'; line: number | null; title_id: string | null;
   branch: string; entry_number: string; description: string; due_date: string | null; amount_cents: number | null;

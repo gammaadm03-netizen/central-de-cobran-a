@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.15**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.16**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Colunas e atualização de Contas a Pagar — 0.18.16
+
+O relatório global inclui e atualiza títulos comuns e cheques, mantendo a identidade por **Filial + Lançamento**. Histórico, plano CP, emissão, valor provisionado e vencimento acompanham a nova importação. O plano CP mantém sua classificação no Centro de Custo Macro. O banco previsto do plano CC permanece separado do banco efetivamente usado na baixa, que pode ser alterado para títulos comuns; títulos com número de cheque utilizam **BRADESCO F2G**. A baixa por ausência dos cheques continua na rotina própria, na data da importação. Históricos financeiros anteriores são preservados. [Ativar o SQL 059, atualizar a função e conferir as colunas](docs/conciliacao-diaria-contas-pagar.md).
 
 ## Abertura da conferência financeira — 0.18.15
 

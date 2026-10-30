@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.18.15",
+  "version": "0.18.16",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -108,7 +108,9 @@
     "test:receivable-return-approval-sql": "node scripts/bundle-receivable-return-approval.mjs && node scripts/test-receivable-return-approval-sql.mjs",
     "bundle:payable-daily-reports": "node scripts/bundle-payable-daily-reports.mjs",
     "test:payable-daily-reports-sql": "node scripts/test-payable-daily-reports-sql.mjs",
-    "test:payable-daily-paid-consumers-sql": "node scripts/test-payable-daily-paid-consumers-sql.mjs"
+    "test:payable-daily-paid-consumers-sql": "node scripts/test-payable-daily-paid-consumers-sql.mjs",
+    "bundle:payable-column-rules": "node scripts/bundle-payable-column-rules.mjs",
+    "test:payable-column-rules-sql": "node scripts/test-payable-column-rules-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

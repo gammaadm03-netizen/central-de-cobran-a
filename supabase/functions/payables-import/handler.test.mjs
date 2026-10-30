@@ -855,3 +855,100 @@ test('new immutable replay proof excludes cash administrative rows while legacy 
     assert.equal(oldResponse.status, expected);
   }
 });
+
+const columnCapabilities = { ...bankRuleCapabilities, column_rules_version: '059' };
+const columnRequest = extra => bankRuleRequest({ column_rules_version: '059', ...extra });
+const numberedCashCsv = date => cashCsv(date).trimEnd().split('\r\n').map((line, index) => line + (index ? ';000123' : ';Cheque: número')).join('\r\n') + '\r\n';
+const columnChequePreview = () => {
+  const result = cashPreview({ column_rules_version: '059', cheque_payment_bank_id: BANK,
+    reconciliation_items: [], new_payment_count: 1, bank_options: [{ id: BANK, display_name: 'BRADESCO F2G', account_type: 'BANK' }] });
+  result.rows = [{ ...result.rows[0], outcome: 'NEW_PAYMENT', payment_bank_rule: 'CHEQUE_F2G', paid_on: '2026-10-20', bank_account_id: BANK, cheque_number: '000123' }];
+  return result;
+};
+test('059 capability is mandatory for the new paid-only column contract and never falls back', async () => {
+  for (const column_rules_version of [undefined, '058', null]) {
+    const app = setup({ capabilities: { ...bankRuleCapabilities, column_rules_version } });
+    const response = await app.send(body('preview', columnRequest({ file_base64: encode(cashCsv()) })));
+    assert.equal(response.status, 409); assert.equal((await response.json()).code, 'P0059');
+    assert(!app.calls.some(call => /preview_payables_|commit_payables_/.test(call.path)));
+  }
+  for (const changes of [{ column_rules_version: '058' }, { mode: 'forecast' }, { bank_rules_version: undefined }, { reconciliation_version: undefined }]) {
+    const app = setup(), response = await app.send(body('preview', columnRequest(changes)));
+    assert.equal(response.status, 400); assert.equal(app.calls.length, 2);
+  }
+});
+test('059 numbered cash cheques are real payments in the unique official F2G bank and preserve original source bytes', async () => {
+  const source = numberedCashCsv('20/10/2026'), app = setup({ capabilities: columnCapabilities, previewPayload: columnChequePreview(),
+    commitPayload: { import_id: IMPORT, row_count: 1, mode: 'payments', settled_count: 0, idempotent: false, reconciliation_version: '043', request_id: SESSION, column_rules_version: '059' } });
+  const response = await app.send(body('preview', columnRequest({ file_base64: encode(source) })));
+  assert.equal(response.status, 200); const value = await response.json();
+  assert.equal(value.rows[0].paid_bank, 'CAIXA INTERNO'); assert.equal(value.rows[0].bank_account_id, BANK);
+  assert.equal(value.rows[0].payment_bank_rule, 'CHEQUE_F2G');
+  assert.equal(app.calls.at(-1).data.p_rows[0].paid_on, '2026-10-20');
+  assert.equal(value.file_sha256, createHash('sha256').update(source).digest('hex'));
+  const committed = await app.send(body('commit', columnRequest({ file_base64: encode(source), request_id: SESSION, previous_financial_revision: '17' })));
+  assert.equal(committed.status, 200); assert.equal(app.calls.at(-1).data.p_rows[0].paid_bank, 'CAIXA INTERNO');
+  assert.equal(app.calls.at(-1).data.p_rows[0].cheque_number, '000123');
+});
+test('059 payment-bank proof rejects missing flags, wrong bank types, conflicting canonical accounts and administrative cheque claims', async () => {
+  const valid = columnChequePreview();
+  for (const change of [
+    { column_rules_version: undefined }, { cheque_payment_bank_id: null },
+    { rows: [{ ...valid.rows[0], payment_bank_rule: 'SOURCE_BANK' }] },
+    { rows: [{ ...valid.rows[0], bank_account_id: SESSION }] },
+    { bank_options: [{ id: BANK, display_name: 'BANCO QUALQUER', account_type: 'BANK' }] },
+    { bank_options: [{ id: BANK, display_name: 'BRADESCO F2G', account_type: 'CASH' }] },
+    { bank_options: [...valid.bank_options, { id: SESSION, display_name: 'BRADESCO F2G', account_type: 'BANK' }] },
+    { rows: [{ ...valid.rows[0], outcome: 'WRITE_OFF' }] },
+  ]) {
+    const app = setup({ capabilities: columnCapabilities, previewPayload: { ...valid, ...change } });
+    const response = await app.send(body('preview', columnRequest({ file_base64: encode(numberedCashCsv('20/10/2026')) })));
+    assert.equal(response.status, 503, JSON.stringify(change)); assert(!app.calls.some(call => call.path.includes('/commit_')));
+  }
+});
+test('059 cash date survives parsing when the cheque number is omitted and SQL resolves the existing cheque', async () => {
+  const app = setup({ capabilities: columnCapabilities, previewPayload: columnChequePreview() });
+  const response = await app.send(body('preview', columnRequest({ file_base64: encode(cashCsv('20/10/2026')) })));
+  assert.equal(response.status, 200); assert.equal(app.calls.at(-1).data.p_rows[0].paid_on, '2026-10-20');
+  assert.equal(Object.hasOwn(app.calls.at(-1).data.p_rows[0], 'cheque_number'), false);
+});
+
+test('059 lost mixed correction replay proves financial count and immutable dates without requiring an administrative cash history row', async () => {
+  const ordinary = explicitPaidCsv('20/10/2026', '17/10/2026').trimEnd();
+  const cash = ordinary.split('\r\n')[1].replace('PAGO-SINTETICO', 'CASH-SINTETICO').replace('Banco sintético', 'CAIXA INTERNO');
+  const source = ordinary + '\r\n' + cash + '\r\n';
+  const financial = { source_row: { branch: 'Filial sintética', entry_number: 'PAGO-SINTETICO', paid_on: '2026-10-20', line: 1 } };
+  const cashFinancial = { source_row: { branch: 'Filial sintética', entry_number: 'CASH-SINTETICO', paid_on: '2026-10-20', line: 2 } };
+  const frozen = body('commit', columnRequest({ file_base64: encode(source), request_id: SESSION, previous_financial_revision: '17', confirm_corrections: true, resolution_choices: {} }));
+  for (const [writeoff_count, historyRows] of [[1, [financial]], [0, [financial, cashFinancial]]]) {
+    const app = setup({ capabilities: columnCapabilities, historyRows,
+      commitPayload: { import_id: IMPORT, row_count: 2, mode: 'payments', settled_count: 0, correction_count: 1, idempotent: true,
+        reconciliation_version: '043', request_id: SESSION, writeoff_count, column_rules_version: '059' } });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await app.send(frozen); assert.equal(response.status, 200); assert.equal((await response.json()).idempotent, true);
+      assert.equal(app.calls.findLast(call => call.path.includes('/commit_')).data.p_rows[1].paid_on, '2026-10-20');
+    }
+    assert(!app.calls.some(call => call.path.includes('/preview_') || call.path.includes('bank_accounts')));
+  }
+  for (const [historyRows, writeoff_count, status] of [
+    [[cashFinancial], 1, 503], [[], 1, 503], [[financial, cashFinancial], 1, 503],
+    [[financial, { source_row: { ...cashFinancial.source_row, paid_on: '2026-10-17' } }], 0, 409],
+  ]) {
+    const app = setup({ capabilities: columnCapabilities, historyRows,
+      commitPayload: { import_id: IMPORT, row_count: 2, mode: 'payments', settled_count: 0, correction_count: 1, idempotent: true,
+        reconciliation_version: '043', request_id: SESSION, writeoff_count, column_rules_version: '059' } });
+    const response = await app.send(frozen); assert.equal(response.status, status);
+    if (status === 409) assert.equal((await response.json()).code, 'PAYMENT_DATE_REVIEW_REQUIRED');
+    assert.equal(app.calls.filter(call => call.path.includes('/commit_')).length, 1);
+  }
+});
+test('059 fresh paid commits require column-rule proof while an old completed exact protocol remains replayable', async () => {
+  const source = numberedCashCsv('20/10/2026');
+  for (const idempotent of [false, undefined]) {
+    const app = setup({ capabilities: columnCapabilities, commitPayload: { import_id: IMPORT, row_count: 1, mode: 'payments', settled_count: 0, idempotent, reconciliation_version: '043', request_id: SESSION } });
+    const response = await app.send(body('commit', columnRequest({ file_base64: encode(source), request_id: SESSION, previous_financial_revision: '17' })));
+    assert.equal(response.status, 503);
+  }
+  const replay = setup({ capabilities: columnCapabilities, commitPayload: { import_id: IMPORT, row_count: 1, mode: 'payments', settled_count: 0, idempotent: true, reconciliation_version: '043', request_id: SESSION } });
+  assert.equal((await replay.send(body('commit', columnRequest({ file_base64: encode(source), request_id: SESSION, previous_financial_revision: '17' })))).status, 200);
+});
