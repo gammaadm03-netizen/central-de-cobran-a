@@ -13,7 +13,7 @@ export const COLLECTION_SORTS = [['delay_desc', 'Maior atraso'], ['amount_desc',
 export const FINANCIAL_STATUSES: Record<string, string> = { ACTIVE: 'Vencidos em aberto', NEW: 'Novos', OPEN: 'Em aberto', PENDING_VALIDATION: 'Pagamento aguardando validação', NOT_LOCATED: 'Pagamento não localizado', VALIDATED: 'Quitados — histórico', RETIRED_FROM_REPORT: 'Ausentes do relatório — histórico' };
 export interface CollectionFilters { search: string; collector: string; band: string; sort: string; status: string; financialStatus: string; dueStart: string; dueEnd: string; nextAction: string; queue: 'active' | 'returns' | 'history' | 'all' }
 export const INITIAL_COLLECTION_FILTERS: CollectionFilters = { search: '', collector: '', band: '', sort: 'delay_desc', status: '', financialStatus: 'ACTIVE', dueStart: '', dueEnd: '', nextAction: '', queue: 'active' };
-export interface CollectionWorkflow { version: '029'; normal_pause: true; finish_requires_started: true; pending_read_only: true; returns_priority: true; started?: boolean; can_finish?: boolean; recovery_allowed?: boolean }
+export interface CollectionWorkflow { version: '029'; normal_pause: true; finish_requires_started: true; pending_read_only: true; returns_priority: true; returns_block_new?: boolean; started?: boolean; can_finish?: boolean; recovery_allowed?: boolean }
 export interface CollectionPriority { collector_id: string | null; due_count: number; total_cents: number; next_title_id: string | null; next_due_date: string | null }
 export type CollectionStartBlock = 'RETURN_PRIORITY' | 'ALREADY_RUNNING' | 'UNASSIGNED' | 'PENDING_VALIDATION' | 'SETTLED' | 'READ_ONLY' | 'REPORT_RETIRED';
 export interface CollectionTimer { title_id: string; running: boolean; session_id: string | null; started_at: string | null; elapsed_seconds: number; total_seconds: number; actor_total_seconds: number; server_now: string; recovery_allowed?: boolean }
@@ -61,7 +61,8 @@ export function validCollectionTimer(value: unknown): value is CollectionTimer {
     && instant(timer.server_now) && (!timer.running || !!timer.session_id && instant(timer.started_at));
 }
 export function collectionWorkflowReady(value: CollectionWorkflow | undefined): value is CollectionWorkflow {
-  return value?.version === '029' && value.normal_pause === true && value.finish_requires_started === true && value.pending_read_only === true && value.returns_priority === true;
+  return value?.version === '029' && value.normal_pause === true && value.finish_requires_started === true && value.pending_read_only === true && value.returns_priority === true
+    && (value.returns_block_new === undefined || typeof value.returns_block_new === 'boolean');
 }
 function validPriority(value: CollectionPriority | undefined, day: string) {
   return !!value && nullableText(value.collector_id) && integer(value.due_count) && integer(value.total_cents) && nullableText(value.next_title_id)

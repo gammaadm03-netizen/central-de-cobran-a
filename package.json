@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.18.19",
+  "version": "0.18.20",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -118,7 +118,9 @@
     "bundle:payable-open-status": "node scripts/bundle-payable-open-status.mjs",
     "test:payable-report-status-sql": "node scripts/test-payable-report-status-sql.mjs",
     "bundle:receivable-import-completion": "node scripts/bundle-receivable-import-completion.mjs",
-    "test:receivable-import-completion-sql": "node scripts/test-receivable-import-completion-sql.mjs"
+    "test:receivable-import-completion-sql": "node scripts/test-receivable-import-completion-sql.mjs",
+    "bundle:collection-start-priority": "node scripts/bundle-collection-start-priority.mjs",
+    "test:collection-start-priority-sql": "node scripts/test-collection-start-priority-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",

@@ -5,7 +5,7 @@ const day = '2026-10-18', initial = '2026-10-18T15:00:00.000Z';
 const id = (n: number) => `99000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const own = id(20);
 const workflow = { version: '029', normal_pause: true, finish_requires_started: true, pending_read_only: true, returns_priority: true };
-type Options = { legacy?: boolean; returns?: boolean; unassigned?: boolean; director?: boolean; resume?: boolean; unknown?: 'START' | 'PAUSE' | 'SAVE' | 'FINISH'; recovery?: boolean; computerWrong?: boolean; emailMode?: 'missing' | 'none' | 'empty' | 'long' | 'forbidden' | 'invalid' };
+type Options = { legacy?: boolean; returns?: boolean; advisoryReturns?: boolean; forcePriorityBlock?: boolean; unassigned?: boolean; director?: boolean; resume?: boolean; unknown?: 'START' | 'PAUSE' | 'SAVE' | 'FINISH'; recovery?: boolean; computerWrong?: boolean; emailMode?: 'missing' | 'none' | 'empty' | 'long' | 'forbidden' | 'invalid' };
 async function setup(page: Page, options: Options = {}) {
   await page.clock.install({ time: new Date(options.computerWrong ? '2026-10-14T15:00:00Z' : initial) }); await page.clock.pauseAt(new Date(options.computerWrong ? '2026-10-14T15:00:01Z' : '2026-10-18T15:00:01Z'));
   const manager = options.unassigned, collector = !manager && !options.director;
@@ -16,12 +16,13 @@ async function setup(page: Page, options: Options = {}) {
   for (const row of rows) row.agenda_date = row.next_date;
   const state = { now: Date.parse(initial), runningId: options.resume || options.recovery ? rows[0].id as string | null : null, started: new Set<string>(options.resume ? [rows[0].id] : []), starts: new Map<string, number>(options.resume || options.recovery ? [[rows[0].id, Date.parse(initial) - 60000]] : []), totals: new Map<string, number>(), replies: new Map<string, any>(), unknown: options.unknown, inaccessible: !!options.recovery, events: [] as any[], financialWrites: 0, saves: 0, emailRevision: 0, emailEmails: ['financeiro@example.invalid', 'contato@example.invalid'] };
   const calls: { name: string; body: any }[] = [];
+  const workflowMetadata = { ...workflow, ...(options.advisoryReturns ? { returns_block_new: false } : {}) };
   const due = (row: any) => ['NEW', 'OPEN', 'NOT_LOCATED'].includes(row.status) && row.agenda_date && row.agenda_date <= day;
   const priority = () => { const pending = rows.filter(due); return { collector_id: collector ? own : null, due_count: pending.length, total_cents: pending.reduce((sum, row) => sum + row.amount_cents, 0), next_title_id: pending[0]?.id ?? null, next_due_date: pending[0]?.agenda_date ?? null }; };
   function timer(row: any) { const elapsed = state.runningId === row.id ? Math.floor((state.now - (state.starts.get(row.id) ?? state.now)) / 1000) : 0; return { title_id: row.id, running: state.runningId === row.id, session_id: state.runningId === row.id ? id(500) : null, started_at: state.runningId === row.id ? new Date(state.starts.get(row.id)!).toISOString() : null, elapsed_seconds: elapsed, total_seconds: (state.totals.get(row.id) ?? 0) + elapsed, actor_total_seconds: (state.totals.get(row.id) ?? 0) + elapsed, server_now: new Date(state.now).toISOString(), recovery_allowed: state.inaccessible && row.id === rows[0].id }; }
-  function flags(row: any) { const reason = options.director ? 'READ_ONLY' : !row.collector_id ? 'UNASSIGNED' : row.status === 'PENDING_VALIDATION' ? 'PENDING_VALIDATION' : row.status === 'VALIDATED' ? 'SETTLED' : state.runningId ? 'ALREADY_RUNNING' : priority().due_count && !due(row) ? 'RETURN_PRIORITY' : null; return { return_due: !!due(row), return_due_date: due(row) ? row.agenda_date : null, can_start: reason === null, start_block_reason: reason }; }
+  function flags(row: any) { const reason = options.director ? 'READ_ONLY' : !row.collector_id ? 'UNASSIGNED' : row.status === 'PENDING_VALIDATION' ? 'PENDING_VALIDATION' : row.status === 'VALIDATED' ? 'SETTLED' : state.runningId ? 'ALREADY_RUNNING' : (!options.advisoryReturns || options.forcePriorityBlock) && priority().due_count && !due(row) ? 'RETURN_PRIORITY' : null; return { return_due: !!due(row), return_due_date: due(row) ? row.agenda_date : null, can_start: reason === null, start_block_reason: reason }; }
   const listed = (row: any) => ({ ...row, ...(!options.legacy ? flags(row) : {}), current_timer: timer(row), total_work_seconds: timer(row).total_seconds });
-  function detail(row: any) { return { title: listed(row), case: { status: row.operational_status, observation: row.observation, next_action: row.next_action_text, next_date: row.next_date, payment_date: row.case_payment_date ?? row.payment_reported_date, revision: row.case_revision, updated_at: initial, updated_by: id(1), finalized_at: row.finalized_at }, timer: timer(row), history: state.events.filter(event => event.title_id === row.id), case_history: [], work_sessions: [], ...(!options.legacy ? { workflow: { ...workflow, started: state.started.has(row.id), can_finish: !options.director && state.started.has(row.id) && row.status !== 'PENDING_VALIDATION', recovery_allowed: false }, priority: priority() } : {}) }; }
+  function detail(row: any) { return { title: listed(row), case: { status: row.operational_status, observation: row.observation, next_action: row.next_action_text, next_date: row.next_date, payment_date: row.case_payment_date ?? row.payment_reported_date, revision: row.case_revision, updated_at: initial, updated_by: id(1), finalized_at: row.finalized_at }, timer: timer(row), history: state.events.filter(event => event.title_id === row.id), case_history: [], work_sessions: [], ...(!options.legacy ? { workflow: { ...workflowMetadata, started: state.started.has(row.id), can_finish: !options.director && state.started.has(row.id) && row.status !== 'PENDING_VALIDATION', recovery_allowed: false }, priority: priority() } : {}) }; }
   function pause(row: any) { state.totals.set(row.id, timer(row).total_seconds); state.runningId = null; }
   await page.route(`${project}/**`, async route => {
     const request = route.request(), name = new URL(request.url()).pathname.split('/').at(-1)!;
@@ -59,7 +60,7 @@ async function setup(page: Page, options: Options = {}) {
       if (body.p_queue === 'returns') visible = visible.filter(due); else if (body.p_queue === 'active') visible = visible.filter(row => !['PENDING_VALIDATION', 'VALIDATED'].includes(row.status)); else if (body.p_queue === 'history') visible = visible.filter(row => row.status === 'VALIDATED');
       if (body.p_financial_status && body.p_financial_status !== 'ACTIVE') visible = visible.filter(row => row.status === body.p_financial_status);
       if (body.p_search) visible = visible.filter(row => row.client_name.includes(body.p_search));
-      return reply({ as_of_date: day, server_now: new Date(state.now).toISOString(), count: visible.length, total_cents: visible.reduce((sum, row) => sum + row.amount_cents, 0), snapshot_revision: `fixture-${state.saves}`, active_timer: state.runningId ? timer(rows.find(row => row.id === state.runningId)) : null, rows: visible.slice(body.p_offset, body.p_offset + body.p_limit).map(listed), ...(!options.legacy ? { workflow, priority: priority() } : {}) });
+      return reply({ as_of_date: day, server_now: new Date(state.now).toISOString(), count: visible.length, total_cents: visible.reduce((sum, row) => sum + row.amount_cents, 0), snapshot_revision: `fixture-${state.saves}`, active_timer: state.runningId ? timer(rows.find(row => row.id === state.runningId)) : null, rows: visible.slice(body.p_offset, body.p_offset + body.p_limit).map(listed), ...(!options.legacy ? { workflow: workflowMetadata, priority: priority() } : {}) });
     }
     if (name === 'collection_case_detail') { const row = rows.find(row => row.id === body.p_title_id); return row && !(state.inaccessible && row.id === rows[0].id) ? reply(detail(row)) : reply({ code: '42501' }, 403); }
     if (name === 'collection_work_action' || name === 'save_collection_case') {
@@ -119,6 +120,49 @@ test('atendimento em execução impede abrir outra NF; pausar permite retomar de
 
 test('retorno de ontem bloqueia novo, fila explícita usa returns e agenda futura não bloqueia', async ({ page }) => {
   const seen = await setup(page, { returns: true, computerWrong: true }); await open(page, 2); await expect(button(page, 'Iniciar')).toBeDisabled(); await expect(panel(page)).toContainText('Atenda primeiro os retornos devidos'); await page.getByRole('button', { name: 'Abrir retornos devidos', exact: true }).click(); await expect.poll(() => seen.calls.filter(call => call.name === 'collection_workbench').at(-1)?.body.p_queue).toBe('returns'); await expect(page.getByRole('button', { name: /^Abrir título FLUXO-/ })).toHaveCount(1); await open(page); await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled(); await completeDraft(page); await button(page, 'Salvar andamento').click(); await expect(page.getByRole('status').filter({ hasText: 'Andamento salvo na base central' })).toBeVisible(); expect(seen.rows[0].agenda_date).toBe('2026-10-17'); await button(page, 'Finalizar atendimento').click(); await expect.poll(() => seen.state.started.size).toBe(0); await page.getByRole('button', { name: 'Limpar filtros', exact: true }).click(); await open(page, 3); await expect(button(page, 'Iniciar')).toBeEnabled(); expect(seen.rows[2].next_date).toBe('2026-10-19');
+});
+
+test('retorno para hoje continua na agenda enquanto segundo e terceiro títulos podem ser iniciados e finalizados', async ({ page }) => {
+  const seen = await setup(page, { returns: true, advisoryReturns: true });
+  await expect(page.getByText('Os retornos estão destacados na agenda.', { exact: false })).toBeVisible();
+  await open(page); await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled();
+  await panel(page).getByRole('combobox', { name: 'Status do atendimento', exact: true }).selectOption('SEM SUCESSO');
+  await completeDraft(page); await panel(page).getByLabel('Data da próxima ação', { exact: true }).fill(day);
+  await button(page, 'Finalizar atendimento').click();
+  await expect(page.getByRole('status').filter({ hasText: 'Atendimento finalizado e registrado' })).toBeVisible();
+  expect(seen.rows[0].agenda_date).toBe(day); expect(seen.state.started.size).toBe(0);
+
+  await open(page, 2); await expect(button(page, 'Iniciar')).toBeEnabled(); await expect(button(page, 'Finalizar atendimento')).toBeDisabled();
+  expect(workCalls(seen.calls).filter(call => call.body.p_action === 'START')).toHaveLength(1);
+  await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Abrir título FLUXO-3', exact: true })).toBeDisabled();
+  await completeDraft(page); await button(page, 'Finalizar atendimento').click();
+  await expect.poll(() => seen.state.events.length).toBe(2);
+
+  await open(page, 3); await expect(button(page, 'Iniciar')).toBeEnabled(); await button(page, 'Iniciar').click();
+  await expect(button(page, 'Pausar')).toBeEnabled(); await button(page, 'Pausar').click();
+  await completeDraft(page); await expect(button(page, 'Finalizar atendimento')).toBeEnabled(); await button(page, 'Finalizar atendimento').click();
+  await expect.poll(() => seen.state.events.length).toBe(3);
+  expect(seen.rows[0].agenda_date).toBe(day); expect(seen.rows[0].operational_status).toBe('SEM SUCESSO');
+  expect(workCalls(seen.calls).filter(call => call.body.p_action === 'START').map(call => call.body.p_title_id)).toEqual([id(101), id(102), id(103)]);
+  expect(seen.state.runningId).toBeNull(); expect(seen.state.started.size).toBe(0); expect(seen.state.financialWrites).toBe(0);
+  await expect(page.getByText('1 retorno(s) devido(s) nesta carteira.', { exact: false })).toBeVisible();
+});
+
+test('o aviso de retornos sem bloqueio não substitui uma recusa oficial de iniciar retornada pelo servidor', async ({ page }) => {
+  const seen = await setup(page, { returns: true, advisoryReturns: true, forcePriorityBlock: true });
+  await open(page, 2); await expect(button(page, 'Iniciar')).toBeDisabled();
+  await expect(panel(page)).toContainText('Atenda primeiro os retornos devidos');
+  expect(workCalls(seen.calls)).toHaveLength(0); expect(saves(seen.calls)).toHaveLength(0);
+});
+
+test('a prioridade informativa mantém títulos aguardando validação financeira somente em leitura', async ({ page }) => {
+  const seen = await setup(page, { returns: true, advisoryReturns: true });
+  await page.locator('.collection-extra-filters > summary').click();
+  await page.getByRole('combobox', { name: 'Situação financeira', exact: true }).selectOption('PENDING_VALIDATION'); await open(page, 4);
+  await expect(button(page, 'Iniciar')).toBeDisabled(); await expect(button(page, 'Finalizar atendimento')).toBeDisabled();
+  await expect(observation(page)).toBeDisabled(); await expect(panel(page)).toContainText('aguarda validação de Contas a Receber');
+  expect(workCalls(seen.calls)).toHaveLength(0); expect(saves(seen.calls)).toHaveLength(0);
 });
 
 test('Marcar como título pago abre campos faltantes e depois envia fechamento atômico sem próxima data manual', async ({ page }) => {

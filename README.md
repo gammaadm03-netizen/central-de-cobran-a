@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.19**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.20**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Início de atendimento com retornos prioritários — 0.18.20
+
+Retornos devidos continuam destacados na agenda e permitem iniciar outros títulos autorizados da carteira. A Central mantém um atendimento ativo por pessoa e exige início antes da finalização, preservando as permissões e os históricos. [Ativar a atualização063 e iniciar outros títulos](docs/iniciar-atendimento-cobranca.md).
 
 ## Confirmação da importação de Contas a Receber — 0.18.19
 
