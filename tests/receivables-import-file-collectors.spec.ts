@@ -111,7 +111,7 @@ test('limpar uma escolha preenchida pela planilha impede reaplicação silencios
   expect(seen.previews.at(-1).collector_mappings).toEqual({ [keyB]: collectorB }); await expect(commitButton(page)).toBeDisabled();
 });
 
-test('confirmação incerta da carga com COBRADORA congela a origem e repete os mesmos bytes e vínculos', async ({ page }) => {
+test('confirmação incerta da carga com COBRADORA consulta o protocolo salvo sem reenviar os bytes e vínculos', async ({ page }) => {
   const seen = await setup(page, { unassignedCustomers: 'all', uncertainCommit: true }), bytes = await workbook(); await uploadWorkbook(page, bytes);
   await expect(commitButton(page)).toBeEnabled(); page.once('dialog', dialog => dialog.accept()); await commitButton(page).click();
   const retry = page.getByRole('button', { name: 'Conferir confirmação pendente', exact: true }); await expect(retry).toBeVisible();
@@ -119,7 +119,7 @@ test('confirmação incerta da carga com COBRADORA congela a origem e repete os 
   await expect(owner(page, clientA)).toBeDisabled(); await expect(owner(page, clientB)).toBeDisabled();
   const previews = seen.previews.length; await retry.click();
   await expect(page.getByRole('status').filter({ hasText: 'Importação concluída' })).toBeVisible();
-  expect(seen.commits).toHaveLength(2); expect(seen.commits[1]).toEqual(seen.commits[0]); expect(seen.previews).toHaveLength(previews);
+  expect(seen.commits).toHaveLength(1); expect(seen.statuses).toHaveLength(1); expect(seen.statuses[0].request_id).toBe(seen.commits[0].request_id); expect(seen.previews).toHaveLength(previews);
   expect(seen.commits[0].file_base64).toBe(bytes.toString('base64')); expect(seen.commits[0].collector_mappings).toEqual({ [keyA]: collectorA, [keyB]: collectorB });
   expect(seen.imports.size).toBe(1); expect(seen.assignmentApplications).toHaveLength(2);
 });

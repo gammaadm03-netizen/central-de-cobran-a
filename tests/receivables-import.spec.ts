@@ -174,12 +174,12 @@ test('contagem inconsistente dos ausentes bloqueia a confirmação sem presumir 
   expect(seen.commits).toHaveLength(0); expect(seen.retirementApplications).toEqual([]); expect(seen.receipts.size).toBe(0);
 });
 
-test('resposta de confirmação com protocolo divergente permanece pendente e confere o mesmo envio', async ({ page }) => {
+test('resposta de confirmação com protocolo divergente permanece pendente e consulta o resultado salvo sem repetir a gravação', async ({ page }) => {
   const seen = await setup(page, { tamperFirstCommitEcho: true }); await analyze(page);
   page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Concluir importação de abertos e vencidos', exact: true }).click();
   await expect(page.getByText('A confirmação está pendente.', { exact: false })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Analisar arquivo', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Conferir confirmação pendente', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Importação concluída:' })).toBeVisible();
-  expect(seen.commits).toHaveLength(2); expect(seen.commits[1]).toEqual(seen.commits[0]); expect(seen.previews).toHaveLength(1); expect(seen.imports.size).toBe(1); expect(seen.financialWrites).toEqual([]);
+  expect(seen.commits).toHaveLength(1); expect(seen.statuses).toHaveLength(1); expect(seen.statuses[0].request_id).toBe(seen.commits[0].request_id); expect(seen.previews).toHaveLength(1); expect(seen.imports.size).toBe(1); expect(seen.financialWrites).toEqual([]);
 });

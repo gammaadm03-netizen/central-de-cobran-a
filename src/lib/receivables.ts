@@ -27,9 +27,10 @@ export function receivableError(error: unknown, fallback: string) {
 }
 
 export interface ReceivableImportRequestBody { action: 'preview' | 'commit'; file_name: string; file_base64: string; complete?: boolean; previous_import_id?: string | null; mode?: 'open' | 'received'; title_mappings?: Record<string, string>; collector_mappings?: Record<string, string>; previous_financial_revision?: string | null; confirm_corrections?: boolean; full_report?: boolean; reference_date?: string; request_id?: string }
-export async function receivableImportRequest<T>(body: ReceivableImportRequestBody, signal?: AbortSignal): Promise<T> {
+export interface ReceivableImportStatusRequest { action: 'status'; mode: 'open'; request_id: string; file_sha256: string; full_report: boolean; reference_date: string; row_count: number }
+export async function receivableImportRequest<T>(body: ReceivableImportRequestBody | ReceivableImportStatusRequest, signal?: AbortSignal): Promise<T> {
   const client = supabase;
-  const phase = body.action;
+  const phase = body.action === 'status' ? 'commit' : body.action;
   if (signal?.aborted) throw new DOMException('Análise cancelada.', 'AbortError');
   if (!client) throw makeReceivableFailure({ phase, code: 'PGRST301' });
   let session;

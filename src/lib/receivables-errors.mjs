@@ -1,9 +1,9 @@
-const codes = new Set(['42501','40001','23505','23514','22023','57014','55P03','P0023','P0024','P0030','P0047','PGRST202','PGRST205','PGRST301','PGRST303','42P01','42883',
+const codes = new Set(['42501','40001','23505','23514','22023','57014','55P03','P0023','P0024','P0030','P0047','P0062','PGRST202','PGRST205','PGRST301','PGRST303','42P01','42883',
   'CR_SERVICE_UNAVAILABLE','CR_REQUEST_TIMEOUT','CR_UPSTREAM_TIMEOUT','CR_INVALID_PREVIEW','CR_INVALID_RESPONSE','CR_REQUEST_INVALID','CR_RATE_LIMITED','CR_NETWORK_ERROR','CR_AUTH_UNAVAILABLE',
   'CR_FUNCTION_NOT_FOUND','CR_FILE_TOO_LARGE','CR_FILE_FORMAT_INVALID','CR_FILE_INVALID','CR_FILE_EMPTY','CR_FILE_READ_FAILED','CR_FILE_ANALYSIS_FAILED','CR_FILE_ANALYSIS_TIMEOUT','CR_HTTP_ERROR','CR_UNEXPECTED_ERROR']);
-const stages = new Set(['configuration','cors','request','authenticate','authorize','parse','capabilities','preview','preview_validation','commit','commit_validation']);
+const stages = new Set(['configuration','cors','request','authenticate','authorize','parse','capabilities','preview','preview_validation','commit','commit_validation','status','status_validation']);
 const uuid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
-const gatewayVersion = 'receivables-import/2026-10-19.1';
+const gatewayVersions = new Set(['receivables-import/2026-10-19.1','receivables-import/2026-11-03.1']);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const statusOf = value => Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
 const phaseOf = value => value === 'commit' ? 'commit' : 'preview';
@@ -27,7 +27,7 @@ export function makeReceivableFailure({ phase, status, code, payload } = {}) {
   if (http !== null) result.status = http;
   if (typeof source.request_id === 'string' && uuid.test(source.request_id)) result.request_id = source.request_id;
   if (stages.has(source.stage)) result.stage = source.stage;
-  if (source.schema_version === gatewayVersion) result.schema_version = gatewayVersion;
+  if (gatewayVersions.has(source.schema_version)) result.schema_version = source.schema_version;
   if (http === 422 && Array.isArray(source.errors)) result.errors = source.errors.slice(0,100).filter(item => object(item)
     && Number.isSafeInteger(item.line) && item.line >= 0 && item.line <= 5001 && typeof item.column === 'string' && typeof item.problem === 'string' && typeof item.correction === 'string')
     .map(item => ({ line: item.line, column: item.column.slice(0,300), problem: item.problem.slice(0,500), correction: item.correction.slice(0,500) }));

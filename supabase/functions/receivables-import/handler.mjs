@@ -3,15 +3,16 @@ import {
 } from '../../../src/lib/payables-parser.mjs';
 import { validateReceivableRows, validateReceivablePaidRows, receivableCustomerKey, mergeReceivableImportProblems } from '../../../src/lib/receivables-parser.mjs';
 import { validOpenReportReference, validOpenReportPreview, validOpenReportCommit } from './open-report-contract.mjs';
+import { validOpenReportStatus } from './open-report-status.mjs';
 
 const MAX_BODY_BYTES = 3 * 1024 * 1024;
 const MAX_BASE64_LENGTH = 4 * Math.ceil(MAX_FILE_BYTES / 3);
 const UUID = /^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/;
 const SERVICE_FAILURE = 'Não foi possível confirmar a operação. Atualize o histórico antes de tentar novamente.';
-export const RECEIVABLES_GATEWAY_SCHEMA = 'receivables-import/2026-10-19.1';
+export const RECEIVABLES_GATEWAY_SCHEMA = 'receivables-import/2026-11-03.1';
 const DIAGNOSTIC_CODES = new Set([
   '42501', '40001', '23505', '23514', '22023', '57014', '55P03', '42P01', '42883',
-  'P0023', 'P0024', 'P0030', 'P0047', 'PGRST202', 'PGRST301', 'PGRST303',
+  'P0023', 'P0024', 'P0030', 'P0047', 'P0062', 'PGRST202', 'PGRST301', 'PGRST303',
   'CR_SERVICE_UNAVAILABLE', 'CR_REQUEST_TIMEOUT', 'CR_UPSTREAM_TIMEOUT',
   'CR_INVALID_PREVIEW', 'CR_INVALID_RESPONSE', 'CR_REQUEST_INVALID', 'CR_RATE_LIMITED',
 ]);
@@ -272,6 +273,32 @@ export function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetc
       stage = 'request';
       try { body = await readBody(request); }
       catch { return respond(400, { error: INVALID_REQUEST }); }
+      if (body.action === 'status') {
+        // Checking a frozen request never uploads, inflates, analyzes or commits
+        // its file again. SQL verifies ownership and the preserved source hash.
+        if (Object.keys(body).some(key => !['action', 'mode', 'request_id', 'file_sha256', 'full_report', 'reference_date', 'row_count'].includes(key))
+          || body.mode !== 'open' || typeof body.request_id !== 'string' || !UUID.test(body.request_id)
+          || typeof body.file_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(body.file_sha256)
+          || typeof body.full_report !== 'boolean' || !validOpenReportReference(body.reference_date)
+          || !Number.isSafeInteger(body.row_count) || body.row_count < 1 || body.row_count > MAX_ROWS) return respond(400, { error: INVALID_REQUEST });
+        if (!['read', 'write'].every(action => access.payload.permissions.some(permission => permission?.resource === 'contas_receber' && permission.action === action))
+          || !access.payload.permissions.some(permission => permission?.resource === 'importar_bases' && permission.action === 'read')) {
+          return respond(403, { code: '42501', error: 'Seu perfil não tem permissão para conferir esta importação.' });
+        }
+        stage = 'status';
+        const checked = await call('/rest/v1/rpc/receivable_open_report_request_status', { data: {
+          p_request_id: body.request_id, p_scope: 'grupo-consolidado', p_file_sha256: body.file_sha256,
+          p_full_report: body.full_report, p_reference_date: body.reference_date, p_expected_row_count: body.row_count,
+        } });
+        if (!checked.ok && ['PGRST202', '42883', '42P01'].includes(checked.payload?.code)) {
+          return respond(409, { code: 'P0062', activation_required: true, error: 'Ative a atualização 062 para consultar a confirmação pendente sem reenviar a importação.' });
+        }
+        if (!checked.ok) return upstreamFailure(checked);
+        stage = 'status_validation';
+        if (!validOpenReportStatus(checked.payload, { requestId: body.request_id, fileSha256: body.file_sha256,
+          fullReport: body.full_report, referenceDate: body.reference_date, rowCount: body.row_count })) throw new Error('invalid_status_response');
+        return respond(200, checked.payload);
+      }
       if (Object.keys(body).some(key => !['action', 'file_name', 'file_base64', 'complete', 'previous_import_id', 'mode', 'title_mappings', 'previous_financial_revision', 'confirm_corrections', 'collector_mappings', 'full_report', 'reference_date', 'request_id'].includes(key))
         || !['preview', 'commit'].includes(body.action)
         || (Object.hasOwn(body, 'mode') && !['open', 'received'].includes(body.mode))
@@ -391,7 +418,7 @@ export function createReceivablesGateway({ env, fetch: fetcher = globalThis.fetc
       // row, environment variable, raw exception, or upstream response.
       if (signal.aborted || deadline.aborted) return respond(504, { code: 'CR_REQUEST_TIMEOUT', error: 'A operação excedeu o tempo de resposta. Preserve o arquivo e confira o histórico antes de tentar novamente.' });
       if (stage === 'preview_validation') return respond(502, { code: 'CR_INVALID_PREVIEW', error: 'O serviço retornou uma análise incompatível. Atualize a função de importação antes de tentar novamente.' });
-      if (stage === 'commit_validation' || error instanceof Error && error.message === 'invalid_identity') return respond(502, { code: 'CR_INVALID_RESPONSE', error: SERVICE_FAILURE });
+      if (stage === 'commit_validation' || stage === 'status_validation' || error instanceof Error && error.message === 'invalid_identity') return respond(502, { code: 'CR_INVALID_RESPONSE', error: SERVICE_FAILURE });
       return respond(503, { error: SERVICE_FAILURE });
     }
   };

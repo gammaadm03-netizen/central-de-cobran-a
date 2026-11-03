@@ -37,3 +37,11 @@ test('reference rejects invalid status, phase and nested raw data', () => {
   const text = receivableFailureReference({ status: '503', phase: 'private', code: { token: 'private' }, request_id: 'private', stage: 'private' }, 'commit');
   assert.equal(text, 'CONFIRMAÇÃO · SEM RESPOSTA HTTP · CR_UNEXPECTED_ERROR · SERVIÇO SEM DIAGNÓSTICO');
 });
+test('062 status diagnostics preserve activation and the read-only stage while accepting the previous gateway version', () => {
+  const payload = { code: 'P0062', activation_required: true, stage: 'status', schema_version: 'receivables-import/2026-11-03.1' };
+  const safe = makeReceivableFailure({ phase: 'commit', status: 409, payload });
+  assert.equal(safe.code, 'P0062'); assert.equal(safe.activation_required, true); assert.equal(safe.stage, 'status'); assert.equal(safe.schema_version, payload.schema_version);
+  assert.match(receivableFailureReference(safe, 'commit'), /P0062.*2026-11-03\.1.*ETAPA status/);
+  const older = makeReceivableFailure({ phase: 'commit', status: 504, payload: { code: 'CR_REQUEST_TIMEOUT', stage: 'commit', schema_version: 'receivables-import/2026-10-19.1' } });
+  assert.equal(older.schema_version, 'receivables-import/2026-10-19.1');
+});

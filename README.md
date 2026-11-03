@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.18**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.19**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Confirmação da importação de Contas a Receber — 0.18.19
+
+O resultado de um envio pendente pode ser consultado pelo protocolo, sem reenviar a planilha ou aguardar o bloqueio geral das operações financeiras. A gravação do relatório completo reaproveita as conferências já validadas na mesma transação. Os retornos continuam exigindo aprovação e os recebimentos reais mantêm seu histórico. [Ativar a atualização062 e recuperar um envio pendente](docs/confirmacao-importacao-recebiveis.md).
 
 ## Status Pago pelo relatório e atualizações automáticas de CP — 0.18.18
 
