@@ -5,18 +5,18 @@ const day = '2026-10-18', initial = '2026-10-18T15:00:00.000Z';
 const id = (n: number) => `99000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const own = id(20);
 const workflow = { version: '029', normal_pause: true, finish_requires_started: true, pending_read_only: true, returns_priority: true };
-type Options = { legacy?: boolean; returns?: boolean; advisoryReturns?: boolean; forcePriorityBlock?: boolean; unassigned?: boolean; director?: boolean; resume?: boolean; unknown?: 'START' | 'PAUSE' | 'SAVE' | 'FINISH'; recovery?: boolean; computerWrong?: boolean; emailMode?: 'missing' | 'none' | 'empty' | 'long' | 'forbidden' | 'invalid' };
+type Options = { legacy?: boolean; returns?: boolean; advisoryReturns?: boolean; mandatoryReturns?: boolean; additionalReturn?: boolean; forcePriorityBlock?: boolean; unassigned?: boolean; director?: boolean; resume?: boolean; unknown?: 'START' | 'PAUSE' | 'SAVE' | 'FINISH'; recovery?: boolean; computerWrong?: boolean; emailMode?: 'missing' | 'none' | 'empty' | 'long' | 'forbidden' | 'invalid' };
 async function setup(page: Page, options: Options = {}) {
   await page.clock.install({ time: new Date(options.computerWrong ? '2026-10-14T15:00:00Z' : initial) }); await page.clock.pauseAt(new Date(options.computerWrong ? '2026-10-14T15:00:01Z' : '2026-10-18T15:00:01Z'));
   const manager = options.unassigned, collector = !manager && !options.director;
   const access = { profile: { id: id(1), username: 'TesteFluxo', display_name: 'Operadora de teste', role_key: manager ? 'gerente_geral' : options.director ? 'diretor' : 'cobradora_1', enabled: true }, collector_id: collector ? own : null, permissions: [{ resource: 'cobranca', action: 'read' }, ...(!options.director ? [{ resource: 'cobranca', action: 'write' }] : []), ...(!collector ? [{ resource: 'contas_receber', action: 'read' }] : []), ...(manager ? [{ resource: 'contas_receber', action: 'write' }] : [])] };
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'), Buffer.from(JSON.stringify({ sub: id(1), session_id: id(2), exp: Date.parse(initial) / 1000 + 86400, role: 'authenticated' })).toString('base64url'), 'synthetic-test-only'].join('.');
   const make = (n: number, changes: Record<string, unknown> = {}) => ({ id: id(100 + n), scope: 'grupo-consolidado', retired_from_report: false, customer_key: `name:ORGAO FLUXO ${n}`, document: `FLUXO-${n}`, client_name: `Órgão de fluxo ${n}`, client_document: null, branch: 'Filial sintética', due_date: '2026-10-08', amount_cents: 10000 + n, collector_id: own, collector_name: 'Operadora de teste', status: 'OPEN', validation_status: 'NONE', payment_source: null, payment_reported_date: null, revision: 1, operational_status: 'NOVO TÍTULO - COBRAR', case_revision: 0, observation: null, next_action_text: null, next_date: null, delay_days: 10, total_work_seconds: 0, finalized_at: null, ...changes });
-  const rows: any[] = [make(1, options.unassigned ? { collector_id: null, collector_name: null } : options.returns ? { next_action_text: 'Retornar por telefone', next_date: '2026-10-17' } : {}), make(2), make(3, { next_action_text: 'Retorno futuro', next_date: '2026-10-19' }), make(4, { status: 'PENDING_VALIDATION', validation_status: 'PENDING', payment_source: 'COBRANCA', payment_reported_date: day })];
+  const rows: any[] = [make(1, options.unassigned ? { collector_id: null, collector_name: null } : options.returns ? { next_action_text: 'Retornar por telefone', next_date: '2026-10-17' } : {}), make(2, options.additionalReturn ? { next_action_text: 'Retorno combinado para hoje', next_date: day } : {}), make(3, { next_action_text: 'Retorno futuro', next_date: '2026-10-19' }), make(4, { status: 'PENDING_VALIDATION', validation_status: 'PENDING', payment_source: 'COBRANCA', payment_reported_date: day })];
   for (const row of rows) row.agenda_date = row.next_date;
   const state = { now: Date.parse(initial), runningId: options.resume || options.recovery ? rows[0].id as string | null : null, started: new Set<string>(options.resume ? [rows[0].id] : []), starts: new Map<string, number>(options.resume || options.recovery ? [[rows[0].id, Date.parse(initial) - 60000]] : []), totals: new Map<string, number>(), replies: new Map<string, any>(), unknown: options.unknown, inaccessible: !!options.recovery, events: [] as any[], financialWrites: 0, saves: 0, emailRevision: 0, emailEmails: ['financeiro@example.invalid', 'contato@example.invalid'] };
   const calls: { name: string; body: any }[] = [];
-  const workflowMetadata = { ...workflow, ...(options.advisoryReturns ? { returns_block_new: false } : {}) };
+  const workflowMetadata = { ...workflow, ...(options.advisoryReturns ? { returns_block_new: false } : options.mandatoryReturns ? { returns_block_new: true } : {}) };
   const due = (row: any) => ['NEW', 'OPEN', 'NOT_LOCATED'].includes(row.status) && row.agenda_date && row.agenda_date <= day;
   const priority = () => { const pending = rows.filter(due); return { collector_id: collector ? own : null, due_count: pending.length, total_cents: pending.reduce((sum, row) => sum + row.amount_cents, 0), next_title_id: pending[0]?.id ?? null, next_due_date: pending[0]?.agenda_date ?? null }; };
   function timer(row: any) { const elapsed = state.runningId === row.id ? Math.floor((state.now - (state.starts.get(row.id) ?? state.now)) / 1000) : 0; return { title_id: row.id, running: state.runningId === row.id, session_id: state.runningId === row.id ? id(500) : null, started_at: state.runningId === row.id ? new Date(state.starts.get(row.id)!).toISOString() : null, elapsed_seconds: elapsed, total_seconds: (state.totals.get(row.id) ?? 0) + elapsed, actor_total_seconds: (state.totals.get(row.id) ?? 0) + elapsed, server_now: new Date(state.now).toISOString(), recovery_allowed: state.inaccessible && row.id === rows[0].id }; }
@@ -107,7 +107,24 @@ test('Iniciar independente de rascunho; Pausar e Salvar explicam claramente quan
 });
 
 test('salva antes e depois da pausa, sem perder rascunho nem somar o tempo pausado', async ({ page }) => {
-  const seen = await setup(page); await open(page); await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled(); await observation(page).fill('Andamento enquanto executa'); await button(page, 'Salvar andamento').click(); await expect(page.getByRole('status').filter({ hasText: 'Andamento salvo na base central' })).toBeVisible(); await seen.advance(61000); await expect(panel(page).getByRole('timer')).toHaveText('00:01:01'); await observation(page).fill('Rascunho preservado ao pausar'); await button(page, 'Pausar').click(); await expect(button(page, 'Iniciar')).toBeEnabled(); await expect(observation(page)).toHaveValue('Rascunho preservado ao pausar'); await button(page, 'Salvar andamento').click(); await expect.poll(() => seen.state.saves).toBe(2); await seen.advance(600000); await expect(panel(page).getByRole('timer')).toHaveText('00:01:01'); expect(workCalls(seen.calls).map(call => call.body.p_action)).toEqual(['START', 'PAUSE']); expect(saves(seen.calls)).toHaveLength(2);
+  const seen = await setup(page); await open(page);
+  const detailReads = () => seen.calls.filter(call => call.name === 'collection_case_detail').length;
+  // Every mutation reloads the detail itself, then the central refresh reloads
+  // it again. Settle both official samples before advancing the fake clock.
+  async function settled(previousReads: number, readyAction: 'Iniciar' | 'Pausar') {
+    await expect.poll(detailReads).toBeGreaterThanOrEqual(previousReads + 2);
+    await expect(button(page, readyAction)).toBeEnabled();
+    await expect(button(page, 'Atualizar detalhe')).toBeEnabled();
+  }
+  let before = detailReads(); await button(page, 'Iniciar').click(); await settled(before, 'Pausar');
+  await observation(page).fill('Andamento enquanto executa'); before = detailReads(); await button(page, 'Salvar andamento').click();
+  await expect(page.getByRole('status').filter({ hasText: 'Andamento salvo na base central' })).toBeVisible(); await settled(before, 'Pausar');
+  await seen.advance(61000); await expect(panel(page).getByRole('timer')).toHaveText('00:01:01');
+  await observation(page).fill('Rascunho preservado ao pausar'); before = detailReads(); await button(page, 'Pausar').click(); await settled(before, 'Iniciar');
+  await expect(observation(page)).toHaveValue('Rascunho preservado ao pausar'); before = detailReads(); await button(page, 'Salvar andamento').click();
+  await expect.poll(() => seen.state.saves).toBe(2); await settled(before, 'Iniciar');
+  await seen.advance(600000); await expect(panel(page).getByRole('timer')).toHaveText('00:01:01');
+  expect(workCalls(seen.calls).map(call => call.body.p_action)).toEqual(['START', 'PAUSE']); expect(saves(seen.calls)).toHaveLength(2);
 });
 
 test('finalizar exige início, aceita sessão pausada e mantém o título sem abrir outra NF automaticamente', async ({ page }) => {
@@ -120,6 +137,41 @@ test('atendimento em execução impede abrir outra NF; pausar permite retomar de
 
 test('retorno de ontem bloqueia novo, fila explícita usa returns e agenda futura não bloqueia', async ({ page }) => {
   const seen = await setup(page, { returns: true, computerWrong: true }); await open(page, 2); await expect(button(page, 'Iniciar')).toBeDisabled(); await expect(panel(page)).toContainText('Atenda primeiro os retornos devidos'); await page.getByRole('button', { name: 'Abrir retornos devidos', exact: true }).click(); await expect.poll(() => seen.calls.filter(call => call.name === 'collection_workbench').at(-1)?.body.p_queue).toBe('returns'); await expect(page.getByRole('button', { name: /^Abrir título FLUXO-/ })).toHaveCount(1); await open(page); await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled(); await completeDraft(page); await button(page, 'Salvar andamento').click(); await expect(page.getByRole('status').filter({ hasText: 'Andamento salvo na base central' })).toBeVisible(); expect(seen.rows[0].agenda_date).toBe('2026-10-17'); await button(page, 'Finalizar atendimento').click(); await expect.poll(() => seen.state.started.size).toBe(0); await page.getByRole('button', { name: 'Limpar filtros', exact: true }).click(); await open(page, 3); await expect(button(page, 'Iniciar')).toBeEnabled(); expect(seen.rows[2].next_date).toBe('2026-10-19');
+});
+
+test('prioridade obrigatória libera o segundo título após atender o retorno e agendar a próxima ação futura', async ({ page }) => {
+  const seen = await setup(page, { returns: true, mandatoryReturns: true });
+  await expect(page.getByText('Atenda primeiro os retornos com data até hoje para iniciar outros títulos da mesma carteira.', { exact: false })).toBeVisible();
+  await open(page, 2); await expect(button(page, 'Iniciar')).toBeDisabled(); await expect(button(page, 'Finalizar atendimento')).toBeDisabled();
+  expect(workCalls(seen.calls)).toHaveLength(0);
+
+  await open(page); await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled();
+  await completeDraft(page); await button(page, 'Finalizar atendimento').click(); await expect.poll(() => seen.state.events.length).toBe(1);
+  expect(seen.rows[0].agenda_date).toBe('2026-10-20'); expect(seen.rows[2].agenda_date).toBe('2026-10-19');
+  await open(page, 2); await expect(button(page, 'Iniciar')).toBeEnabled(); await expect(button(page, 'Finalizar atendimento')).toBeDisabled();
+  await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled();
+  await completeDraft(page); await button(page, 'Finalizar atendimento').click(); await expect.poll(() => seen.state.events.length).toBe(2);
+  expect(workCalls(seen.calls).filter(call => call.body.p_action === 'START').map(call => call.body.p_title_id)).toEqual([id(101), id(102)]);
+  expect(seen.state.runningId).toBeNull(); expect(seen.state.started.size).toBe(0); expect(seen.state.financialWrites).toBe(0);
+});
+
+test('todos os retornos devidos precisam ser atendidos e somente um intervalo pode ficar em andamento', async ({ page }) => {
+  const seen = await setup(page, { returns: true, additionalReturn: true, mandatoryReturns: true });
+  await open(page, 3); await expect(button(page, 'Iniciar')).toBeDisabled();
+  await open(page); await button(page, 'Iniciar').click(); await expect(button(page, 'Pausar')).toBeEnabled(); await button(page, 'Pausar').click();
+  await open(page, 2); await expect(button(page, 'Iniciar')).toBeEnabled(); await button(page, 'Iniciar').click();
+  await expect(button(page, 'Pausar')).toBeEnabled(); await expect(page.getByRole('button', { name: 'Abrir título FLUXO-3', exact: true })).toBeDisabled();
+  await completeDraft(page); await button(page, 'Finalizar atendimento').click(); await expect.poll(() => seen.state.events.length).toBe(1);
+
+  await open(page, 3); await expect(button(page, 'Iniciar')).toBeDisabled();
+  await expect(panel(page)).toContainText('Atenda primeiro os retornos devidos');
+  await open(page); await expect(button(page, 'Finalizar atendimento')).toBeEnabled();
+  await completeDraft(page); await button(page, 'Finalizar atendimento').click(); await expect.poll(() => seen.state.events.length).toBe(2);
+  await open(page, 3); await expect(button(page, 'Iniciar')).toBeEnabled(); await button(page, 'Iniciar').click();
+  await expect(button(page, 'Pausar')).toBeEnabled(); await completeDraft(page); await button(page, 'Finalizar atendimento').click();
+  await expect.poll(() => seen.state.events.length).toBe(3);
+  expect(workCalls(seen.calls).filter(call => call.body.p_action === 'START').map(call => call.body.p_title_id)).toEqual([id(101), id(102), id(103)]);
+  expect(seen.state.runningId).toBeNull(); expect(seen.state.started.size).toBe(0); expect(seen.state.financialWrites).toBe(0);
 });
 
 test('retorno para hoje continua na agenda enquanto segundo e terceiro títulos podem ser iniciados e finalizados', async ({ page }) => {

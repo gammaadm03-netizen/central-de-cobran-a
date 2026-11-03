@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.20**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.21**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Retornos devidos antes de novos atendimentos — 0.18.21
+
+A cobradora deve atender os retornos da sua carteira com data até hoje antes de iniciar outros títulos. A agenda futura permite trabalhar nos demais títulos, mantendo um intervalo ativo por pessoa e início obrigatório antes da finalização. [Ativar a regra064 e usar a agenda de retornos](docs/iniciar-atendimento-cobranca.md).
 
 ## Início de atendimento com retornos prioritários — 0.18.20
 
