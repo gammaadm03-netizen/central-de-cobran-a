@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.22**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.23**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Tempo do título nos perfis de cobrança — 0.18.23
+
+O atendimento destaca o tempo total de trabalho do título, com o mesmo critério para a Gerência e a cobradora responsável. O tempo próprio de cada acesso aparece separado. A consulta soma os intervalos já registrados no título autorizado, preservando os controles individuais de Iniciar e Pausar e as regras de carteira e retornos. [Ativar o SQL067 e consultar os tempos](docs/tempo-atendimento-cobranca.md).
 
 ## Abertos e baixados em Contas a Pagar — 0.18.22
 

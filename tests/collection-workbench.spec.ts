@@ -9,13 +9,13 @@ const additionalStatuses = ['MERCADORIA A RECOLHER', 'NOTA A CANCELAR', 'AGUARDA
 const statuses = ['NOVO TÍTULO - COBRAR', 'SEM SUCESSO', 'AGUARDANDO RETORNO', 'COBRANCA VIA EMAIL', 'COBRANCA POR WHATSAPP', 'AGUARDANDO LIQUIDACAO', 'SEM PRAZO', 'SEM PREVISAO DE PG', 'PAGAMENTO PROGRAMADO', ...additionalStatuses, 'TÍTULO PAGO'];
 const workflow = { version: '029', normal_pause: true, finish_requires_started: true, pending_read_only: true, returns_priority: true };
 const shifted = (days: number) => new Date(Date.parse(`${today}T12:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
-type Options = { director?: boolean; manager?: boolean; unbound?: boolean; unassigned?: boolean; large?: boolean; wrongScope?: boolean; unsafe?: boolean; failure?: 'stale' | 'uncertain'; pending?: boolean };
+type Options = { director?: boolean; manager?: boolean; collector2?: boolean; unbound?: boolean; unassigned?: boolean; large?: boolean; wrongScope?: boolean; unsafe?: boolean; failure?: 'stale' | 'uncertain'; pending?: boolean; worked?: { actor: number; others: number } };
 
 async function setup(page: Page, options: Options = {}) {
   await page.clock.install({ time: new Date('2026-10-18T15:00:00Z') });
   await page.clock.pauseAt(initialTime);
   const isCollector = !options.director && !options.manager;
-  const role = options.director ? 'diretor' : options.manager ? 'gerente_geral' : 'cobradora_1';
+  const role = options.director ? 'diretor' : options.manager ? 'gerente_geral' : options.collector2 ? 'cobradora_2' : 'cobradora_1';
   const access = {
     profile: { id: id(1), username: 'TesteAtendimento', display_name: 'Pessoa sintética', role_key: role, enabled: true },
     permissions: [{ resource: 'cobranca', action: 'read' }, ...(!options.director ? [{ resource: 'cobranca', action: 'write' }] : []), ...(!isCollector ? [{ resource: 'contas_receber', action: 'read' }, ...(options.manager ? [{ resource: 'contas_receber', action: 'write' }] : [])] : [])],
@@ -36,6 +36,7 @@ async function setup(page: Page, options: Options = {}) {
   const rows = options.large ? Array.from({ length: 31 }, (_, i) => make(i + 1, 31 - i)) : [make(1, 45), make(2, 10), make(3, 200, other)];
   type Row = typeof rows[number];
   const state = { now: initialTime.getTime(), failure: options.failure, events: [] as any[], caseEvents: [] as any[], started: new Set<string>(), sessions: new Map<string, { session_id: string | null; started_at: string | null; running: boolean; total_seconds: number }>(), replies: new Map<string, any>() };
+  if (options.worked) state.sessions.set(rows[0].id, { session_id: null, started_at: null, running: false, total_seconds: options.worked.actor });
   const calls: { name: string; body: any; method: string; query: string }[] = [];
   const visible = () => rows.filter(row => row.due_date < today && (!isCollector || !options.unbound && row.collector_id === own));
   const collectible = (row: Row) => ['NEW', 'OPEN', 'NOT_LOCATED'].includes(row.status) && !!row.collector_id;
@@ -46,8 +47,9 @@ async function setup(page: Page, options: Options = {}) {
   function timer(row: Row) {
     const session = state.sessions.get(row.id);
     const elapsed = session?.running && session.started_at ? Math.max(0, Math.floor((state.now - Date.parse(session.started_at)) / 1000)) : 0;
-    const total = (session?.total_seconds ?? 0) + elapsed;
-    return { title_id: row.id, running: !!session?.running, session_id: session?.session_id ?? null, started_at: session?.started_at ?? null, elapsed_seconds: elapsed, total_seconds: total, actor_total_seconds: total, server_now: new Date(state.now).toISOString(), recovery_allowed: !!session?.running && (!collectible(row) || row.due_date >= today) };
+    const actorTotal = (session?.total_seconds ?? 0) + elapsed;
+    const total = actorTotal + (row.id === rows[0].id ? options.worked?.others ?? 0 : 0);
+    return { title_id: row.id, running: !!session?.running, session_id: session?.session_id ?? null, started_at: session?.started_at ?? null, elapsed_seconds: elapsed, total_seconds: total, actor_total_seconds: actorTotal, server_now: new Date(state.now).toISOString(), recovery_allowed: !!session?.running && (!collectible(row) || row.due_date >= today) };
   }
   function listed(row: Row) {
     const current = timer(row);
@@ -93,7 +95,8 @@ async function setup(page: Page, options: Options = {}) {
       const returned = filtered.slice(body.p_offset ?? 0, (body.p_offset ?? 0) + (body.p_limit ?? 25)).map(listed);
       if (options.wrongScope && returned[0]) returned[0].collector_id = other;
       const running = [...state.sessions].find(([, session]) => session.running), active = running && rows.find(row => row.id === running[0]);
-      return reply({ as_of_date: today, server_now: new Date(state.now).toISOString(), count, total_cents: options.unsafe ? Number.MAX_SAFE_INTEGER + 1 : total, snapshot_revision: `synthetic-${rows.reduce((sum, row) => sum + row.revision + row.case_revision, 0)}`, active_timer: active ? timer(active) : null, rows: returned, workflow, priority: priority(isCollector ? own : body.p_collector_id ?? null) });
+      const activeTimer = active ? timer(active) : null;
+      return reply({ as_of_date: today, server_now: new Date(state.now).toISOString(), count, total_cents: options.unsafe ? Number.MAX_SAFE_INTEGER + 1 : total, snapshot_revision: `synthetic-${rows.reduce((sum, row) => sum + row.revision + row.case_revision, 0)}`, active_timer: activeTimer ? { ...activeTimer, total_seconds: activeTimer.actor_total_seconds } : null, rows: returned, workflow, priority: priority(isCollector ? own : body.p_collector_id ?? null) });
     }
     if (name === 'collection_case_detail') { const row = visible().find(row => row.id === body.p_title_id); return row ? reply(detail(row)) : reply({ code: '42501' }, 403); }
     if (name === 'collection_work_action' || name === 'save_collection_case') {
@@ -107,7 +110,7 @@ async function setup(page: Page, options: Options = {}) {
       if (name === 'collection_work_action') {
         const current = timer(row), existing = state.sessions.get(row.id);
         if (body.p_action === 'START') { state.started.add(row.id); state.sessions.set(row.id, { session_id: id(500 + calls.filter(call => call.name === 'collection_work_action').length), started_at: new Date(state.now).toISOString(), running: true, total_seconds: existing?.total_seconds ?? 0 }); }
-        else { if (body.p_action === 'FINISH') state.started.delete(row.id); state.sessions.set(row.id, { session_id: null, started_at: null, running: false, total_seconds: current.total_seconds }); }
+        else { if (body.p_action === 'FINISH') state.started.delete(row.id); state.sessions.set(row.id, { session_id: null, started_at: null, running: false, total_seconds: current.actor_total_seconds }); }
         const response = timer(row); state.replies.set(body.p_request_id, response);
         if (state.failure === 'uncertain') { state.failure = undefined; return route.abort('failed'); }
         return reply(response);
@@ -119,7 +122,7 @@ async function setup(page: Page, options: Options = {}) {
       if (body.p_finish && body.p_status === 'TÍTULO PAGO') { row.status = 'PENDING_VALIDATION'; row.validation_status = 'PENDING'; row.payment_source = 'COBRANCA'; row.payment_reported_date = body.p_payment_date; row.reported_in_collection = true; row.last_action = 'PAID'; }
       if (body.p_finish) {
         state.started.delete(row.id); row.next_action_date = body.p_next_date; row.next_action = body.p_next_date ? 'OTHER' : null;
-        const current = timer(row); state.sessions.set(row.id, { session_id: null, started_at: null, running: false, total_seconds: current.total_seconds }); row.finalized_at = row.updated_at;
+        const current = timer(row); state.sessions.set(row.id, { session_id: null, started_at: null, running: false, total_seconds: current.actor_total_seconds }); row.finalized_at = row.updated_at;
         state.events.unshift({ id: id(900 + state.events.length), title_id: row.id, collector_id: row.collector_id, action: row.last_action ?? 'CONTACT', contact_date: today, next_action: null, next_date: row.next_date, observation: row.observation, return_note: null, payment_date: body.p_payment_date, created_at: row.updated_at });
       }
       const response = { title_id: row.id, revision: row.revision, case_revision: row.case_revision, event_id: body.p_finish ? state.events[0].id : null, finished: !!body.p_finish, timer: timer(row) }; state.replies.set(body.p_request_id, response);
@@ -148,6 +151,50 @@ const sidebar = (page: Page) => page.getByRole('region', { name: 'Atendimento do
 const writes = (calls: { name: string }[]) => calls.filter(call => ['collection_work_action', 'save_collection_case', 'record_collection_action', 'validate_receivable_payment'].includes(call.name));
 const listCalls = (calls: { name: string; body: any }[]) => calls.filter(call => call.name === 'collection_workbench' && call.body.p_queue !== 'returns');
 async function open(page: Page, document = 'NF-1') { await page.getByRole('button', { name: `Abrir título ${document}`, exact: true }).click(); await expect(sidebar(page)).toContainText(document); }
+
+for (const profile of [
+  { name: 'gerência', options: { manager: true, worked: { actor: 85, others: 2198 } }, personal: '00:01:25' },
+  { name: 'cobradora 2', options: { collector2: true, worked: { actor: 2198, others: 85 } }, personal: '00:36:38' },
+]) {
+  test(`${profile.name} vê o mesmo tempo total do título e seu tempo individual identificado`, async ({ page }) => {
+    const seen = await setup(page, profile.options); await open(page);
+    await expect(sidebar(page).getByText('Tempo total de trabalho do título', { exact: true })).toBeVisible();
+    await expect(sidebar(page).getByRole('timer', { name: 'Tempo do atendimento', exact: true })).toHaveText('00:38:03');
+    await expect(sidebar(page).getByText(`Seu tempo neste título: ${profile.personal}`, { exact: true })).toBeVisible();
+    await expect(sidebar(page).getByText('Cobradora responsável: Responsável A', { exact: true })).toBeVisible();
+    expect(writes(seen.calls)).toHaveLength(0);
+  });
+}
+
+test('tempo total inclui o histórico de outras pessoas ao iniciar, pausar e reabrir o atendimento próprio', async ({ page }) => {
+  const seen = await setup(page, { collector2: true, worked: { actor: 2198, others: 85 } }); await open(page);
+  await sidebar(page).getByRole('button', { name: 'Iniciar', exact: true }).click();
+  await expect(sidebar(page).getByRole('button', { name: 'Pausar', exact: true })).toBeEnabled();
+  await seen.advance(62_000);
+  await expect(sidebar(page).getByRole('timer')).toHaveText('00:39:05');
+  await expect(sidebar(page).getByText('Seu tempo neste título: 00:37:40', { exact: true })).toBeVisible();
+  await sidebar(page).getByRole('button', { name: 'Pausar', exact: true }).click();
+  await expect(sidebar(page).getByRole('button', { name: 'Iniciar', exact: true })).toBeEnabled();
+  await seen.advance(3_600_000);
+  await expect(sidebar(page).getByRole('timer')).toHaveText('00:39:05');
+  await expect(sidebar(page).getByText('Seu tempo neste título: 00:37:40', { exact: true })).toBeVisible();
+  await page.reload(); await seen.login(); await open(page);
+  await expect(sidebar(page).getByRole('timer')).toHaveText('00:39:05');
+  await expect(sidebar(page).getByText('Seu tempo neste título: 00:37:40', { exact: true })).toBeVisible();
+  expect(seen.calls.filter(call => call.name === 'collection_work_action').map(call => call.body.p_action)).toEqual(['START', 'PAUSE']);
+  expect(seen.calls.filter(call => call.name === 'collection_work_action').every(call => call.body.p_title_id === id(101))).toBe(true);
+});
+
+test('leitura mostra o tempo total do título sem atribuir o trabalho ao perfil de consulta', async ({ page }) => {
+  const seen = await setup(page, { director: true, worked: { actor: 0, others: 2283 } }); await open(page);
+  await expect(sidebar(page).getByText('Tempo total de trabalho do título', { exact: true })).toBeVisible();
+  await expect(sidebar(page).getByRole('timer')).toHaveText('00:38:03');
+  await expect(sidebar(page)).toContainText('Tempo acumulado dos atendimentos registrados');
+  await expect(sidebar(page)).not.toContainText('Seu tempo neste título');
+  await expect(sidebar(page).getByRole('button', { name: 'Iniciar', exact: true })).toHaveCount(0);
+  await expect(sidebar(page).getByRole('button', { name: 'Pausar', exact: true })).toHaveCount(0);
+  expect(writes(seen.calls)).toHaveLength(0);
+});
 
 test('carteira mostra contagem e soma integrais, pagina no servidor e pesquisa cliente, documento, status ou observação', async ({ page }) => {
   const { calls, rows, advance } = await setup(page, { large: true });
