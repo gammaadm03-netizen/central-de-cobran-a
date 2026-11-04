@@ -2426,14 +2426,14 @@ BEGIN
  IF EXISTS(SELECT 1 FROM public.central_schema_migrations WHERE version='065_payable_report_contents') THEN RETURN;END IF;
  EXECUTE $source065$
 CREATE FUNCTION cf_private.payable_report_contents_revision() RETURNS text
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path='' AS $
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path='' AS $$
  SELECT '065:'||cf_private.payable_open_status_revision();
-$;
+$$;
 
 CREATE FUNCTION public.preview_payables_status_contents_report(p_scope text,p_rows jsonb,p_report_kind text,p_report_contents text,
  p_mappings jsonb DEFAULT '{}',p_resolution_choices jsonb DEFAULT '{}',p_empty_report_confirmed boolean DEFAULT false,
  p_rounding_adjustments jsonb DEFAULT '[]',p_confirm_large_reduction boolean DEFAULT false) RETURNS jsonb
-LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path='' AS $
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path='' AS $$
 DECLARE v_base jsonb;v_rows jsonb;v_resolved jsonb;v_last cf_private.payable_daily_reports%ROWTYPE;v_previous uuid;
  v_row jsonb;v_title public.payable_financial_titles%ROWTYPE;v_line integer;v_key text;v_choice jsonb;v_problem text;v_written boolean;v_member boolean;
  v_actions jsonb:='[]';v_exceptions jsonb:='[]';v_errors jsonb:='[]';v_seen jsonb:='{}';v_closed jsonb:='[]';v_unknown jsonb:='[]';v_macros jsonb;
@@ -2544,12 +2544,12 @@ BEGIN
   'requires_large_reduction_confirmation',false,'large_reduction_confirmed',false,'large_reduction_problem',NULL,
   'paid_already_closed_count',jsonb_array_length(v_closed),'paid_already_closed_keys',v_closed,'paid_unknown_keys',v_unknown,
   'unmapped_plans','[]'::jsonb,'macro_options',v_macros,'bank_options','[]'::jsonb,'auto_payment_count',0,'auto_payment_cents',0,'rounding_adjustments',p_rounding_adjustments);
-END $;
+END $$;
 
 CREATE FUNCTION public.commit_payables_status_contents_report_from_gateway(p_user_id uuid,p_session_id text,p_scope text,p_file_name text,p_file_sha256 text,p_file_base64 text,
  p_rows jsonb,p_report_kind text,p_report_contents text,p_mappings jsonb,p_resolution_choices jsonb,p_previous_import_id uuid,p_previous_financial_revision text,p_expected_report_date date,
  p_request_id uuid,p_empty_report_confirmed boolean DEFAULT false,p_rounding_adjustments jsonb DEFAULT '[]',p_confirm_large_reduction boolean DEFAULT false) RETURNS jsonb
-LANGUAGE plpgsql SECURITY DEFINER SET search_path='' SET lock_timeout='5s' AS $
+LANGUAGE plpgsql SECURITY DEFINER SET search_path='' SET lock_timeout='5s' AS $$
 DECLARE v_payload jsonb;v_saved cf_private.payable_daily_requests%ROWTYPE;v_previous cf_private.payable_daily_reports%ROWTYPE;v_existing public.payable_imports%ROWTYPE;
  v_preview jsonb;v_core jsonb;v_result jsonb;v_rows jsonb;v_resolved jsonb;v_position jsonb;v_item jsonb;v_map jsonb;v_import uuid;v_report uuid:=gen_random_uuid();
  v_title public.payable_review_titles%ROWTYPE;v_event uuid;v_writeoff jsonb;v_written integer:=0;v_reuse boolean:=false;v_row jsonb;v_head_contents text;
@@ -2676,7 +2676,7 @@ BEGIN
  INSERT INTO public.audit_events(user_id,username,role_key,module,entity,record_id,action,after_value)
   SELECT id,username,role_key,'contas_pagar','PAYABLE_REPORT_CONTENTS_IMPORT',v_report::text,'IMPORT',v_result FROM public.profiles WHERE id=auth.uid();
  RETURN v_result;
-END $;
+END $$;
 
 REVOKE ALL ON FUNCTION cf_private.payable_report_contents_revision(),
  public.preview_payables_status_contents_report(text,jsonb,text,text,jsonb,jsonb,boolean,jsonb,boolean),

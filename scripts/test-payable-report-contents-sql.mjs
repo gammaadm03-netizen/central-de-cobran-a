@@ -130,14 +130,34 @@ try {
   legacyBad = await legacyCommit(seedPaidRows, badSource);
   assert.equal(legacyBad.marked_paid_count, 28);
   beforeInstall = await state();
-  await owner(); await db.exec(await file('065_payable_report_contents.sql')); await actor();
+  // Execute the actual SQL Editor artifact before either appended migration is
+  // registered. Reapplying it only after065 is installed would skip the dynamic
+  // CREATE FUNCTION bodies and miss damaged dollar delimiters in the bundle.
+  const installer = await readFile(new URL('../supabase/dashboard/ativar-tipos-relatorios-contas-pagar.sql', import.meta.url), 'utf8');
+  assert.equal(installer, await buildPayableReportContentsSql());
+  for (const name of ['065_payable_report_contents.sql', '066_director_merchandise_plan.sql']) {
+    const source = (await file(name)).replace(/^BEGIN;[\t ]*\r?\n/m, '').replace(/^COMMIT;[\t ]*\r?\n?$/m, '').trim();
+    assert(installer.includes(`-- SOURCE: ${name}\n${source}`), `${name} must retain every literal dollar delimiter in the published SQL Editor artifact`);
+  }
+  await owner();
+  assert.equal(await scalar("SELECT count(*)::integer r FROM public.central_schema_migrations WHERE version IN('065_payable_report_contents','066_director_merchandise_plan')"), 0);
+  assert.equal(await scalar("SELECT to_regprocedure('cf_private.payable_report_contents_revision()')::text r"), null);
+  await db.exec(installer); // Keep the published file's complete outer transaction.
+  await actor();
 
-  await test('activation preserves every source, financial record and existing operational event', async () => {
+  await test('the published SQL Editor artifact installs065/066 fresh and preserves every source, financial record and operational event', async () => {
     const before = structuredClone(beforeInstall), after = await state();
     delete before['public.central_schema_migrations']; delete after['public.central_schema_migrations'];
     assert.deepEqual(after, before);
     const cap = await scalar('SELECT public.payables_import_capabilities() r');
     assert.equal(cap.status_report_version, '065');
+    assert.equal(cap.report_contents_version, '065');
+    assert.deepEqual(cap.report_contents, ['FULL_OPEN', 'PAID_STATUS']);
+    await owner();
+    assert.equal(await scalar("SELECT count(*)::integer r FROM public.central_schema_migrations WHERE version IN('065_payable_report_contents','066_director_merchandise_plan')"), 2);
+    assert.equal(await scalar("SELECT to_regprocedure('public.preview_payables_status_contents_report(text,jsonb,text,text,jsonb,jsonb,boolean,jsonb,boolean)') IS NOT NULL r"), true);
+    assert.equal(await scalar("SELECT to_regprocedure('public.commit_payables_status_contents_report_from_gateway(uuid,text,text,text,text,text,jsonb,text,text,jsonb,jsonb,uuid,text,date,uuid,boolean,jsonb,boolean)') IS NOT NULL r"), true);
+    await actor();
     const installed = await state();
     await owner(); const source = (await file('065_payable_report_contents.sql')).replace(/^BEGIN;$/m, '').replace(/^COMMIT;$/m, '');
     await db.exec(source); await actor(); assert.deepEqual(await state(), installed);

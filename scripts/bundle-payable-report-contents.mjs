@@ -11,6 +11,7 @@ export async function buildPayableReportContentsSql() {
     if ((source.match(/^BEGIN;\s*$/gm) ?? []).length !== 1 || (source.match(/^COMMIT;\s*$/gm) ?? []).length !== 1) throw new Error(`Invalid outer transaction: ${name}`);
     return `-- SOURCE: ${name}\n${source.replace(/^BEGIN;[\t ]*\r?\n/m, '').replace(/^COMMIT;[\t ]*\r?\n?$/m, '').trim()}`;
   }));
+  // A callback preserves SQL dollar quoting; replacement strings turn $$ into $.
   return `-- CENTRAL FINANCEIRA — relatórios de abertos e de baixados em Contas a Pagar (065/066).
 -- Cole TODO este arquivo em Supabase > SQL Editor > New query > Run.
 -- Inclui a rotina061 e diferencia a relação completa de abertos dos títulos baixados.
@@ -18,7 +19,7 @@ export async function buildPayableReportContentsSql() {
 -- A instalação preserva bases, títulos, pagamentos, carteiras e históricos.
 -- Não aplica baixas ou reaberturas durante a instalação.
 -- Depois publique a função payables-import.ts atualizada.
-${base.replace(/^-- CENTRAL FINANCEIRA[^\n]*\n/, '').replace(/COMMIT;\s*$/, `${sources.join('\n\n')}\n\nCOMMIT;\n`)}`;
+${base.replace(/^-- CENTRAL FINANCEIRA[^\n]*\n/, '').replace(/COMMIT;\s*$/, () => `${sources.join('\n\n')}\n\nCOMMIT;\n`)}`;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
