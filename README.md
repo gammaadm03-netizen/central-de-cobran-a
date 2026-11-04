@@ -1,6 +1,10 @@
 # Central Financeira — Grupo Ecoplast
 
-Versão de desenvolvimento **0.18.21**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+Versão de desenvolvimento **0.18.22**. As quatro abas restantes da V75 — Comissões, Faturamento, Margens e RH/DP — foram adaptadas à base central. O estoque permanece manual em Importar Bases. A ativação do Supabase e a conferência das bases reais continuam necessárias.
+
+## Abertos e baixados em Contas a Pagar — 0.18.22
+
+A importação exige escolher entre a relação completa de abertos e o relatório somente de baixados. Abertos atualizam a posição completa; baixados encerram apenas os títulos listados. A retirada de uma parte expressiva da posição anterior exige conferir a abrangência do arquivo. O indicador de mercadoria da Diretoria usa o saldo em aberto do Plano cp COMPRA DE MERCADORIA, de todas as datas e filiais. [Ativação e rotina dos dois relatórios](docs/conciliacao-diaria-contas-pagar.md).
 
 ## Retornos devidos antes de novos atendimentos — 0.18.21
 

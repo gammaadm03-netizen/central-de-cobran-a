@@ -71,7 +71,7 @@ export interface PayableImportRequest {
   payment_date_version?: '2026-10-27.1';
   bank_rules_version?: '050'; column_rules_version?: '059';
   daily_report_version?: '060'; report_kind?: 'ALL'; expected_report_date?: string;
-  status_report_version?: '061';
+  status_report_version?: '061' | '065'; report_contents?: 'FULL_OPEN' | 'PAID_STATUS'; confirm_large_reduction?: boolean;
   empty_report_confirmed?: boolean;
 }
 export async function payableImportRequest<T>(body: PayableImportRequest, signal?: AbortSignal): Promise<T> {

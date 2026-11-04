@@ -26,9 +26,9 @@ export default function PayablesImport({ canImport, onBusyChange }: { canImport:
   if (!canImport) return <p className="notice">Seu perfil não permite importar bases de Contas a Pagar.</p>;
   return <>
     <section className="panel" aria-label="Rotina diária de Contas a Pagar">
-      <h2>Contas a Pagar: um relatório por dia</h2>
-      <p>Envie a relação completa dos títulos que continuam em aberto, incluindo os novos lançamentos e os cheques. O primeiro arquivo cria a base inicial. Nos próximos dias, os títulos que deixarem de aparecer receberão o status Pago, sem gerar valor realizado.</p>
-      <p className="help-text">A Central atualiza os valores e vencimentos do mesmo lançamento, inclui os novos e aplica as baixas ao clicar em Importar relatório, sem aprovação prévia de valores e vencimentos. Marcadores de R$ 0,01 exigem confirmação individual e ficam fora do realizado.</p>
+      <h2>Relatórios de Contas a Pagar</h2>
+      <p>Escolha o conteúdo de cada arquivo. O relatório completo de abertos atualiza a carteira e os títulos ausentes recebem o status Pago. O relatório de baixados encerra somente os títulos relacionados e preserva os demais.</p>
+      <p className="help-text">No relatório completo, novos lançamentos, valores e vencimentos são atualizados ao clicar em Importar relatório. A baixa por relatório altera o status sem gerar valor realizado. Marcadores de R$ 0,01 exigem confirmação individual e ficam fora das somas financeiras.</p>
       <PayableColumnGuide />
     </section>
     <PayableDailyImport canImport={canImport} reportKind="ALL" onBusyChange={setImportBusy} />

@@ -138,7 +138,11 @@ test('CR com liberação individual acessa as nove bases e os formulários opera
   'Resumo da Diretoria','Fechamento / Faturamento','RH / DP','Custos',
  ]);
  await expect(page.getByRole('heading',{name:'Importar relatório diário de Contas a Pagar',exact:true})).toBeVisible();
- await expect(page.getByLabel('Relatório completo diário de Contas a Pagar',{exact:true})).toBeEnabled();
+ await expect(page.getByRole('radio',{name:'Todos os títulos em aberto',exact:true})).toBeEnabled();
+ await expect(page.getByRole('radio',{name:'Somente títulos baixados',exact:true})).toBeEnabled();
+ await expect(page.getByLabel('Relatório diário de Contas a Pagar',{exact:true})).toBeDisabled();
+ await page.getByRole('radio',{name:'Todos os títulos em aberto',exact:true}).check();
+ await expect(page.getByLabel('Relatório diário de Contas a Pagar',{exact:true})).toBeEnabled();
  await tabs.getByRole('tab',{name:'Estoque',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Registrar posição de estoque',exact:true})).toBeVisible();
  await expect(page.getByLabel('Valor total do estoque (R$)',{exact:true})).toBeEnabled();
@@ -208,7 +212,11 @@ test('limite individual de CP mostra somente três módulos e uma única base de
  await expect(tabs.getByRole('tab')).toHaveCount(1);
  await expect(tabs.getByRole('tab')).toHaveText(['Contas a Pagar']);
  await expect(page.getByRole('heading',{name:'Importar relatório diário de Contas a Pagar',exact:true})).toBeVisible();
- await expect(page.getByLabel('Relatório completo diário de Contas a Pagar',{exact:true})).toBeEnabled();
+ await expect(page.getByRole('radio',{name:'Todos os títulos em aberto',exact:true})).toBeEnabled();
+ await expect(page.getByRole('radio',{name:'Somente títulos baixados',exact:true})).toBeEnabled();
+ await expect(page.getByLabel('Relatório diário de Contas a Pagar',{exact:true})).toBeDisabled();
+ await page.getByRole('radio',{name:'Todos os títulos em aberto',exact:true}).check();
+ await expect(page.getByLabel('Relatório diário de Contas a Pagar',{exact:true})).toBeEnabled();
  await nav.getByRole('button',{name:'Contas a Pagar',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Contas a Pagar',level:1,exact:true})).toBeVisible();
  await expect(nav.getByRole('button')).toHaveCount(3);

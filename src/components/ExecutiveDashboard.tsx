@@ -189,7 +189,7 @@ export default function ExecutiveDashboard({ canManage, canReadDirectorSummary =
     { label: 'Estoque total', cents: summaryStock?.value_cents ?? null, detail: summaryStock?.value_cents != null ? `${summaryStock.source ?? 'MANUAL'} · ${displayDate(summaryStock.reference_date)}` : STOCK_PENDING },
   ];
   const obligations: Indicator[] = [
-    { label: 'Pagamento de mercadoria', cents: reportAmount(reportValues, 'merchandise_cents'), detail: 'Contas a Pagar · títulos em aberto da macro COMPRA DE MERCADORIA' },
+    { label: 'Pagamento de mercadoria', cents: reportAmount(reportValues, 'merchandise_cents'), detail: 'Contas a Pagar · saldo em aberto do Plano cp COMPRA DE MERCADORIA · todos os vencimentos' },
     { label: 'Parcelamentos', cents: reportAmount(reportValues, 'installments_cents'), detail: manualSource },
     { label: 'Impostos do mês passado', cents: reportAmount(reportValues, 'previous_month_taxes_cents'), detail: `${taxesMonth} · ${manualSource}` },
     { label: `Contas a pagar ${scopeLabel}`, cents: report ? reportAmount(reportValues, 'payable_period_cents') : payablePeriod, detail: `Contas a Pagar · ${rangeLabel}` },

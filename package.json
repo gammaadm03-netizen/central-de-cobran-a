@@ -1,7 +1,7 @@
 {
   "name": "central-financeira",
   "private": true,
-  "version": "0.18.21",
+  "version": "0.18.22",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -122,7 +122,10 @@
     "bundle:collection-start-priority": "node scripts/bundle-collection-start-priority.mjs",
     "test:collection-start-priority-sql": "node scripts/test-collection-start-priority-sql.mjs",
     "bundle:collection-return-priority-required": "node scripts/bundle-collection-return-priority-required.mjs",
-    "test:collection-return-priority-required-sql": "node scripts/test-collection-return-priority-required-sql.mjs"
+    "test:collection-return-priority-required-sql": "node scripts/test-collection-return-priority-required-sql.mjs",
+    "bundle:payable-report-contents": "node scripts/bundle-payable-report-contents.mjs",
+    "test:payable-report-contents-sql": "node scripts/test-payable-report-contents-sql.mjs",
+    "test:director-merchandise-plan-sql": "node scripts/test-director-merchandise-plan-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",
